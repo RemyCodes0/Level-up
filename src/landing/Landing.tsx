@@ -176,7 +176,7 @@ export default function HomePage() {
       </section>
 
       {/* CTA Section */}
-      <section className="container mx-auto px-4 py-20 bg-primary text-primary-foreground">
+      <section className="container rounded-2xl mx-auto px-4 py-20 bg-primary text-primary-foreground">
         <div className="max-w-3xl mx-auto text-center space-y-6">
           <h2 className="text-3xl md:text-4xl font-bold text-balance">Ready to Level Up Your Learning?</h2>
           <p className="text-lg text-primary-foreground/90 text-balance">
