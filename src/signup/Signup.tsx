@@ -38,12 +38,12 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-50 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-200 to-indigo-100 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
           <div className="flex justify-center mb-4">
-           <div className="bg-primary text-primary-foreground p-2 rounded-full">
-            <img src="/logo.png" alt="No image" className="h-10 w-10 rounded-full"/>
+           <div className="bg-primary overflow-hidden text-primary-foreground p-2 rounded-full">
+            <img src="/logo.png" alt="No image" className="h-10 object-cover w-10 rounded-full"/>
           </div>
           </div>
           <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
