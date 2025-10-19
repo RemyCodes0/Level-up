@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { GraduationCap, Menu, MessageCircle } from "lucide-react"
+import { Menu, MessageCircle } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { useEffect, useState } from "react"
 
@@ -53,8 +53,8 @@ export function Navbar() {
     <nav className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
         <a href="/" className="flex items-center gap-2 font-bold text-xl">
-           <div className="bg-primary text-primary-foreground p-2 rounded-full">
-            <img src="/logo.png" alt="No image" className="h-10 w-10 rounded-full"/>
+           <div className="bg-primary overflow-hidden text-primary-foreground p-2 rounded-full">
+            <img src="/logo.png" alt="No image" className="h-10 w-10 object-cover rounded-full"/>
           </div>
           <span>Level Up</span>
         </a>

@@ -207,8 +207,8 @@ export default function HomePage() {
           <div className="grid md:grid-cols-4 gap-8">
             <div>
               <div className="flex items-center gap-2 font-bold text-lg mb-4">
-                 <div className="bg-primary text-primary-foreground p-2 rounded-full">
-            <img src="/logo.png" alt="No image" className="h-10 w-10 rounded-full"/>
+                 <div className="bg-primary overflow-hidden  text-primary-foreground p-2 rounded-full">
+            <img src="/logo.png" alt="No image" className="h-10 w-10 object-cover rounded-full"/>
           </div>
                 <span>Level Up</span>
               </div>

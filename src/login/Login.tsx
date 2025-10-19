@@ -29,19 +29,19 @@ export default function LoginPage() {
       await signIn(email, password)
       navigate("/dashboard")
     } catch (err) {
-      setError("Invalid email or password. Try: learner@aub.edu.lb or tutor@aub.edu.lb")
+      setError("Invalid email or password.")
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-50 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-200 to-indigo-100 p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
           <div className="flex justify-center mb-4">
-            <div className="bg-primary text-primary-foreground p-2 rounded-full">
-            <img src="/logo.png" alt="No image" className="h-10 w-10 rounded-full"/>
+            <div className="bg-primary overflow-hidden text-primary-foreground p-2 rounded-full">
+            <img src="/logo.png" alt="No image" className="h-10 object-cover w-10 rounded-full"/>
           </div>
           </div>
           <CardTitle className="text-2xl font-bold">Welcome back</CardTitle>
@@ -54,18 +54,18 @@ export default function LoginPage() {
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
-            <div className="space-y-2">
+            <div className="space-y-2 flex-col text-start">
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
                 type="email"
-                placeholder="your.email@aub.edu.lb"
+                placeholder="your-email@mail.aub.edu"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 text-start">
               <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
