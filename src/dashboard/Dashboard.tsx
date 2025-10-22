@@ -29,7 +29,7 @@ export default function DashboardPage() {
   if (!user) {
     return null
   }
-
+ 
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
