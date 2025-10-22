@@ -2,7 +2,7 @@ const User = require('../models/User')
 const jwt = require('jsonwebtoken')
 
 const generateToken = (id) =>{
-    return jwt.sign({id}, process.env.JWT, {expiresIn: '30d'})
+    return jwt.sign({id}, process.env.JWT_SECRET, {expiresIn: '30d'})
 };
 
 exports.registerUser= async(req, res)=>{
@@ -47,5 +47,15 @@ exports.loginUser = async(req,res) =>{
         });
     }catch(error){
         res.status(500).json({message: error.message})
+    }
+}
+
+
+exports.getUsers = async(req, res) =>{
+    try{
+        const user = await User.find()
+        res.status(200).json({user})
+    }catch(err){
+        res.status(500).json({message: err.message})
     }
 }

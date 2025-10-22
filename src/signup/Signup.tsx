@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import axios from "axios"
 
 export default function SignupPage() {
   const [email, setEmail] = useState("")
@@ -35,7 +36,22 @@ export default function SignupPage() {
     } finally {
       setLoading(false)
     }
-  }
+  // try{
+  //   const res = await axios.post("http://localhost:5000/api/auth/register", {name: fullName, email, password, role})
+  //   console.log("Registration Successfull", res.data)
+  //   const { token, ...user } = res.data;
+  //     localStorage.setItem('token', token);
+  //     localStorage.setItem('user', JSON.stringify(user))
+  //     router("/dashboard")
+      
+  // }catch(error){
+  //   console.error(error)
+  //       setError('Login failed. Please try again.');
+      
+  // }finally{
+  //   setLoading(false)
+  // }
+    }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-200 to-indigo-100 p-4">
@@ -56,7 +72,7 @@ export default function SignupPage() {
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
-            <div className="space-y-2">
+            <div className="space-y-2 text-start">
               <Label htmlFor="fullName">Full Name</Label>
               <Input
                 id="fullName"
@@ -67,7 +83,7 @@ export default function SignupPage() {
                 required
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 text-start">
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
@@ -78,7 +94,7 @@ export default function SignupPage() {
                 required
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 text-start">
               <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
@@ -89,7 +105,7 @@ export default function SignupPage() {
                 minLength={6}
               />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-2 text-start">
               <Label>I want to</Label>
               <RadioGroup value={role} onValueChange={(value) => setRole(value as "learner" | "tutor")}>
                 <div className="flex items-center space-x-2">
@@ -123,3 +139,4 @@ export default function SignupPage() {
     </div>
   )
 }
+
