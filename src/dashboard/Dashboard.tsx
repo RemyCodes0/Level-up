@@ -12,6 +12,10 @@ export default function DashboardPage() {
   const { user, loading } = useAuth()
   const router = useNavigate()
 
+  // const storedUser = localStorage.getItem("user")
+
+  // const user = storedUser? JSON.parse(storedUser): null
+
   useEffect(() => {
     if (!loading && !user) {
       router("/login")

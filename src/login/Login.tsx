@@ -1,6 +1,7 @@
 "use client"
 
 import type React from "react"
+// import axios from "axios"
 
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
@@ -21,6 +22,7 @@ export default function LoginPage() {
   const navigate = useNavigate()
 
   const handleSubmit = async (e: React.FormEvent) => {
+    console.log("handlesubmit triggered")
     e.preventDefault()
     setError("")
     setLoading(true)
@@ -33,8 +35,29 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
-  }
+ 
 
+  // try{
+  //   const res = await axios.post("http://localhost:5000/api/auth/login", {email,password})
+  //   console.log("Login was successful", res.data)
+  //   localStorage.setItem('token', res.data.token)
+
+  //   localStorage.setItem("user", JSON.stringify({
+  //     _id: res.data._id,
+  //     name: res.data.name,
+  //     email: res.data.email,
+  //     role: res.data.role
+  //   }))
+  //   console.log("navigate now")
+  //   navigate('/dashboard')
+  // }catch(error){
+  //   console.error(error)
+  //   setError("Invalid Email or password")
+
+  // }finally{
+  //   setLoading(false)
+  // }
+   }
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-200 to-indigo-100 p-4">
       <Card className="w-full max-w-md">
