@@ -1,6 +1,6 @@
 "use client"
 
-import { useAuth } from "@/lib/auth-context"
+// import { useAuth } from "@/lib/auth-context"
 import { useNavigate } from "react-router-dom"
 import { useEffect, useState } from "react"
 import { Navbar } from "@/components/navbar/Navbar"
@@ -13,11 +13,31 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { MOCK_TUTORS } from "@/lib/mock-data"
 import { Search, Mail, MoreVertical } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import axios from "axios"
+
+type User = {
+  _id: string
+  name: string
+  email: string
+  role: "admin" | "tutor" | "both" | "learner"
+  avatarUrl?: string
+}
 
 export default function AdminUsersPage() {
-  const { user } = useAuth()
+  const [user, setUser] = useState(null)
+  const [allUsers, setAllUsers] = useState<User[]>([])
   const router = useNavigate()
   const [searchQuery, setSearchQuery] = useState("")
+
+
+
+  useEffect(()=>{
+  const storedUser = localStorage.getItem("user")
+
+    if(storedUser){
+      setUser(JSON.parse(storedUser))
+    }
+  },[])
 
 //   useEffect(() => {
 //     if (!user || user.role !== "admin") {
@@ -29,27 +49,40 @@ export default function AdminUsersPage() {
 //     return null
 //   }
 
-  const allUsers = [
-    ...MOCK_TUTORS,
-    {
-      id: "learner-1",
-      email: "nour.m@aub.edu.lb",
-      fullName: "Nour M.",
-      role: "learner" as const,
-      avatarUrl: undefined,
-    },
-    {
-      id: "learner-2",
-      email: "ali.k@aub.edu.lb",
-      fullName: "Ali K.",
-      role: "learner" as const,
-      avatarUrl: undefined,
-    },
-  ]
+useEffect(()=>{
+  const fetchUsers = async()=>{
+  try{
+  const res = await axios.get("http://localhost:5000/api/auth/getUsers")
+  setAllUsers(res.data.user)
+  }catch(err){
+    console.error(err)
+  }
+  }
+  fetchUsers()
+
+},[])
+
+  // const allUsers = [
+  //   ...MOCK_TUTORS,
+  //   {
+  //     id: "learner-1",
+  //     email: "nour.m@aub.edu.lb",
+  //     fullName: "Nour M.",
+  //     role: "learner" as const,
+  //     avatarUrl: undefined,
+  //   },
+  //   {
+  //     id: "learner-2",
+  //     email: "ali.k@aub.edu.lb",
+  //     fullName: "Ali K.",
+  //     role: "learner" as const,
+  //     avatarUrl: undefined,
+  //   },
+  // ]
 
   const filteredUsers = allUsers.filter(
     (u) =>
-      u.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.email.toLowerCase().includes(searchQuery.toLowerCase()),
   )
 
@@ -58,15 +91,15 @@ export default function AdminUsersPage() {
 
   const UserCard = ({ userData }: { userData: any }) => (
     <Card>
-      <CardContent className="p-6">
+      <CardContent className="p-6  text-start">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Avatar className="h-12 w-12">
-              <AvatarImage src={userData.avatarUrl || "/placeholder.svg"} alt={userData.fullName} />
-              <AvatarFallback>{userData.fullName.charAt(0)}</AvatarFallback>
+              <AvatarImage src={userData.avatarUrl || "/placeholder.svg"} alt={userData.name} />
+              <AvatarFallback>{userData.name.charAt(0)}</AvatarFallback>
             </Avatar>
             <div>
-              <div className="font-semibold">{userData.fullName}</div>
+              <div className="font-semibold">{userData.name}</div>
               <div className="text-sm text-muted-foreground flex items-center gap-1">
                 <Mail className="h-3 w-3" />
                 {userData.email}
@@ -125,19 +158,19 @@ export default function AdminUsersPage() {
 
           <TabsContent value="all" className="space-y-4">
             {filteredUsers.map((userData) => (
-              <UserCard key={userData.id} userData={userData} />
+              <UserCard key={userData._id} userData={userData} />
             ))}
           </TabsContent>
 
           <TabsContent value="tutors" className="space-y-4">
             {tutors.map((userData) => (
-              <UserCard key={userData.id} userData={userData} />
+              <UserCard key={userData._id} userData={userData} />
             ))}
           </TabsContent>
 
           <TabsContent value="learners" className="space-y-4">
             {learners.map((userData) => (
-              <UserCard key={userData.id} userData={userData} />
+              <UserCard key={userData._id} userData={userData} />
             ))}
           </TabsContent>
         </Tabs>

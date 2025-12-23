@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-// import axios from "axios"
+import axios from "axios"
 
 export default function SignupPage() {
   const [email, setEmail] = useState("")
@@ -28,29 +28,29 @@ export default function SignupPage() {
     setError("")
     setLoading(true)
 
-    try {
-      await signUp(email, password, fullName, role)
+    // try {
+    //   await signUp(email, password, fullName, role)
+    //   router("/dashboard")
+    // } catch (err) {
+    //   setError("Failed to create account. Please try again.")
+    // } finally {
+    //   setLoading(false)
+    // }
+  try{
+    const res = await axios.post("http://localhost:5000/api/auth/register", {name: fullName, email, password, role})
+    console.log("Registration Successfull", res.data)
+    const { token, ...user } = res.data;
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', JSON.stringify(user))
       router("/dashboard")
-    } catch (err) {
-      setError("Failed to create account. Please try again.")
-    } finally {
-      setLoading(false)
-    }
-  // try{
-  //   const res = await axios.post("http://localhost:5000/api/auth/register", {name: fullName, email, password, role})
-  //   console.log("Registration Successfull", res.data)
-  //   const { token, ...user } = res.data;
-  //     localStorage.setItem('token', token);
-  //     localStorage.setItem('user', JSON.stringify(user))
-  //     router("/dashboard")
       
-  // }catch(error){
-  //   console.error(error)
-  //       setError('Login failed. Please try again.');
+  }catch(error){
+    console.error(error)
+        setError('Login failed. Please try again.');
       
-  // }finally{
-  //   setLoading(false)
-  // }
+  }finally{
+    setLoading(false)
+  }
     }
 
   return (

@@ -12,12 +12,21 @@ import { MOCK_APPLICATIONS } from "@/lib/mock-data"
 import type { TutorApplication } from "@/lib/types"
 import { CheckCircle2, XCircle, Mail, Calendar } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import axios from "axios"
 
 export default function AdminApplicationsPage() {
   const { user } = useAuth()
   const router = useNavigate()
   const { toast } = useToast()
-  const [applications, setApplications] = useState<TutorApplication[]>(MOCK_APPLICATIONS)
+  const [applications, setApplications] = useState<TutorApplication[]>([])
+
+  useEffect(()=>{
+    const fetchApplications = async()=>{
+      const res = await axios.get("http://localhost:5000/api/tutor/applications")
+      setApplications(res.data)
+    }
+    fetchApplications()
+  },[])
 
 //   useEffect(() => {
 //     if (!user || user.role !== "admin") {
@@ -61,7 +70,7 @@ export default function AdminApplicationsPage() {
   const ApplicationCard = ({ app }: { app: TutorApplication }) => (
     <Card>
       <CardHeader>
-        <div className="flex items-start justify-between">
+        <div className="flex items-start justify-between  text-start">
           <div>
             <CardTitle>{app.fullName}</CardTitle>
             <CardDescription className="flex items-center gap-2 mt-1">
@@ -76,7 +85,7 @@ export default function AdminApplicationsPage() {
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4  text-start">
         <div>
           <h4 className="font-semibold mb-2">Bio</h4>
           <p className="text-sm text-muted-foreground">{app.bio}</p>
@@ -86,8 +95,8 @@ export default function AdminApplicationsPage() {
           <h4 className="font-semibold mb-2">Subjects</h4>
           <div className="flex flex-wrap gap-2">
             {app.subjects.map((subject) => (
-              <Badge key={subject} variant="outline">
-                {subject}
+              <Badge key={subject.code} variant="outline">
+               {subject.code} - {subject.name}
               </Badge>
             ))}
           </div>
@@ -96,7 +105,7 @@ export default function AdminApplicationsPage() {
         <div className="flex items-center justify-between text-sm">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Calendar className="h-4 w-4" />
-            <span>Applied {app.submittedAt.toLocaleDateString()}</span>
+            <span>Applied {app.submittedAt? new Date(app.submittedAt).toLocaleDateString(): "unknown"}</span>
           </div>
           <div className="font-semibold">${app.hourlyRate.toFixed(2)}/hour</div>
         </div>

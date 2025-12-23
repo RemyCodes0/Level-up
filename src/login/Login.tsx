@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-// import axios from "axios"
+import axios from "axios"
 
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
@@ -27,36 +27,38 @@ export default function LoginPage() {
     setError("")
     setLoading(true)
 
-    try {
-      await signIn(email, password)
-      navigate("/dashboard")
-    } catch (err) {
-      setError("Invalid email or password.")
-    } finally {
-      setLoading(false)
-    }
+    // try {
+    //   await signIn(email, password)
+    //   navigate("/dashboard")
+    // } catch (err) {
+    //   setError("Invalid email or password.")
+    // } finally {
+    //   setLoading(false)
+    // }
  
 
-  // try{
-  //   const res = await axios.post("http://localhost:5000/api/auth/login", {email,password})
-  //   console.log("Login was successful", res.data)
-  //   localStorage.setItem('token', res.data.token)
+  try{
+    const res = await axios.post("http://localhost:5000/api/auth/login", {email,password})
+    console.log("Login was successful", res.data)
+    localStorage.setItem('token', res.data.token)
 
-  //   localStorage.setItem("user", JSON.stringify({
-  //     _id: res.data._id,
-  //     name: res.data.name,
-  //     email: res.data.email,
-  //     role: res.data.role
-  //   }))
-  //   console.log("navigate now")
-  //   navigate('/dashboard')
-  // }catch(error){
-  //   console.error(error)
-  //   setError("Invalid Email or password")
+    localStorage.setItem("user", JSON.stringify({
+      _id: res.data._id,
+      name: res.data.name,
+      email: res.data.email,
+      role: res.data.role
+    }))
+    console.log("navigate now")
+   
+    navigate('/dashboard')
+  }catch(error){
+    console.error(error)
+    setError("Invalid Email or password")
+    alert("An error arised")
 
-  // }finally{
-  //   setLoading(false)
-  // }
+  }finally{
+    setLoading(false)
+  }
    }
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-200 to-indigo-100 p-4">
@@ -93,6 +95,7 @@ export default function LoginPage() {
               <Input
                 id="password"
                 type="password"
+                placeholder="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -107,6 +110,12 @@ export default function LoginPage() {
               Don't have an account?{" "}
               <a href="/signup" className="text-primary hover:underline font-medium">
                 Sign up
+              </a>
+            </p>
+            <p className="text-sm text-center text-muted-foreground">
+              Want to become a tutor?{" "}
+              <a href="/apply" className="text-primary hover:underline font-medium">
+                Apply
               </a>
             </p>
           </CardFooter>
