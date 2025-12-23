@@ -22,6 +22,8 @@ import AdminAnalyticsPage from './admin/Analytics'
 import TutorProfilePage from './tutors/tutors-detail/tutors-detail'
 import MessagesPage from './messages/Messages'
 import BookSessionPage from './book/Book'
+import ApplyTutorPage from './Tutor-Application/TutorApplication'
+
 function App() {
 
 
@@ -50,6 +52,7 @@ function App() {
       <Route path="/admin/analytics" element={<AdminAnalyticsPage/>}/>
       <Route path="/messages" element={<MessagesPage/>}/>
       <Route path="/book/:id" element={<BookSessionPage/>}/>
+      <Route path="/apply" element={<ApplyTutorPage/>}/>
       
     </Routes>
   </AuthProvider>

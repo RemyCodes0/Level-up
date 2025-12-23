@@ -9,12 +9,12 @@ import { Button } from "@/components/ui/button"
 import { BookOpen, Calendar, Star, TrendingUp } from "lucide-react"
 
 export default function DashboardPage() {
-  const { user, loading } = useAuth()
+const { loading } = useAuth()
   const router = useNavigate()
 
-  // const storedUser = localStorage.getItem("user")
+  const storedUser = localStorage.getItem("user")
 
-  // const user = storedUser? JSON.parse(storedUser): null
+  const user = storedUser ? JSON.parse(storedUser): null
 
   useEffect(() => {
     if (!loading && !user) {
@@ -35,7 +35,7 @@ export default function DashboardPage() {
       <Navbar />
       <div className="container mx-auto px-4 py-8">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Welcome back, {user.fullName}!</h1>
+          <h1 className="text-3xl font-bold mb-2">Welcome back, {user.name}!</h1>
           <p className="text-muted-foreground">Here's what's happening with your learning journey.</p>
         </div>
 
@@ -93,19 +93,20 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="space-y-2">
               <a href="/tutors">
-                <Button className="w-full justify-start bg-transparent" variant="outline">
+                <Button className="w-full justify-start bg-transparent mb-2" variant="outline">
                   <BookOpen className="mr-2 h-4 w-4" />
                   Find a Tutor
                 </Button>
               </a>
+              
               <a href="/bookings">
-                <Button className="w-full justify-start bg-transparent" variant="outline">
+                <Button className="w-full justify-start bg-transparent mb-2" variant="outline">
                   <Calendar className="mr-2 h-4 w-4" />
                   View My Bookings
                 </Button>
               </a>
               <a href="/profile">
-                <Button className="w-full justify-start bg-transparent" variant="outline">
+                <Button className="w-full justify-start bg-transparent mb-2" variant="outline">
                   <Star className="mr-2 h-4 w-4" />
                   Update Profile
                 </Button>
@@ -120,7 +121,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                <div className="flex items-start gap-4">
+                <div className="flex items-start gap-0">
                   <div className="bg-primary/10 text-primary p-2 rounded-lg">
                     <BookOpen className="h-4 w-4" />
                   </div>

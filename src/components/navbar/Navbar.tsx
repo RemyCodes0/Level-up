@@ -11,17 +11,34 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Badge } from "@/components/ui/badge"
+// import { Badge } from "@/components/ui/badge"
 import { Menu, MessageCircle } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { useEffect, useState } from "react"
 
 export function Navbar() {
-  const { user, signOut } = useAuth()
   const [unreadCount, setUnreadCount] = useState(0)
+  type User = {
+  role: "admin" | "tutor" | "both" | "learner"
+  name: string
+  email: string
+  avatarUrl?: string
+}
+  const [user, setUser] = useState<User | null >(null)
+  const {signOut} = useAuth()
+  useEffect(()=>{
+    
+ const storedUser = localStorage.getItem("user")
+
+ if(storedUser){
+ setUser(JSON.parse(storedUser))
+ }
+  },[])
 
   useEffect(() => {
+    if(!user) return
     if (user) {
+
       const conversations = JSON.parse(localStorage.getItem("levelup_conversations") || "[]")
       const total = conversations.reduce((sum: number, conv: any) => sum + (conv.unreadCount || 0), 0)
       setUnreadCount(total)
@@ -65,7 +82,7 @@ export function Navbar() {
         </div>
 
         <div className="flex items-center gap-4">
-          {user && (
+          {/* {user && (
             <a href="/messages">
               <Button variant="ghost" size="icon" className="relative">
                 <MessageCircle className="h-5 w-5" />
@@ -79,22 +96,22 @@ export function Navbar() {
                 )}
               </Button>
             </a>
-          )}
+          )} */}
 
           {user ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="relative h-10 w-10 rounded-full">
                   <Avatar>
-                    <AvatarImage src={user.avatarUrl || "/placeholder.svg"} alt={user.fullName} />
-                    <AvatarFallback>{user.fullName.charAt(0)}</AvatarFallback>
+                    <AvatarImage src={user.avatarUrl || "/placeholder.svg"} alt={user.name} />
+                    <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuLabel>
                   <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-medium">{user.fullName}</p>
+                    <p className="text-sm font-medium">{user.name}</p>
                     <p className="text-xs text-muted-foreground">{user.email}</p>
                   </div>
                 </DropdownMenuLabel>
@@ -143,7 +160,7 @@ export function Navbar() {
                     </DropdownMenuItem>
                   </>
                 )}
-                <DropdownMenuSeparator />
+                {/* <DropdownMenuSeparator />
                 <DropdownMenuItem asChild>
                   <a href="/messages" className="flex items-center justify-between">
                     <span>Messages</span>
@@ -154,7 +171,7 @@ export function Navbar() {
                     )}
                   </a>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
+                <DropdownMenuSeparator /> */}
                 <DropdownMenuItem onClick={() => signOut()} className="text-destructive">
                   Sign out
                 </DropdownMenuItem>
@@ -181,7 +198,7 @@ export function Navbar() {
             <SheetContent side="right">
               <div className="flex flex-col gap-4 mt-8">
                 <NavLinks />
-                {user && (
+                {/* {user && (
                   <a
                     href="/messages"
                     className="text-sm font-medium hover:text-primary transition-colors flex items-center gap-2"
@@ -193,7 +210,7 @@ export function Navbar() {
                       </Badge>
                     )}
                   </a>
-                )}
+                )} */}
                 {!user && (
                   <a href="/login" className="text-sm font-medium hover:text-primary transition-colors">
                     Sign in

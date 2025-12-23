@@ -2,7 +2,7 @@
 
 import { useAuth } from "@/lib/auth-context"
 import { useNavigate } from "react-router-dom"
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { Navbar } from "@/components/navbar/Navbar"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -10,8 +10,19 @@ import { Badge } from "@/components/ui/badge"
 import { Users, BookOpen, DollarSign, TrendingUp, UserCheck, Clock } from "lucide-react"
 
 export default function AdminDashboardPage() {
-  const { user } = useAuth()
-  const router = useNavigate()
+  // const { user } = useAuth()
+  // const router = useNavigate()
+
+  const storedUser = localStorage.getItem("user")
+  const [user, setUser] = useState(null)
+
+  useEffect(()=>{
+    if(storedUser){
+      setUser(JSON.parse(storedUser))
+    }
+  },[])
+
+
 
 //   useEffect(() => {
 //     if (!user || user.role !== "admin") {
