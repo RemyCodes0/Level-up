@@ -35,7 +35,7 @@ exports.updateProfile = async (req, res)=>{
 
 exports.getApplications = async(req, res) =>{
     try{
-        const applications = await TutorApplication.find()
+        const applications = await TutorApplication.find().populate("user", "name email")
         res.status(200).json(applications)
     }catch(err){
         res.status(500).json(err)
@@ -50,9 +50,21 @@ exports.apply =async(req,res) =>{
             return res.status(400).json({message: "Application already pending"});
 
         }
+    
+    const certificates = req.files?.certificates?.map(
+        file => file.path
+    );
+    const idCard = req.files?.idCard?.[0]?.path;
     const app = await TutorApplication.create({
         user: req.user._id,
-        ...req.body
+        bio: req.body.bio, 
+        subjects: JSON.parse(req.body.subjects),
+        experiences: req.body.experiences,
+        hourlyRate: req.body.hourlyRate,
+        certificates,
+        idCard,
+        gpa: req.body.gpa,
+        availability: JSON.parse(req.body.availability)
     });
 
     res.json({success: true, application: app})
@@ -98,3 +110,5 @@ exports.adminReject = async(req, res) =>{
 
     res.json({ message: "Tutor rejected" });
 }
+
+

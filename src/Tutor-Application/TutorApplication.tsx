@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -37,6 +37,8 @@ interface User {
 }
 export default function ApplyTutorPage() {
   const router = useNavigate()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const idInputRef = useRef<HTMLInputElement>(null)
   const [user, setUser] = useState<User| null>(null)
   
   const [loading, setLoading] = useState(false)
@@ -58,14 +60,15 @@ const token = localStorage.getItem("token")
   const [bio, setBio] = useState("")
   const [subjects, setSubjects] = useState<{ code: string; name: string }[]>([])
   const [experiences, setExperiences] = useState("")
-  const [certificates, setCertificates] = useState<string[]>([])
-  const [idCard, setIdCard] = useState("")
+ const [certificates, setCertificates] = useState<File[]>([])
+
+  const [idCard, setIdCard] = useState<File | null>(null)
   const [gpa, setGpa] = useState("")
   const [hourlyRate, setHourlyRate] = useState("")
   const [availability, setAvailability] = useState<{ day: string; from: string; to: string }[]>([])
 
   // Subject selection
-  const [selectedSubjectCode, setSelectedSubjectCode] = useState("")
+  const [selectedSubjectCode,  setSelectedSubjectCode] = useState("")
 
   const addSubject = () => {
     const subject = AVAILABLE_SUBJECTS.find((s) => s.code === selectedSubjectCode)
@@ -80,14 +83,7 @@ const token = localStorage.getItem("token")
   }
 
   // File upload simulation
-  const handleFileUpload = (type: "certificate" | "idCard") => {
-    const fakeUrl = `https://storage.levelup.com/${type}-${Date.now()}.pdf`
-    if (type === "certificate") {
-      setCertificates([...certificates, fakeUrl])
-    } else {
-      setIdCard(fakeUrl)
-    }
-  }
+ 
 
   // Availability
   const addAvailabilitySlot = () => {
@@ -103,11 +99,31 @@ const token = localStorage.getItem("token")
   const removeAvailabilitySlot = (index: number) => {
     setAvailability(availability.filter((_, i) => i !== index))
   }
+ 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
     setLoading(true)
+ const formData = new FormData()
+  formData.append("bio", bio)
+  formData.append("experiences", experiences)
+  formData.append("hourlyRate", hourlyRate)
+  formData.append("gpa", gpa)
+//  availability.forEach((slot, i) => {
+//   formData.append(`availability[${i}][day]`, slot.day)
+//   formData.append(`availability[${i}][from]`, slot.from)
+//   formData.append(`availability[${i}][to]`, slot.to)
+// })
+// subjects.forEach((subject, i) => {
+//   formData.append(`subjects[${i}][code]`, subject.code)
+//   formData.append(`subjects[${i}][name]`, subject.name)
+// })
+formData.append("subjects", JSON.stringify(subjects))
+formData.append("availability", JSON.stringify(availability))
+
+certificates.forEach(file => formData.append("certificates", file))
+if (idCard) formData.append("idCard", idCard)
 
     try {
       // Validation
@@ -121,12 +137,11 @@ const token = localStorage.getItem("token")
         throw new Error("Please enter a valid hourly rate")
       }
 
-      const response = await axios.post("http://localhost:5000/api/tutor/apply", {bio, subjects,experiences,certificates, idCard,gpa: gpa? parseFloat(gpa): undefined,availability,status: "pending", adminFeedback: ""},
-      {
+      const response = await axios.post("http://localhost:5000/api/tutor/apply", formData,  {
     headers: {
-      Authorization: `Bearer ${token}`,
-    }
-  })
+      "Content-Type": "multipart/form-data",
+      Authorization: `Bearer ${token}`, // if your backend uses auth middleware
+    }})
       const application = response.data
 
       // Create application
@@ -164,7 +179,7 @@ const token = localStorage.getItem("token")
       console.log({bio, subjects,experiences,certificates, idCard,gpa: gpa? parseFloat(gpa): undefined,availability,status: "pending", adminFeedback: ""})
     }
   }
-
+  
   if (success) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-50 p-4">
@@ -215,7 +230,7 @@ const token = localStorage.getItem("token")
               <div className="space-y-4 text-start">
                 <h3 className="text-lg font-semibold">Personal Information</h3>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
+                  {/* <div className="space-y-2">
                     <Label htmlFor="fullName">Full Name *</Label>
                     <Input
                       id="fullName"
@@ -224,8 +239,8 @@ const token = localStorage.getItem("token")
                       required
                       placeholder="John Doe"
                     />
-                  </div>
-                  <div className="space-y-2">
+                  </div> */}
+                  {/* <div className="space-y-2">
                     <Label htmlFor="email">AUB Email *</Label>
                     <Input
                       id="email"
@@ -235,9 +250,9 @@ const token = localStorage.getItem("token")
                       required
                       placeholder="your.email@aub.edu.lb"
                     />
-                  </div>
+                  </div> */}
                 </div>
-                <div className="space-y-2">
+                {/* <div className="space-y-2">
                   <Label htmlFor="password">Password *</Label>
                   <Input
                     id="password"
@@ -247,9 +262,9 @@ const token = localStorage.getItem("token")
                     required
                     placeholder="Create a secure password"
                   />
-                </div>
+                </div> */}
                 <div className="space-y-2">
-                  <Label htmlFor="gpa">GPA (Optional)</Label>
+                  <Label htmlFor="gpa">Overall GPA</Label>
                   <Input
                     id="gpa"
                     type="number"
@@ -399,13 +414,23 @@ const token = localStorage.getItem("token")
                 <Label>Certificates (Optional)</Label>
                 <Button
                   type="button"
-                  variant="outline"
-                  onClick={() => handleFileUpload("certificate")}
+                  onClick={() => fileInputRef.current?.click()}
                   className="w-full"
                 >
                   <Upload className="h-4 w-4 mr-2" />
                   Upload Certificate
                 </Button>
+              <input
+  type="file"
+  multiple
+  hidden
+  ref={fileInputRef}
+  onChange={(e) => {
+    if (e.target.files) {
+      setCertificates([...certificates, ...Array.from(e.target.files)])
+    }
+  }}
+/>
                 {certificates.length > 0 && (
                   <div className="space-y-1">
                     {certificates.map((cert, index) => (
@@ -426,25 +451,47 @@ const token = localStorage.getItem("token")
               </div>
 
               {/* ID Card */}
-              <div className="text-start space-y-2">
-                <Label>Student ID / Passport (Optional)</Label>
-                {!idCard ? (
-                  <Button type="button" variant="outline" onClick={() => handleFileUpload("idCard")} className="w-full">
-                    <Upload className="h-4 w-4 mr-2" />
-                    Upload ID Document
-                  </Button>
-                ) : (
-                  <div className="text-sm text-muted-foreground flex items-center gap-2">
-                    <span className="flex-1">ID document uploaded</span>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setIdCard("")}>
-                      <X className="h-3 w-3" />
-                    </Button>
-                  </div>
-                )}
-              </div>
+               <div className="text-start space-y-2">
 
-              <div className="pt-4 space-y-4">
-                <Button type="submit" className="w-full" disabled={loading}>
+               
+                <Label>IDCard</Label>
+             <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                  onClick={() => idInputRef.current?.click()}>
+    <Upload className="h-4 w-4 mr-2" /> Upload ID Document
+  </Button>
+
+  <input
+    type="file"
+    accept="image/*,.pdf"
+    hidden
+    ref={idInputRef}
+    onChange={(e) => {
+      if (e.target.files && e.target.files[0]) {
+        setIdCard(e.target.files[0])
+      }
+    }}
+  />
+
+  {idCard && (
+    <div className="text-sm text-muted-foreground flex items-center gap-2 mt-1">
+      <span className="flex-1">{idCard.name} uploaded</span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setIdCard(null)}
+      >
+        <X className="h-3 w-3" />
+      </Button>
+    </div>
+  )}
+</div>
+
+                <div className="pt-4 space-y-4">
+                  <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? "Submitting..." : "Submit Application"}
                 </Button>
                 <p className="text-sm text-center text-muted-foreground">

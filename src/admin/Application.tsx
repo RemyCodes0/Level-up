@@ -14,6 +14,7 @@ import { CheckCircle2, XCircle, Mail, Calendar } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import axios from "axios"
 
+
 export default function AdminApplicationsPage() {
   const { user } = useAuth()
   const router = useNavigate()
@@ -41,26 +42,19 @@ export default function AdminApplicationsPage() {
   const handleApprove = (appId: string) => {
     setApplications(
       applications.map((app) =>
-        app.id === appId ? { ...app, status: "approved" as const, reviewedAt: new Date(), reviewedBy: user.id } : app,
+        app._id === appId ? { ...app, status: "approved" as const, reviewedAt: new Date(), reviewedBy: user._id } : app,
       ),
     )
-    // toast({
-    //   title: "Application Approved",
-    //   description: "The tutor application has been approved successfully.",
-    // })
+
   }
 
   const handleReject = (appId: string) => {
     setApplications(
       applications.map((app) =>
-        app.id === appId ? { ...app, status: "rejected" as const, reviewedAt: new Date(), reviewedBy: user.id } : app,
+        app._id === appId ? { ...app, status: "rejected" as const, reviewedAt: new Date(), reviewedBy: user._id } : app,
       ),
     )
-    // toast({
-    //   title: "Application Rejected",
-    //   description: "The tutor application has been rejected.",
-    //   variant: "destructive",
-    // })
+  
   }
 
   const pendingApps = applications.filter((app) => app.status === "pending")
@@ -72,10 +66,10 @@ export default function AdminApplicationsPage() {
       <CardHeader>
         <div className="flex items-start justify-between  text-start">
           <div>
-            <CardTitle>{app.fullName}</CardTitle>
+            <CardTitle>{app.user.name}</CardTitle>
             <CardDescription className="flex items-center gap-2 mt-1">
               <Mail className="h-3 w-3" />
-              {app.email}
+              {app.user.email}
             </CardDescription>
           </div>
           <Badge
@@ -105,18 +99,18 @@ export default function AdminApplicationsPage() {
         <div className="flex items-center justify-between text-sm">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Calendar className="h-4 w-4" />
-            <span>Applied {app.submittedAt? new Date(app.submittedAt).toLocaleDateString(): "unknown"}</span>
+            <span>Applied {app.createdAt? new Date(app.createdAt).toLocaleDateString(): "unknown"}</span>
           </div>
-          <div className="font-semibold">${app.hourlyRate.toFixed(2)}/hour</div>
+          <div className="font-semibold">${app.hourlyRate}/hour</div>
         </div>
 
         {app.status === "pending" && (
           <div className="flex gap-2 pt-2">
-            <Button onClick={() => handleApprove(app.id)} className="flex-1">
+            <Button onClick={() => handleApprove(app._id)} className="flex-1">
               <CheckCircle2 className="mr-2 h-4 w-4" />
               Approve
             </Button>
-            <Button onClick={() => handleReject(app.id)} variant="destructive" className="flex-1">
+            <Button onClick={() => handleReject(app._id)} variant="destructive" className="flex-1">
               <XCircle className="mr-2 h-4 w-4" />
               Reject
             </Button>
@@ -149,7 +143,7 @@ export default function AdminApplicationsPage() {
                 <CardContent className="py-8 text-center text-muted-foreground">No pending applications</CardContent>
               </Card>
             ) : (
-              pendingApps.map((app) => <ApplicationCard key={app.id} app={app} />)
+              pendingApps.map((app) => <ApplicationCard key={app._id} app={app} />)
             )}
           </TabsContent>
 
@@ -161,7 +155,7 @@ export default function AdminApplicationsPage() {
                 </CardContent>
               </Card>
             ) : (
-              approvedApps.map((app) => <ApplicationCard key={app.id} app={app} />)
+              approvedApps.map((app) => <ApplicationCard key={app._id} app={app} />)
             )}
           </TabsContent>
 
@@ -171,7 +165,7 @@ export default function AdminApplicationsPage() {
                 <CardContent className="py-8 text-center text-muted-foreground">No rejected applications</CardContent>
               </Card>
             ) : (
-              rejectedApps.map((app) => <ApplicationCard key={app.id} app={app} />)
+              rejectedApps.map((app) => <ApplicationCard key={app._id} app={app} />)
             )}
           </TabsContent>
         </Tabs>
