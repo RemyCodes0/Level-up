@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+const mongoose = require("mongoose");   
 
 const TutorApplicationSchema = new mongoose.Schema({
     user:{
@@ -11,10 +11,16 @@ const TutorApplicationSchema = new mongoose.Schema({
     bio: {type: String, required: true},
     subjects: [{code:String, name:String}],
     experiences: {type: String, required: true},
+    hourlyRate: {
+        type: Number,
+        required: true,
+        min: 0
+        },
     certificates: [{type: String}],
     idCard:{type: String},
     gpa:{type: Number},
     availability: [{day: String, from: String, to:String}],
+    
     status:{
         type:String,
         enum:['pending','approved', 'rejected'],

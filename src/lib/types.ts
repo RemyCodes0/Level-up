@@ -4,7 +4,11 @@ export interface User {
   fullName: string
   role: "learner" | "tutor" | "both" | "admin"
   avatarUrl?: string
+
+
 }
+
+
 
 export interface TutorProfile {
   id: string
@@ -47,17 +51,16 @@ export interface TutorWithProfile extends User {
 }
 
 export interface TutorApplication {
-  id: string
-  userId: string
-  fullName: string
-  email: string
+  _id: string
+  user: {
+    _id: string
+    name: string
+    email: string
+  }
   bio: string
-  subjects: string[]
-  hourlyRate: number
+  subjects: { code: string; name: string }[]
   status: "pending" | "approved" | "rejected"
-  submittedAt: Date
-  reviewedAt?: Date
-  reviewedBy?: string
+  createdAt: string
 }
 
 export interface Availability {
