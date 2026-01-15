@@ -119,7 +119,7 @@ useEffect(()=>{
               <DropdownMenuContent align="end">
                 <DropdownMenuItem>View Profile</DropdownMenuItem>
                 <DropdownMenuItem>Send Message</DropdownMenuItem>
-                <DropdownMenuItem className="text-destructive">Suspend User</DropdownMenuItem>
+                <DropdownMenuItem className="text-destructive">Delete User</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
