@@ -7,7 +7,7 @@ const {protect} = require('../middleware/authMiddleware');
 const upload = multer({ storage });
 
 
-router.get('/me',  getProfile);
+router.get('/:id/getTutor',  getProfile);
 router.put('/me',  updateProfile);
 router.post('/apply', protect, upload.fields([
     {name:"certificates", maxCount: 5},
