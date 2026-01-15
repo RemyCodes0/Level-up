@@ -111,4 +111,19 @@ exports.adminReject = async(req, res) =>{
     res.json({ message: "Tutor rejected" });
 }
 
+exports.adminDelete = async (req, res) => {
+  try {
+    const app = await TutorApplication.findById(req.params.id);
 
+    if (!app) {
+      return res.status(404).json({ message: "Application not found" });
+    }
+
+    await app.deleteOne();
+
+    return res.status(204).send();
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Server error" });
+  }
+};

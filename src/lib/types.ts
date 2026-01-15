@@ -61,6 +61,7 @@ export interface TutorApplication {
   subjects: { code: string; name: string }[]
   status: "pending" | "approved" | "rejected"
   createdAt: string
+  hourlyRate: String
 }
 
 export interface Availability {

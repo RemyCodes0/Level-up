@@ -11,14 +11,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { MOCK_APPLICATIONS } from "@/lib/mock-data"
 import type { TutorApplication } from "@/lib/types"
 import { CheckCircle2, XCircle, Mail, Calendar } from "lucide-react"
-import { useToast } from "@/hooks/use-toast"
+// import { useToast } from "@/hooks/use-toast"
 import axios from "axios"
 
 
 export default function AdminApplicationsPage() {
   const { user } = useAuth()
   const router = useNavigate()
-  const { toast } = useToast()
+  // const { toast } = useToast()
   const [applications, setApplications] = useState<TutorApplication[]>([])
 
   useEffect(()=>{
@@ -39,13 +39,16 @@ export default function AdminApplicationsPage() {
 //     return null
 //   }
 
-  const handleApprove = (appId: string) => {
-    setApplications(
+  const handleApprove = async(appId: string) => {
+  
+    const res = await axios.patch(`http://localhost:5000/api/tutor/${appId}/approve`)
+
+    const data = res.data;
+      setApplications(
       applications.map((app) =>
         app._id === appId ? { ...app, status: "approved" as const, reviewedAt: new Date(), reviewedBy: user._id } : app,
       ),
     )
-
   }
 
   const handleReject = (appId: string) => {
@@ -106,7 +109,7 @@ export default function AdminApplicationsPage() {
 
         {app.status === "pending" && (
           <div className="flex gap-2 pt-2">
-            <Button onClick={() => handleApprove(app._id)} className="flex-1">
+            <Button onClick={() => handleApprove(app._id) } className="flex-1">
               <CheckCircle2 className="mr-2 h-4 w-4" />
               Approve
             </Button>

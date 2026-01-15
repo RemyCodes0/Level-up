@@ -1,13 +1,14 @@
 "use client"
 
 import { useAuth } from "@/lib/auth-context"
-import { useNavigate } from "react-router-dom"
+import { data, useNavigate } from "react-router-dom"
 import { useEffect, useState } from "react"
 import { Navbar } from "@/components/navbar/Navbar"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Users, BookOpen, DollarSign, TrendingUp, UserCheck, Clock } from "lucide-react"
+import axios from "axios"
 
 export default function AdminDashboardPage() {
   // const { user } = useAuth()
@@ -15,12 +16,25 @@ export default function AdminDashboardPage() {
 
   const storedUser = localStorage.getItem("user")
   const [user, setUser] = useState(null)
+  const [application, setApplications] = useState([])
 
   useEffect(()=>{
     if(storedUser){
       setUser(JSON.parse(storedUser))
     }
   },[])
+
+  useEffect(()=>{
+    const fetchApplications= async()=>{
+        const res = await axios.get("http://localhost:5000/api/tutor/applications")
+        const data = res.data
+        setApplications(data)
+    }
+    fetchApplications()
+  }, [])
+  let number = 0
+  const numbersOfApplications = application.filter((app)=> app)
+  
 
 
 
@@ -38,7 +52,7 @@ export default function AdminDashboardPage() {
     totalUsers: 342,
     activeTutors: 28,
     totalSessions: 1247,
-    pendingApplications: 2,
+    pendingApplications: number,
     totalRevenue: 18675.5,
     thisMonthRevenue: 3245.0,
   }
