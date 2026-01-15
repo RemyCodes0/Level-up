@@ -12,34 +12,60 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { ALL_SUBJECTS, MOCK_TUTORS } from "@/lib/mock-data"
 import { X } from "lucide-react"
-import { useToast } from "@/hooks/use-toast"
+import axios from "axios"
+// import { useToast } from "@/hooks/use-toast"
 
 export default function TutorProfileEditPage() {
-  const { user } = useAuth()
-  const router = useNavigate()
-  const { toast } = useToast()
+  // const { user } = useAuth()
+  const navigate = useNavigate()
+  // const { toast } = useToast()
+
+  // const [user, setUser] = useState(null)
 
   const [bio, setBio] = useState("")
-  const [hourlyRate, setHourlyRate] = useState("15.00")
-  const [selectedSubjects, setSelectedSubjects] = useState<string[]>([])
+  const [hourlyRate, setHourlyRate] = useState<number| "">("")
+ const [selectedSubjects, setSelectedSubjects] = useState<{code:string,name:string,_id:string}[]>([])
+
   const [subjectInput, setSubjectInput] = useState("")
 
-//   useEffect(() => {
-//     if (!user || (user.role !== "tutor" && user.role !== "both")) {
-//       router("/")
-//       return
-//     }
+  const storedUser = localStorage.getItem("user");
+  const user = storedUser ? JSON.parse(storedUser): null;
+  // const token = localStorage.getItem("token")
 
-//     // Load existing tutor data
-//     const tutorData = MOCK_TUTORS.find((t) => t.id === user.id)
-//     if (tutorData) {
-//       setBio(tutorData.profile.bio)
-//       setHourlyRate(tutorData.profile.hourlyRate.toString())
-//       setSelectedSubjects(tutorData.profile.subjects)
-//     }
-//   }, [user, router])
+  useEffect(() => {
+    if (!user || (user.role !== "tutor")) {
+      navigate("/")
+      return
+    }
 
-  if (!user || (user.role !== "tutor" && user.role !== "both")) {
+    // Load existing tutor data
+    const fetchTutorData = async()=>{
+      try{
+      const res = await axios.get(`http://localhost:5000/api/tutor/${user._id}/getTutor`
+        // {headers:{
+        //   Authorization: `Bearer ${token}`
+        // }}
+      )
+
+      const data = res.data.tutor;
+
+      
+  if (data) {
+      setBio(data.bio)
+      setHourlyRate(data.hourlyRate)
+      setSelectedSubjects(data.subjects)
+    }
+
+      }catch(er){
+        alert("error: FAiled to load ")
+      }
+
+    }
+    fetchTutorData()
+  
+  }, [user, navigate])
+
+  if (!user || (user.role !== "tutor")) {
     return null
   }
 
@@ -50,22 +76,22 @@ export default function TutorProfileEditPage() {
     }
   }
 
-  const handleRemoveSubject = (subject: string) => {
-    setSelectedSubjects(selectedSubjects.filter((s) => s !== subject))
-  }
+  // const handleRemoveSubject = (subject: string) => {
+  //   setSelectedSubjects(selectedSubjects.filter((s) => s !== subject))
+  // }
 
   const handleSave = () => {
-    toast({
-      title: "Profile Updated",
-      description: "Your tutor profile has been successfully updated.",
-    })
+    // toast({
+    //   title: "Profile Updated",
+    //   description: "Your tutor profile has been successfully updated.",
+    // })
   }
 
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
       <div className="container mx-auto px-4 py-8 max-w-3xl">
-        <Button variant="ghost" onClick={() => router("/tutor/dashboard")} className="mb-6">
+        <Button variant="ghost" onClick={() => navigate("/tutor/dashboard")} className="mb-6">
           ← Back to Dashboard
         </Button>
 
@@ -87,7 +113,7 @@ export default function TutorProfileEditPage() {
                   placeholder="Tell students about yourself, your teaching style, and experience..."
                   rows={6}
                 />
-                <p className="text-sm text-muted-foreground">{bio.length}/500 characters</p>
+                <p className="text-sm text-muted-foreground">{bio?.length}/500 characters</p>
               </div>
 
               <div className="space-y-2">
@@ -132,17 +158,22 @@ export default function TutorProfileEditPage() {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {selectedSubjects.map((subject) => (
-                  <Badge key={subject} variant="secondary" className="text-sm px-3 py-1">
-                    {subject}
-                    <button onClick={() => handleRemoveSubject(subject)} className="ml-2 hover:text-destructive">
-                      <X className="h-3 w-3" />
-                    </button>
+                {selectedSubjects?.map((subject) => (
+                  <Badge key={subject._id} variant="secondary" className="text-sm px-3 py-1">
+                    {subject.name}
+                     <button
+        onClick={() =>
+          setSelectedSubjects(selectedSubjects.filter((s) => s._id !== subject._id))
+        }
+        className="ml-2 hover:text-destructive"
+      > 
+        <X className="h-3 w-3" />
+      </button>
                   </Badge>
                 ))}
               </div>
 
-              {selectedSubjects.length === 0 && (
+              {selectedSubjects?.length === 0 && (
                 <p className="text-sm text-muted-foreground">No subjects selected yet</p>
               )}
             </CardContent>
@@ -152,7 +183,7 @@ export default function TutorProfileEditPage() {
             <Button onClick={handleSave} size="lg" className="flex-1">
               Save Changes
             </Button>
-            <Button variant="outline" onClick={() => router("/tutor/dashboard")} size="lg">
+            <Button variant="outline" onClick={() => navigate("/tutor/dashboard")} size="lg">
               Cancel
             </Button>
           </div>

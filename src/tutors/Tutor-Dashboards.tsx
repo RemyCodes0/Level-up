@@ -11,7 +11,7 @@ import { DollarSign, Calendar, Star, TrendingUp, Users } from "lucide-react"
 
 export default function TutorDashboardPage() {
 //   const { user } = useAuth()
-  const router = useNavigate()
+  // const router = useNavigate()
 
 //   useEffect(() => {
 //     if (!user || (user.role !== "tutor" && user.role !== "both")) {
@@ -170,7 +170,7 @@ export default function TutorDashboardPage() {
               </CardContent>
             </Card>
 
-            <Card>
+            {/* <Card>
               <CardHeader>
                 <CardTitle>Profile Status</CardTitle>
               </CardHeader>
@@ -188,7 +188,7 @@ export default function TutorDashboardPage() {
                   <Badge variant="secondary">98%</Badge>
                 </div>
               </CardContent>
-            </Card>
+            </Card> */}
           </div>
         </div>
       </div>

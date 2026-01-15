@@ -19,9 +19,9 @@ export default function TutorEarningsPage() {
 //     }
 //   }, [user, router])
 
-  if (!user || (user.role !== "tutor" && user.role !== "both")) {
-    return null
-  }
+  // if (!user || (user.role !== "tutor" && user.role !== "both")) {
+  //   return null
+  // }
 
   const earnings = {
     total: 1245.5,

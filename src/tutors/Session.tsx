@@ -20,9 +20,9 @@ export default function TutorSessionsPage() {
 //     }
 //   }, [user, router])
 
-  if (!user || (user.role !== "tutor" && user.role !== "both")) {
-    return null
-  }
+  // if (!user || (user.role !== "tutor" && user.role !== "both")) {
+  //   return null
+  // }
 
   const upcomingSessions = [
     {

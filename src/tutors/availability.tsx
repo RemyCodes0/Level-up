@@ -50,9 +50,9 @@ export default function TutorAvailabilityPage() {
 //     }
 //   }, [user, router])
 
-  if (!user || (user.role !== "tutor" && user.role !== "both")) {
-    return null
-  }
+  // if (!user || (user.role !== "tutor" && user.role !== "both")) {
+  //   return null
+  // }
 
   const toggleDay = (dayIndex: number) => {
     setAvailability(availability.map((day, idx) => (idx === dayIndex ? { ...day, enabled: !day.enabled } : day)))

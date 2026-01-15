@@ -16,6 +16,8 @@ export default function TutorsPage() {
   const [maxPrice, setMaxPrice] = useState([20])
   const [minRating, setMinRating] = useState([0])
 
+
+
   const filteredTutors = useMemo(() => {
     return MOCK_TUTORS.filter((tutor) => {
       // Search filter
