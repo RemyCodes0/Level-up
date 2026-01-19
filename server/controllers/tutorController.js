@@ -12,8 +12,22 @@ exports.getProfile = async(req,res)=>{
     }
 }
 
+exports.getTutors = async (req, res) => {
+  try {
+    const tutors = await TutorApplication.find({status: "approved"}).populate("user", "name email")
 
-exports.updateProfile = async (req, res)=>{
+    if (tutors.length === 0) {
+      return res.status(404).json({ message: "No tutors found" })
+    }
+
+    return res.status(200).json(tutors)
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ message: "Server error" })
+  }
+}
+
+exports.updateProfile = async (req, res)=>{ 
     try{
         const user = await User.findById(req.user.id);
         if(!user) return res.status(404).json({message: 'User not found'});

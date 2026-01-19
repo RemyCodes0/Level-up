@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { Navbar } from "@/components/navbar/Navbar"
 import { TutorCard } from "@/components/tutor-card"
 import { Input } from "@/components/ui/input"
@@ -15,30 +15,53 @@ export default function TutorsPage() {
   const [selectedSubject, setSelectedSubject] = useState<string>("all")
   const [maxPrice, setMaxPrice] = useState([20])
   const [minRating, setMinRating] = useState([0])
+  const [tutors, setTutors] = useState<any[]>([])
+const [loading, setLoading] = useState(true)
+const [error, setError] = useState<string | null>(null)
+
+useEffect(() => {
+  const fetchTutors = async () => {
+    try {
+      const res = await fetch("http://localhost:5000/api/tutor/allTutors")
+
+      if (!res.ok) {
+        throw new Error("Failed to fetch tutors")
+      }
+
+      const data = await res.json()
+      setTutors(data)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  fetchTutors()
+}, [])
 
 
+ const filteredTutors = useMemo(() => {
+  return tutors.filter((tutor) => {
+    const matchesSearch =
+      searchQuery === "" ||
+      tutor.user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      tutor.subjects.some((subject: string) =>
+        subject.toLowerCase().includes(searchQuery.toLowerCase())
+      ) ||
+      tutor.bio.toLowerCase().includes(searchQuery.toLowerCase())
 
-  const filteredTutors = useMemo(() => {
-    return MOCK_TUTORS.filter((tutor) => {
-      // Search filter
-      const matchesSearch =
-        searchQuery === "" ||
-        tutor.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        tutor.profile.subjects.some((subject) => subject.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        tutor.profile.bio.toLowerCase().includes(searchQuery.toLowerCase())
+    const matchesSubject =
+      selectedSubject === "all" ||
+      tutor.subjects.includes(selectedSubject)
 
-      // Subject filter
-      const matchesSubject = selectedSubject === "all" || tutor.profile.subjects.includes(selectedSubject)
+    const matchesPrice = tutor.hourlyRate <= maxPrice[0]
+    // const matchesRating = tutor.profile.averageRating >= minRating[0]
 
-      // Price filter
-      const matchesPrice = tutor.profile.hourlyRate <= maxPrice[0]
+    return matchesSearch && matchesSubject && matchesPrice
+  })
+}, [tutors, searchQuery, selectedSubject, maxPrice, minRating])
 
-      // Rating filter
-      const matchesRating = tutor.profile.averageRating >= minRating[0]
-
-      return matchesSearch && matchesSubject && matchesPrice && matchesRating
-    })
-  }, [searchQuery, selectedSubject, maxPrice, minRating])
 
   return (
     <div className="min-h-screen bg-background">
@@ -116,7 +139,7 @@ export default function TutorsPage() {
             {filteredTutors.length > 0 ? (
               <div className="grid md:grid-cols-2 gap-6">
                 {filteredTutors.map((tutor) => (
-                  <TutorCard key={tutor.id} tutor={tutor} />
+                  <TutorCard key={tutor._id} tutor={tutor} />
                 ))}
               </div>
             ) : (
