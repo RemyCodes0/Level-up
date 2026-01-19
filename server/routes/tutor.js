@@ -1,7 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const multer = require("multer")
-const {getProfile, updateProfile, apply, adminApprove, getApplications, adminDelete} = require('../controllers/tutorController')
+const {getProfile, updateProfile, apply, adminApprove, getApplications, adminDelete, getTutors} = require('../controllers/tutorController')
 const storage = multer.memoryStorage(); 
 const {protect} = require('../middleware/authMiddleware');
 const upload = multer({ storage });
@@ -16,5 +16,6 @@ router.post('/apply', protect, upload.fields([
 router.patch('/:id/approve', adminApprove);
 router.get("/applications", getApplications);
 router.delete("/:id/delete", adminDelete);
+router.get("/allTutors", getTutors)
 
 module.exports = router;
