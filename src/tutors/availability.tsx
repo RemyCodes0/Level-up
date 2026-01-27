@@ -88,10 +88,10 @@ export default function TutorAvailabilityPage() {
   }
 
   const handleSave = () => {
-    toast({
-      title: "Availability Updated",
-      description: "Your availability schedule has been saved successfully.",
-    })
+    // toast({
+    //   title: "Availability Updated",
+    //   description: "Your availability schedule has been saved successfully.",
+    // })
   }
 
   return (
