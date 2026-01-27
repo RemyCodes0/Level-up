@@ -54,7 +54,7 @@ export function TutorCard({ tutor }) {
         </div>
       </CardContent>
       <CardFooter className="p-6 pt-0">
-        <a href={`/tutors/${tutor._id}`} className="w-full">
+        <a href={`/tutors/${tutor.user._id}`} className="w-full">
           <Button className="w-full">View Profile</Button>
         </a>
       </CardFooter>

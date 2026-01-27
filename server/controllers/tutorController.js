@@ -3,7 +3,7 @@ const TutorApplication = require("../models/Tutor");
 
 exports.getProfile = async(req,res)=>{
     try{
-        const tutor= await TutorApplication.findOne({user: req.params.id});
+        const tutor= await TutorApplication.findOne({user: req.params.id}).populate("user", "name email");
         if (!tutor) return res.status(404).json({message: 'tutor not found'})
         
             res.json({tutor})

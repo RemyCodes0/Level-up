@@ -12,13 +12,27 @@ import { MessageDialog } from "@/components/message-dialog"
 import { MOCK_TUTORS } from "@/lib/mock-data"
 import { Star, CheckCircle2, DollarSign, BookOpen, Calendar, Clock, MapPin, Award } from "lucide-react"
 import { useParams } from "react-router-dom"
+import { useEffect, useState } from "react"
+import axios from "axios"
 
 
 
 export default function TutorProfilePage() {
   const { id } = useParams<{ id: string }>()
   const router = useNavigate()
-  const tutor = MOCK_TUTORS.find((t) => t.id === id)
+  const [tutor, setTutors] = useState()
+
+  useEffect(()=>{
+    const fetchTutor =async()=>{
+      try{
+        const res = await axios.get(`http://localhost:5000/api/tutor/${id}/getTutor`)
+       setTutors(res.data.tutor)
+      }catch(err){
+        console.error(err)
+      }
+    }
+    fetchTutor()
+  },[])
 
   if (!tutor) {
     return (
@@ -114,34 +128,34 @@ export default function TutorProfilePage() {
                 <div className="flex flex-col md:flex-row items-start gap-6 mb-6">
                   <Avatar className="h-32 w-32">
                     <AvatarImage src={tutor.avatarUrl || "/placeholder.svg"} alt={tutor.fullName} />
-                    <AvatarFallback className="text-2xl">{tutor.fullName.charAt(0)}</AvatarFallback>
+                    <AvatarFallback className="text-2xl">{tutor.user.name.charAt(0)}</AvatarFallback>
                   </Avatar>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <h1 className="text-3xl font-bold">{tutor.fullName}</h1>
-                      {tutor.profile.isVerified && (
+                      {tutor.status === "approved" && (
                         <CheckCircle2 className="h-6 w-6 text-primary" title="Verified Tutor" />
                       )}
                     </div>
                     <div className="flex flex-wrap items-center gap-4 text-muted-foreground mb-4">
                       <div className="flex items-center gap-1">
                         <Star className="h-5 w-5 fill-yellow-400 text-yellow-400" />
-                        <span className="font-semibold text-foreground">{tutor.profile.averageRating.toFixed(1)}</span>
+                        {/* <span className="font-semibold text-foreground">{tutor.profile.averageRating.toFixed(1)}</span> */}
                         <span className="text-sm">({mockReviews.length} reviews)</span>
                       </div>
-                      <div className="flex items-center gap-1">
+                      {/* <div className="flex items-center gap-1">
                         <BookOpen className="h-4 w-4" />
                         <span className="text-sm">{tutor.profile.totalSessions} sessions completed</span>
-                      </div>
+                      </div> */}
                     </div>
                     <div className="flex items-center gap-2 text-2xl font-bold text-primary mb-4">
                       <DollarSign className="h-6 w-6" />
-                      <span>{tutor.profile.hourlyRate.toFixed(2)}/hour</span>
+                      <span>{tutor.hourlyRate.toFixed(2)}/hour</span>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {tutor.profile.subjects.map((subject) => (
-                        <Badge key={subject} variant="secondary" className="text-sm px-3 py-1">
-                          {subject}
+                      {tutor.subjects.map((subject) => (
+                        <Badge key={subject.name} variant="secondary" className="text-sm px-3 py-1">
+                          {subject.name}
                         </Badge>
                       ))}
                     </div>
@@ -156,7 +170,7 @@ export default function TutorProfilePage() {
                     <Award className="h-5 w-5 text-primary" />
                     About Me
                   </h2>
-                  <p className="text-muted-foreground leading-relaxed">{tutor.profile.bio}</p>
+                  <p className="text-muted-foreground leading-relaxed">{tutor.bio}</p>
                 </div>
               </CardContent>
             </Card>
@@ -230,19 +244,19 @@ export default function TutorProfilePage() {
                   <Clock className="h-5 w-5 text-primary" />
                   Weekly Availability
                 </CardTitle>
-                <CardDescription>Times when {tutor.fullName.split(" ")[0]} is available for sessions</CardDescription>
+                <CardDescription>Times when {tutor.user.name.split(" ")[0]} is available for sessions</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {mockAvailability.map((day) => (
+                  {tutor.availability.map((day) => (
                     <div key={day.day} className="flex items-start gap-4 p-3 rounded-lg bg-muted/50">
                       <div className="w-28 font-medium text-foreground">{day.day}</div>
                       <div className="flex-1 flex flex-wrap gap-2">
-                        {day.slots.map((slot, idx) => (
-                          <Badge key={idx} variant="outline" className="text-sm bg-background">
-                            {slot.start} - {slot.end}
+                        
+                          <Badge key={day.day} variant="outline" className="text-sm bg-background">
+                            {day.from} - {day.to}
                           </Badge>
-                        ))}
+                       
                       </div>
                     </div>
                   ))}
@@ -257,7 +271,7 @@ export default function TutorProfilePage() {
             <Card>
               <CardHeader>
                 <CardTitle>Student Reviews ({mockReviews.length})</CardTitle>
-                <CardDescription>What students are saying about {tutor.fullName.split(" ")[0]}</CardDescription>
+                <CardDescription>What students are saying about {tutor.user.name.split(" ")[0]}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
                 {mockReviews.map((review, index) => (
@@ -298,37 +312,37 @@ export default function TutorProfilePage() {
               <Card>
                 <CardHeader>
                   <CardTitle>Book a Session</CardTitle>
-                  <CardDescription>Get started with {tutor.fullName.split(" ")[0]}</CardDescription>
+                  <CardDescription>Get started with {tutor.user.name.split(" ")[0]}</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="space-y-3 p-4 rounded-lg bg-muted/50">
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Hourly Rate</span>
-                      <span className="font-semibold text-lg">${tutor.profile.hourlyRate.toFixed(2)}</span>
+                      <span className="font-semibold text-lg">${tutor.hourlyRate.toFixed(2)}</span>
                     </div>
                     <Separator />
-                    <div className="flex items-center justify-between text-sm">
+                    {/* <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Sessions</span>
                       <span className="font-semibold">{tutor.profile.totalSessions}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-sm">
+                    </div> */}
+                    {/* <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Rating</span>
                       <span className="font-semibold">{tutor.profile.averageRating.toFixed(1)}/5.0</span>
-                    </div>
+                    </div> */}
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Response Time</span>
                       <span className="font-semibold">Within 2 hours</span>
                     </div>
                   </div>
 
-                  <a href={`/book/${tutor.id}`} className="block">
+                  <a href={`/book/${tutor._id}`} className="block">
                     <Button className="w-full" size="lg">
                       <Calendar className="mr-2 h-4 w-4" />
                       Book Session Now
                     </Button>
                   </a>
-
-                  <MessageDialog tutor={tutor} />
+{/* 
+                  <MessageDialog tutor={tutor} /> */}
 
                   <p className="text-xs text-muted-foreground text-center">
                     Have questions? Send a message before booking
@@ -338,7 +352,7 @@ export default function TutorProfilePage() {
 
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Why Choose {tutor.fullName.split(" ")[0]}?</CardTitle>
+                  <CardTitle className="text-base">Why Choose {tutor.user.name.split(" ")[0]}?</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="flex items-start gap-2 text-sm">
