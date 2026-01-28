@@ -335,7 +335,7 @@ export default function TutorProfilePage() {
                     </div>
                   </div>
 
-                  <a href={`/book/${tutor._id}`} className="block">
+                  <a href={`/book/${id}`} className="block">
                     <Button className="w-full" size="lg">
                       <Calendar className="mr-2 h-4 w-4" />
                       Book Session Now
