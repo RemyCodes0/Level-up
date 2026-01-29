@@ -28,12 +28,14 @@ interface MockSession {
 }
 
 export default function BookingsPage() {
-  const { user, loading } = useAuth()
+  const {  loading } = useAuth()
   const router = useNavigate()
   const [activeTab, setActiveTab] = useState("upcoming")
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false)
   const [selectedSession, setSelectedSession] = useState<MockSession | null>(null)
 
+
+  const user = JSON.parse(localStorage.getItem("user"))
   useEffect(() => {
     if (!loading && !user) {
       router("/login")

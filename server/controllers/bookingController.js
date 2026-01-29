@@ -1,13 +1,24 @@
 const Booking = require("../models/Booking")
 
 
-exports.getBooking = async(req, res)=>{
+exports.getBookingByTutor = async(req, res)=>{
     try {
-        const booking = await Booking.find({tutor: req.params.id}).populate("tutor", "name").populate("student", "name email")
+        const booking = await Booking.find({tutor: req.params.id}).populate("tutor", "name").populate("student", "name email").sort({createdAt: -1})
         if(!booking || booking.length ===0) return res.status(404).json({message: "No booking for this tutor"})
         res.status(200).json(booking)
     } catch (error) {
         res.status(500).json({message: error.message})
+    }
+}
+
+exports.getBookingByStudent = async(req, res)=>{
+    try {
+        const booking = (await Booking.find({student: req.params.id}).populate("tutor", "name").populate("student", "name email")).toSorted({createdAt: -1})
+
+        if(!booking || booking.length === 0) return res.status(404).json({message: "No booking for this student"})
+        res.status(200).json(booking)
+    } catch (error) {
+        res.status(500).json({message: error.message}) 
     }
 }
 
