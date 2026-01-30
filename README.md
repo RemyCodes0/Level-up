@@ -92,7 +92,7 @@ Level Up facilitates meaningful educational connections by allowing students to:
 
 ## 📁 Project Structure
 
-\`\`\`
+```
 level-up-platform/
 ├── app/                          # Next.js App Router pages
 │   ├── admin/                    # Admin dashboard pages
@@ -136,7 +136,7 @@ level-up-platform/
 │   ├── 01-create-tables.sql    # Schema creation
 │   └── 02-seed-data.sql        # Sample data
 └── public/                       # Static assets
-\`\`\`
+```
 
 ## 👥 User Roles
 
