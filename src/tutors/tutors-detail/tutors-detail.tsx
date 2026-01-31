@@ -132,7 +132,7 @@ export default function TutorProfilePage() {
                   </Avatar>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
-                      <h1 className="text-3xl font-bold">{tutor.fullName}</h1>
+                      <h1 className="text-3xl font-bold">{tutor.user.name}</h1>
                       {tutor.status === "approved" && (
                         <CheckCircle2 className="h-6 w-6 text-primary" title="Verified Tutor" />
                       )}

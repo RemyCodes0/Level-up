@@ -4,8 +4,8 @@ const { protect } = require("../middleware/authMiddleware")
 const router = express.Router()
 
 
-router.get("/:id/tutor", getBookingByTutor)
-router.get("/:id/student", getBookingByStudent)
+router.get("/tutor", protect, getBookingByTutor)
+router.get("/student", protect, getBookingByStudent)
 router.post("/:id",protect, book)
 
 module.exports = router

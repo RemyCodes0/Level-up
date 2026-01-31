@@ -4,7 +4,7 @@ const mongoose = require("mongoose")
 const bookingSchema = new mongoose.Schema({
     tutor: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "Tutor",
+        ref: "TutorApplication",
         required: true
     },
     student:{

@@ -1,13 +1,14 @@
 const express = require('express')
 const router = express.Router()
 const multer = require("multer")
-const {getProfile, updateProfile, apply, adminApprove, getApplications, adminDelete, getTutors} = require('../controllers/tutorController')
+const {getProfile, updateProfile, apply, adminApprove, getApplications, adminDelete, getTutors, getProfileWithUserId} = require('../controllers/tutorController')
 const storage = multer.memoryStorage(); 
 const {protect} = require('../middleware/authMiddleware');
 const upload = multer({ storage });
 
 
 router.get('/:id/getTutor',  getProfile);
+router.get('/:id/getTutorWithUserId',  getProfileWithUserId);
 router.put('/me',  updateProfile);
 router.post('/apply', protect, upload.fields([
     {name:"certificates", maxCount: 5},
