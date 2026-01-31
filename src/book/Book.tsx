@@ -111,7 +111,7 @@ export default function BookSessionPage() {
 
         // Redirect to bookings page after 2 seconds
         setTimeout(() => {
-          alert("fine!");
+          router("/bookings")
         }, 2000);
       }, 1000);
     } catch (error) {
@@ -136,7 +136,7 @@ export default function BookSessionPage() {
         <div className="max-w-4xl mx-auto">
           <h1 className="text-3xl font-bold mb-2">Book a Session</h1>
           <p className="text-muted-foreground mb-8">
-            Schedule your tutoring session with {tutor.fullName}
+            Schedule your tutoring session with {tutor.user.name}
           </p>
 
           {success && (
@@ -297,14 +297,14 @@ export default function BookSessionPage() {
                       <Avatar className="h-12 w-12">
                         <AvatarImage
                           src={tutor.avatarUrl || "/placeholder.svg"}
-                          alt={tutor.fullName}
+                          alt={tutor.user.name}
                         />
                         <AvatarFallback>
                           {tutor.user.name.charAt(0)}
                         </AvatarFallback>
                       </Avatar>
                       <div>
-                        <p className="font-semibold">{tutor.fullName}</p>
+                        <p className="font-semibold">{tutor.user.name}</p>
                         <p className="text-sm text-muted-foreground">
                           {subject || "No subject selected"}
                         </p>

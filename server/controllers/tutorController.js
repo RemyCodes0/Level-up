@@ -3,6 +3,18 @@ const TutorApplication = require("../models/Tutor");
 
 exports.getProfile = async(req,res)=>{
     try{
+        const tutor= await TutorApplication.findOne({_id: req.params.id}).populate("user", "name email");
+        if (!tutor) return res.status(404).json({message: 'tutor not found'})
+        
+            res.json({tutor})
+    }catch(error){
+        res.status(500).json({message: error.message})
+    }
+}
+
+
+exports.getProfileWithUserId = async(req,res)=>{
+    try{
         const tutor= await TutorApplication.findOne({user: req.params.id}).populate("user", "name email");
         if (!tutor) return res.status(404).json({message: 'tutor not found'})
         

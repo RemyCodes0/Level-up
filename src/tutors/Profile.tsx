@@ -41,7 +41,7 @@ export default function TutorProfileEditPage() {
     // Load existing tutor data
     const fetchTutorData = async()=>{
       try{
-      const res = await axios.get(`http://localhost:5000/api/tutor/${user._id}/getTutor`
+      const res = await axios.get(`http://localhost:5000/api/tutor/${user._id}/getTutorWithUserId`
         // {headers:{
         //   Authorization: `Bearer ${token}`
         // }}
@@ -56,8 +56,10 @@ export default function TutorProfileEditPage() {
       setSelectedSubjects(data.subjects)
     }
 
-      }catch(er){
-        alert("error: FAiled to load ")
+      }catch(error){
+        alert("error: FAiled to load ", error)
+        console.error(error)
+        
       }
 
     }

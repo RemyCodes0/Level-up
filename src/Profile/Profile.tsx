@@ -14,13 +14,16 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
 export default function ProfilePage() {
-  const { user, loading } = useAuth()
+  const { loading } = useAuth()
   const router = useNavigate()
   const [fullName, setFullName] = useState("")
   const [email, setEmail] = useState("")
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
 
+
+
+  const user = JSON.parse(localStorage.getItem("user"))
   useEffect(() => {
     if (!loading && !user) {
       router("/login")
@@ -75,7 +78,7 @@ export default function ProfilePage() {
                 <div className="flex items-center gap-6">
                   <Avatar className="h-20 w-20">
                     <AvatarImage src={user.avatarUrl || "/placeholder.svg"} alt={user.fullName} />
-                    <AvatarFallback>{user.fullName.charAt(0)}</AvatarFallback>
+                    <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
                   </Avatar>
                   <Button type="button" variant="outline" className="bg-transparent">
                     Change Photo
