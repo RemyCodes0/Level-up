@@ -72,3 +72,23 @@ exports.book = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+
+
+exports.confirmBooking = async(req, res)=>{
+  try {
+    const book = await Booking.findByIdAndUpdate(req.params.id, {status: "confirmed"}, {new:true})
+    if(!book){
+      return res.status(404).json({message: "Booking not found"})
+
+    }
+
+    res.status(200).json(book)
+    
+  } catch (error) {
+    res.status(500).json({message:error.message})
+  }
+}
+
+
+
