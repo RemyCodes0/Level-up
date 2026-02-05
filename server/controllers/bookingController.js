@@ -91,4 +91,15 @@ exports.confirmBooking = async(req, res)=>{
 }
 
 
+exports.declineBooking = async(req,res)=>{
+  try {
+    const book = await Booking.findByIdAndUpdate(req.params.id, {status: "canceled"},{new: true})
+    if(!book){
+      return res.status(404).json({message: "No booking found"})
 
+    }
+    res.status(200).json(book)
+  } catch (error) {
+    res.status(500).json({message: error.message})
+  }
+}

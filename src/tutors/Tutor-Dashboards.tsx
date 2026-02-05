@@ -31,12 +31,11 @@ export default function TutorDashboardPage() {
   //   }
 
   const [upcomingSessions, setUpcomingSessions] = useState([]);
-  const [totalEarnings, setTotalEarnings] = useState()
-
+  const [totalEarnings, setTotalEarnings] = useState();
+  const [totalSessions, setTotalSessions] = useState();
 
   // fetching tutors booking list
 
- 
   const token = localStorage.getItem("token");
   useEffect(() => {
     const fetchBookings = async () => {
@@ -46,9 +45,17 @@ export default function TutorDashboardPage() {
             Authorization: `Bearer ${token}`,
           },
         });
+        const total = res.data
+          .filter((b) => b.status === "confirmed") 
+          .reduce((acc, b) => acc + b.totalAmount, 0);
+        setTotalEarnings(total);
+
+        const sessions = res.data.filter((b)=> b.status !=="canceled").length
+
+        setTotalSessions(sessions)
 
         setUpcomingSessions(res.data);
-      //  const total = res.data.reduce((acc, session) => acc + session.totalAmount, 0);
+        //  const total = res.data.reduce((acc, session) => acc + session.totalAmount, 0);
         console.log("Bookings:", res.data);
       } catch (error) {
         console.error("Error fetching bookings:", error);
@@ -87,13 +94,10 @@ export default function TutorDashboardPage() {
   //   },
   // ]
 
-
-  
-
-   const stats = {
-    totalEarnings: 123,
+  const stats = {
+    totalEarnings: totalEarnings,
     thisMonthEarnings: 385.0,
-    totalSessions: 45,
+    totalSessions: totalSessions,
     upcomingSessions: 8,
     averageRating: 4.8,
     totalReviews: 32,
@@ -118,12 +122,10 @@ export default function TutorDashboardPage() {
               <DollarSign className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                ${stats.totalEarnings.toFixed(2)}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
+              <div className="text-2xl font-bold">${totalEarnings}</div>
+              {/* <p className="text-xs text-muted-foreground mt-1">
                 +${stats.thisMonthEarnings.toFixed(2)} this month
-              </p>
+              </p> */}
             </CardContent>
           </Card>
 
@@ -136,9 +138,9 @@ export default function TutorDashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{stats.totalSessions}</div>
-              <p className="text-xs text-muted-foreground mt-1">
+              {/* <p className="text-xs text-muted-foreground mt-1">
                 {stats.upcomingSessions} upcoming
-              </p>
+              </p> */}
             </CardContent>
           </Card>
 
@@ -193,9 +195,11 @@ export default function TutorDashboardPage() {
                           <span>{session.location}</span>
                         </div>
                       </div>
-                      <Button variant="outline" size="sm">
-                        View Details
-                      </Button>
+                      <a href="/tutor/sessions">
+                        <Button variant="outline" size="sm">
+                          View Details
+                        </Button>
+                      </a>
                     </div>
                   ))}
                 </div>
@@ -232,7 +236,7 @@ export default function TutorDashboardPage() {
                     Manage Availability
                   </Button>
                 </a>
-                <a href="/tutor/earnings">
+                {/* <a href="/tutor/earnings">
                   <Button
                     variant="outline"
                     className="w-full justify-start bg-transparent"
@@ -240,7 +244,7 @@ export default function TutorDashboardPage() {
                     <TrendingUp className="mr-2 h-4 w-4" />
                     View Earnings
                   </Button>
-                </a>
+                </a> */}
               </CardContent>
             </Card>
 

@@ -71,7 +71,21 @@ export default function TutorSessionsPage() {
       {},
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    alert("accepted")
+ 
+    // refresh bookings
+    fetchBookings();
+  } catch (error) {
+    console.error("Error accepting booking:", error);
+  }
+};
+  const declineBooking = async (id) => {
+  try {
+    await axios.put(
+      `http://localhost:5000/api/book/decline/${id}`,
+      {},
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
     // refresh bookings
     fetchBookings();
   } catch (error) {
@@ -96,7 +110,7 @@ export default function TutorSessionsPage() {
       amount: b.totalAmount,
     };
 
-    if (b.status ==="pending" || b.status === "confirmed"){
+    if (b.status ==="pending"){
       upcoming.push(formatted)
 
     }else{
@@ -210,7 +224,7 @@ export default function TutorSessionsPage() {
           <div className="flex gap-2">
             {session.status === "pending" && (
               <>
-                <Button size="sm" variant="outline">
+                <Button onClick={()=> declineBooking(session.id)} size="sm" variant="outline">
                   Decline
                 </Button>
                 <Button onClick={()=> acceptBooking(session.id)} size="sm">Accept</Button>
