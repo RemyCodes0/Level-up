@@ -153,3 +153,32 @@ exports.adminDelete = async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 };
+
+
+
+exports.updateAvailability = async (req, res) => {
+  try {
+    const tutorId = req.params.id; // ID of the tutor (user._id)
+    const { availability } = req.body;
+
+    if (!availability) {
+      return res.status(400).json({ message: "Availability is required" });
+    }
+
+    // Update tutor availability
+    const updatedTutor = await TutorApplication.findOneAndUpdate(
+      { user: tutorId }, // find by user reference
+      { availability },
+      { new: true } // return the updated document
+    );
+
+    if (!updatedTutor) {
+      return res.status(404).json({ message: "Tutor not found" });
+    }
+
+    res.status(200).json({ message: "Availability updated successfully", tutor: updatedTutor });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: error.message });
+  }
+};

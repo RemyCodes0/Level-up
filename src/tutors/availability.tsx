@@ -1,173 +1,190 @@
-"use client"
+"use client";
 
-import { useAuth } from "@/lib/auth-context"
-import { useNavigate } from "react-router-dom"
-import { useEffect, useState } from "react"
-import { Navbar } from "@/components/navbar/Navbar"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Label } from "@/components/ui/label"
-import { X } from "lucide-react"
-import { useToast } from "@/hooks/use-toast"
-
-interface TimeSlot {
-  start: string
-  end: string
-}
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Navbar } from "@/components/navbar/Navbar";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import axios from "axios";
+import { X } from "lucide-react";
 
 interface DayAvailability {
-  day: string
-  enabled: boolean
-  slots: TimeSlot[]
+  day: string;
+  from: string;
+  to: string;
 }
 
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+
 export default function TutorAvailabilityPage() {
-  const { user } = useAuth()
-  const router = useNavigate()
-  const { toast } = useToast()
+  const router = useNavigate();
+  const user = JSON.parse(localStorage.getItem("user"));
+  const token = localStorage.getItem("token");
 
-  const [availability, setAvailability] = useState<DayAvailability[]>([
-    { day: "Monday", enabled: true, slots: [{ start: "10:00", end: "14:00" }] },
-    { day: "Tuesday", enabled: true, slots: [{ start: "14:00", end: "18:00" }] },
-    {
-      day: "Wednesday",
-      enabled: true,
-      slots: [
-        { start: "10:00", end: "12:00" },
-        { start: "15:00", end: "19:00" },
-      ],
-    },
-    { day: "Thursday", enabled: true, slots: [{ start: "13:00", end: "17:00" }] },
-    { day: "Friday", enabled: true, slots: [{ start: "09:00", end: "13:00" }] },
-    { day: "Saturday", enabled: false, slots: [] },
-    { day: "Sunday", enabled: false, slots: [] },
-  ])
+  const [availability, setAvailability] = useState<DayAvailability[]>([]);
 
-//   useEffect(() => {
-//     if (!user || (user.role !== "tutor" && user.role !== "both")) {
-//       router("/")
-//     }
-//   }, [user, router])
+  // Load existing tutor availability
+  useEffect(() => {
+    const fetchTutorData = async () => {
+      try {
+        const res = await axios.get(
+          `http://localhost:5000/api/tutor/${user._id}/getTutorWithUserId`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const data = res.data.tutor;
 
-  // if (!user || (user.role !== "tutor" && user.role !== "both")) {
-  //   return null
-  // }
+        // Normalize availability: ensure from/to exist
+        const normalized = (data.availability || []).map((day: any) => ({
+          day: WEEKDAYS.includes(day.day) ? day.day : WEEKDAYS[0],
+          from: day.from || "00:00",
+          to: day.to || "00:00",
+        }));
 
-  const toggleDay = (dayIndex: number) => {
-    setAvailability(availability.map((day, idx) => (idx === dayIndex ? { ...day, enabled: !day.enabled } : day)))
-  }
+        setAvailability(normalized);
+      } catch (error) {
+        console.error("Failed to load tutor data:", error);
+        alert("Failed to load availability");
+      }
+    };
 
-  const addSlot = (dayIndex: number) => {
-    setAvailability(
-      availability.map((day, idx) =>
-        idx === dayIndex ? { ...day, slots: [...day.slots, { start: "09:00", end: "10:00" }] } : day,
-      ),
-    )
-  }
+    if (user && token) fetchTutorData();
+  }, []);
 
-  const removeSlot = (dayIndex: number, slotIndex: number) => {
-    setAvailability(
-      availability.map((day, idx) =>
-        idx === dayIndex ? { ...day, slots: day.slots.filter((_, sIdx) => sIdx !== slotIndex) } : day,
-      ),
-    )
-  }
+  const updateSlot = (
+    index: number,
+    field: "from" | "to" | "day",
+    value: string
+  ) => {
+    setAvailability((prev) => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  };
 
-  const updateSlot = (dayIndex: number, slotIndex: number, field: "start" | "end", value: string) => {
-    setAvailability(
-      availability.map((day, idx) =>
-        idx === dayIndex
-          ? {
-              ...day,
-              slots: day.slots.map((slot, sIdx) => (sIdx === slotIndex ? { ...slot, [field]: value } : slot)),
-            }
-          : day,
-      ),
-    )
-  }
+  const addDay = () => {
+    // Default to first weekday that is not already in availability
+    const usedDays = availability.map((d) => d.day);
+    const newDay = WEEKDAYS.find((d) => !usedDays.includes(d)) || WEEKDAYS[0];
 
-  const handleSave = () => {
-    // toast({
-    //   title: "Availability Updated",
-    //   description: "Your availability schedule has been saved successfully.",
-    // })
-  }
+    setAvailability((prev) => [
+      ...prev,
+      { day: newDay, from: "00:00", to: "00:00" },
+    ]);
+  };
+
+  const removeDay = (index: number) => {
+    setAvailability((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleSave = async () => {
+    try {
+      await axios.put(
+        `http://localhost:5000/api/tutor/${user._id}/updateAvailability`,
+        { availability },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      alert("Availability saved successfully!");
+    } catch (error) {
+      console.error("Failed to save availability:", error);
+      alert("Failed to save availability");
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
       <div className="container mx-auto px-4 py-8 max-w-4xl">
-        <Button variant="ghost" onClick={() => router("/tutor/dashboard")} className="mb-6">
+        <Button
+          variant="ghost"
+          onClick={() => router("/tutor/dashboard")}
+          className="mb-6"
+        >
           ← Back to Dashboard
         </Button>
 
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">Manage Availability</h1>
-          <p className="text-muted-foreground">Set your weekly availability for tutoring sessions</p>
+          <p className="text-muted-foreground">
+            Set your weekly availability for tutoring sessions
+          </p>
         </div>
 
         <Card>
           <CardHeader>
             <CardTitle>Weekly Schedule</CardTitle>
-            <CardDescription>Select days and time slots when you're available to tutor</CardDescription>
+            <CardDescription>
+              Set the time range for each day you are available
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {availability.map((day, dayIndex) => (
-              <div key={day.day} className="space-y-3 pb-6 border-b last:border-b-0">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Checkbox
-                      id={`day-${dayIndex}`}
-                      checked={day.enabled}
-                      onCheckedChange={() => toggleDay(dayIndex)}
-                    />
-                    <Label htmlFor={`day-${dayIndex}`} className="text-base font-semibold cursor-pointer">
-                      {day.day}
-                    </Label>
-                  </div>
-                  {day.enabled && (
-                    <Button variant="outline" size="sm" onClick={() => addSlot(dayIndex)}>
-                      Add Time Slot
-                    </Button>
-                  )}
-                </div>
+            {availability.map((day, idx) => (
+              <div
+                key={idx}
+                className="flex items-center justify-between border-b last:border-b-0 pb-3"
+              >
+                {/* Day dropdown */}
+                <select
+                  value={day.day}
+                  onChange={(e) => updateSlot(idx, "day", e.target.value)}
+                  className="px-3 py-2 border rounded-md text-sm"
+                >
+                  {WEEKDAYS.map((d) => (
+                    <option
+                      key={d}
+                      value={d}
+                      disabled={availability.some(
+                        (av, i) => av.day === d && i !== idx
+                      )}
+                    >
+                      {d}
+                    </option>
+                  ))}
+                </select>
 
-                {day.enabled && (
-                  <div className="ml-8 space-y-2">
-                    {day.slots.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No time slots added</p>
-                    ) : (
-                      day.slots.map((slot, slotIndex) => (
-                        <div key={slotIndex} className="flex items-center gap-3">
-                          <input
-                            type="time"
-                            value={slot.start}
-                            onChange={(e) => updateSlot(dayIndex, slotIndex, "start", e.target.value)}
-                            className="px-3 py-2 border rounded-md text-sm"
-                          />
-                          <span className="text-muted-foreground">to</span>
-                          <input
-                            type="time"
-                            value={slot.end}
-                            onChange={(e) => updateSlot(dayIndex, slotIndex, "end", e.target.value)}
-                            className="px-3 py-2 border rounded-md text-sm"
-                          />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeSlot(dayIndex, slotIndex)}
-                            className="text-destructive hover:text-destructive"
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
+                {/* Time inputs */}
+                <div className="flex items-center gap-3">
+                  <input
+                    type="time"
+                    value={day.from}
+                    onChange={(e) => updateSlot(idx, "from", e.target.value)}
+                    className="px-3 py-2 border rounded-md text-sm"
+                  />
+                  <span className="text-muted-foreground">to</span>
+                  <input
+                    type="time"
+                    value={day.to}
+                    onChange={(e) => updateSlot(idx, "to", e.target.value)}
+                    className="px-3 py-2 border rounded-md text-sm"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => removeDay(idx)}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             ))}
+
+            <Button
+              onClick={addDay}
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              disabled={availability.length >= WEEKDAYS.length} // can't exceed Monday-Friday
+            >
+              + Add Day
+            </Button>
           </CardContent>
         </Card>
 
@@ -175,11 +192,15 @@ export default function TutorAvailabilityPage() {
           <Button onClick={handleSave} size="lg" className="flex-1">
             Save Availability
           </Button>
-          <Button variant="outline" onClick={() => router("/tutor/dashboard")} size="lg">
+          <Button
+            variant="outline"
+            onClick={() => router("/tutor/dashboard")}
+            size="lg"
+          >
             Cancel
           </Button>
         </div>
       </div>
     </div>
-  )
+  );
 }

@@ -3,8 +3,17 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 import { Badge } from "@/components/ui/badge"
 import { Navbar } from "@/components/navbar/Navbar"
 import { BookOpen, Clock, DollarSign, Star, Users, CheckCircle2, ArrowRight, GraduationCap } from "lucide-react"
+import { useEffect } from "react"
+import { useNavigate} from "react-router-dom"
 
 export default function HomePage() {
+const user = JSON.parse(localStorage.getItem("user"))
+const router = useNavigate()
+  useEffect(()=>{
+ if(user){
+  router("/dashboard")
+ }
+  },[user])
   return (
     <div className="min-h-screen bg-background">
       <Navbar />

@@ -16,10 +16,13 @@ const { loading } = useAuth()
 
   const user = storedUser ? JSON.parse(storedUser): null
 
+
+
   useEffect(() => {
     if (!loading && !user) {
       router("/login")
     }
+   
   }, [user, loading, router])
 
   if (loading) {
@@ -47,7 +50,7 @@ const { loading } = useAuth()
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">3</div>
-              <p className="text-xs text-muted-foreground">Next session in 2 days</p>
+              {/* <p className="text-xs text-muted-foreground">Next session in 2 days</p> */}
             </CardContent>
           </Card>
 
@@ -58,7 +61,7 @@ const { loading } = useAuth()
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">12</div>
-              <p className="text-xs text-muted-foreground">+2 from last month</p>
+              {/* <p className="text-xs text-muted-foreground">+2 from last month</p> */}
             </CardContent>
           </Card>
 
@@ -69,7 +72,7 @@ const { loading } = useAuth()
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">5</div>
-              <p className="text-xs text-muted-foreground">Across 3 subjects</p>
+              {/* <p className="text-xs text-muted-foreground">Across 3 subjects</p> */}
             </CardContent>
           </Card>
 
@@ -80,7 +83,7 @@ const { loading } = useAuth()
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">85%</div>
-              <p className="text-xs text-muted-foreground">Great improvement!</p>
+              {/* <p className="text-xs text-muted-foreground">Great improvement!</p> */}
             </CardContent>
           </Card>
         </div>
