@@ -40,9 +40,7 @@ export default function TutorSessionsPage() {
   //   return null
   // }
 
-
-  useEffect(() => {
-    const fetchBookings = async () => {
+   const fetchBookings = async () => {
       try {
         const res = await axios.get("http://localhost:5000/api/book/tutor", {
           headers: {
@@ -58,11 +56,28 @@ export default function TutorSessionsPage() {
         console.error("Error fetching bookings:", error);
       }
     };
+  useEffect(() => {
+ 
 
     if (token) {
       fetchBookings();
     }
   }, [token]);
+  
+  const acceptBooking = async (id) => {
+  try {
+    await axios.put(
+      `http://localhost:5000/api/book/accept/${id}`,
+      {},
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    alert("accepted")
+    // refresh bookings
+    fetchBookings();
+  } catch (error) {
+    console.error("Error accepting booking:", error);
+  }
+};
 
 
   const divideBookings=(bookings)=>{
@@ -92,6 +107,8 @@ export default function TutorSessionsPage() {
     setUpcomingSessions(upcoming)
     setPastSessions(past)
   }
+
+  
   // const upcomingSessions = [
   //   {
   //     id: "1",
@@ -196,11 +213,11 @@ export default function TutorSessionsPage() {
                 <Button size="sm" variant="outline">
                   Decline
                 </Button>
-                <Button size="sm">Accept</Button>
+                <Button onClick={()=> acceptBooking(session.id)} size="sm">Accept</Button>
               </>
             )}
             {session.status === "confirmed" && (
-              <Button size="sm" variant="outline">
+              <Button size="sm"  variant="outline">
                 View Details
               </Button>
             )}

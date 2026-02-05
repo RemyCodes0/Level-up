@@ -31,49 +31,34 @@ export default function TutorDashboardPage() {
   //   }
 
   const [upcomingSessions, setUpcomingSessions] = useState([]);
+  const [totalEarnings, setTotalEarnings] = useState()
 
-  
 
   // fetching tutors booking list
 
-
-  const stats = {
-    totalEarnings: 1245.5,
-    thisMonthEarnings: 385.0,
-    totalSessions: 45,
-    upcomingSessions: 8,
-    averageRating: 4.8,
-    totalReviews: 32,
-  };
-  const token = localStorage.getItem("token")
+ 
+  const token = localStorage.getItem("token");
   useEffect(() => {
-  const fetchBookings = async () => {
-    try {
-      
-      const res = await axios.get(
-        "http://localhost:5000/api/book/tutor",
-        {
+    const fetchBookings = async () => {
+      try {
+        const res = await axios.get("http://localhost:5000/api/book/tutor", {
           headers: {
             Authorization: `Bearer ${token}`,
           },
-        }
-      );
+        });
 
-      setUpcomingSessions(res.data);
-      console.log("Bookings:", res.data);
-      
+        setUpcomingSessions(res.data);
+      //  const total = res.data.reduce((acc, session) => acc + session.totalAmount, 0);
+        console.log("Bookings:", res.data);
+      } catch (error) {
+        console.error("Error fetching bookings:", error);
+      }
+    };
 
-    } catch (error) {
-      console.error("Error fetching bookings:", error);
+    if (token) {
+      fetchBookings();
     }
-  };
-
-  if (token) {
-    fetchBookings();
-  }
-}, [token]);
-
-
+  }, [token]);
 
   // const upcomingSessions = [
   //   {
@@ -101,6 +86,18 @@ export default function TutorDashboardPage() {
   //     location: "Nicely Hall",
   //   },
   // ]
+
+
+  
+
+   const stats = {
+    totalEarnings: 123,
+    thisMonthEarnings: 385.0,
+    totalSessions: 45,
+    upcomingSessions: 8,
+    averageRating: 4.8,
+    totalReviews: 32,
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -181,7 +178,9 @@ export default function TutorDashboardPage() {
                       className="flex items-center justify-between p-4 border rounded-lg"
                     >
                       <div className="space-y-1">
-                        <div className="font-medium">{session.student.name}</div>
+                        <div className="font-medium">
+                          {session.student.name}
+                        </div>
                         <div className="text-sm text-muted-foreground">
                           {session.subject}
                         </div>
