@@ -7,7 +7,8 @@ const TutorApplicationSchema = new mongoose.Schema(
       ref: "User",
       required: true,
       unique: true,
-    },
+    }, 
+    
     bio: { type: String, required: true },
     subjects: [{ code: String, name: String }],
     experiences: { type: String, required: true },
