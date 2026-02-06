@@ -46,19 +46,18 @@ useEffect(() => {
     const matchesSearch =
       searchQuery === "" ||
       tutor.user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      tutor.subjects.some((subject: string) =>
-        subject.toLowerCase().includes(searchQuery.toLowerCase())
-      ) ||
-      tutor.bio.toLowerCase().includes(searchQuery.toLowerCase())
+      tutor.subjects.some((subject: any) =>
+        subject.name.toLowerCase().includes(searchQuery.toLowerCase())
+      )
 
     const matchesSubject =
       selectedSubject === "all" ||
       tutor.subjects.includes(selectedSubject)
 
     const matchesPrice = tutor.hourlyRate <= maxPrice[0]
-    // const matchesRating = tutor.profile.averageRating >= minRating[0]
+    const matchesRating = tutor.averageRating >= minRating[0]
 
-    return matchesSearch && matchesSubject && matchesPrice
+    return matchesSearch && matchesSubject && matchesPrice&& matchesRating
   })
 }, [tutors, searchQuery, selectedSubject, maxPrice, minRating])
 
@@ -84,7 +83,7 @@ useEffect(() => {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     id="search"
-                    placeholder="Search tutors..."
+                    placeholder="Search tutors or subjects"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="pl-10"
@@ -92,7 +91,7 @@ useEffect(() => {
                 </div>
               </div>
 
-              <div>
+              {/* <div>
                 <Label htmlFor="subject" className="text-base font-semibold mb-3 block">
                   Subject
                 </Label>
@@ -109,7 +108,7 @@ useEffect(() => {
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
+              </div> */}
 
               <div>
                 <Label className="text-base font-semibold mb-3 block">Max Price: ${maxPrice[0]}/hour</Label>

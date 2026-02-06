@@ -103,3 +103,18 @@ exports.declineBooking = async(req,res)=>{
     res.status(500).json({message: error.message})
   }
 }
+
+
+exports.hasBookedTutor = async (req, res) => {
+  try {
+    const booking = await Booking.findOne({
+      tutor: req.params.tutorId,
+      student: req.user._id,
+      status: { $in: ["pending", "confirmed", "completed"] }
+    });
+
+    res.json({ hasBooked: !!booking });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

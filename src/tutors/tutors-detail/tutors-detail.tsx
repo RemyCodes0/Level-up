@@ -1,115 +1,82 @@
 "use client"
 
-import { useNavigate } from "react-router-dom"
-import { Navbar } from "@/components/navbar/Navbar"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Separator } from "@/components/ui/separator"
-import { StarRating } from "@/components/star-rating"
-import { MessageDialog } from "@/components/message-dialog"
-import { MOCK_TUTORS } from "@/lib/mock-data"
-import { Star, CheckCircle2, DollarSign, BookOpen, Calendar, Clock, MapPin, Award } from "lucide-react"
-import { useParams } from "react-router-dom"
+import { useNavigate, useParams } from "react-router-dom"
 import { useEffect, useState } from "react"
 import axios from "axios"
 
-
+import { Navbar } from "@/components/navbar/Navbar"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Separator } from "@/components/ui/separator"
+import { StarRating } from "@/components/star-rating"
+import { Star, CheckCircle2, DollarSign, BookOpen, Calendar, Clock, MapPin, Award } from "lucide-react"
 
 export default function TutorProfilePage() {
   const { id } = useParams<{ id: string }>()
   const router = useNavigate()
-  const [tutor, setTutors] = useState()
 
-  useEffect(()=>{
-    const fetchTutor =async()=>{
-      try{
+  const [tutor, setTutor] = useState<any>(null)
+  const [reviews, setReviews] = useState<any[]>([])
+  const [newComment, setNewComment] = useState("")
+  const [newRating, setNewRating] = useState(5)
+
+  // Fetch tutor info
+  useEffect(() => {
+    const fetchTutor = async () => {
+      try {
         const res = await axios.get(`http://localhost:5000/api/tutor/${id}/getTutor`)
-       setTutors(res.data.tutor)
-      }catch(err){
+        setTutor(res.data.tutor)
+      } catch (err) {
         console.error(err)
       }
     }
     fetchTutor()
-  },[])
+  }, [id])
+
+  // Fetch reviews
+  useEffect(() => {
+    const fetchReviews = async () => {
+      try {
+        const res = await axios.get(`http://localhost:5000/api/reviews/${id}`)
+        setReviews(res.data)
+      } catch (err) {
+        console.error(err)
+      }
+    }
+    fetchReviews()
+  }, [id])
+
+  // Submit a new review
+  const submitReview = async () => {
+    try {
+      const token = localStorage.getItem("token") // your auth token
+      const res = await axios.post(
+        `http://localhost:5000/api/reviews/${id}`,
+        { rating: newRating, comment: newComment },
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      setReviews([res.data, ...reviews])
+      setNewComment("")
+      setNewRating(5)
+    } catch (err: any) {
+      console.error(err)
+      alert(err.response?.data?.message || "Failed to submit review")
+    }
+  }
 
   if (!tutor) {
     return (
       <div className="min-h-screen bg-background">
         <Navbar />
-        <div className="container mx-auto px-4 py-8">
-          <div className="text-center">
-            <h1 className="text-2xl font-bold mb-4">Tutor not found</h1>
-            <Button onClick={() => router("/tutors")}>Back to Tutors</Button>
-          </div>
+        <div className="container mx-auto px-4 py-8 text-center">
+          <h1 className="text-2xl font-bold mb-4">Tutor not found</h1>
+          <Button onClick={() => router("/tutors")}>Back to Tutors</Button>
         </div>
       </div>
     )
   }
-
-  const mockReviews = [
-    {
-      id: "1",
-      studentName: "Nour M.",
-      studentAvatar: "/placeholder.svg?height=40&width=40",
-      rating: 5,
-      comment:
-        "Sarah is an amazing tutor! She explained data structures in a way that finally made sense to me. Very patient and always prepared for our sessions.",
-      date: "2 weeks ago",
-      subject: "Computer Science",
-    },
-    {
-      id: "2",
-      studentName: "Ali K.",
-      studentAvatar: "/placeholder.svg?height=40&width=40",
-      rating: 5,
-      comment:
-        "Very patient and knowledgeable. Helped me ace my algorithms exam! Would definitely recommend to anyone struggling with CS concepts.",
-      date: "1 month ago",
-      subject: "Algorithms",
-    },
-    {
-      id: "3",
-      studentName: "Layla H.",
-      studentAvatar: "/placeholder.svg?height=40&width=40",
-      rating: 4,
-      comment:
-        "Great tutor, very helpful with programming concepts. Would recommend! Sessions are well-structured and she provides great resources.",
-      date: "1 month ago",
-      subject: "Programming",
-    },
-    {
-      id: "4",
-      studentName: "Omar S.",
-      studentAvatar: "/placeholder.svg?height=40&width=40",
-      rating: 5,
-      comment:
-        "Best tutor I've had at AUB. Makes complex topics easy to understand and is always willing to go the extra mile.",
-      date: "2 months ago",
-      subject: "Data Structures",
-    },
-  ]
-
-  const mockAvailability = [
-    {
-      day: "Monday",
-      slots: [
-        { start: "10:00 AM", end: "2:00 PM" },
-        { start: "4:00 PM", end: "6:00 PM" },
-      ],
-    },
-    { day: "Tuesday", slots: [{ start: "2:00 PM", end: "6:00 PM" }] },
-    {
-      day: "Wednesday",
-      slots: [
-        { start: "10:00 AM", end: "12:00 PM" },
-        { start: "3:00 PM", end: "7:00 PM" },
-      ],
-    },
-    { day: "Thursday", slots: [{ start: "1:00 PM", end: "5:00 PM" }] },
-    { day: "Friday", slots: [{ start: "9:00 AM", end: "1:00 PM" }] },
-  ]
 
   return (
     <div className="min-h-screen bg-background">
@@ -127,7 +94,6 @@ export default function TutorProfilePage() {
               <CardContent className="p-6">
                 <div className="flex flex-col md:flex-row items-start gap-6 mb-6">
                   <Avatar className="h-32 w-32">
-                    <AvatarImage src={tutor.avatarUrl || "/placeholder.svg"} alt={tutor.fullName} />
                     <AvatarFallback className="text-2xl">{tutor.user.name.charAt(0)}</AvatarFallback>
                   </Avatar>
                   <div className="flex-1">
@@ -140,20 +106,15 @@ export default function TutorProfilePage() {
                     <div className="flex flex-wrap items-center gap-4 text-muted-foreground mb-4">
                       <div className="flex items-center gap-1">
                         <Star className="h-5 w-5 fill-yellow-400 text-yellow-400" />
-                        {/* <span className="font-semibold text-foreground">{tutor.profile.averageRating.toFixed(1)}</span> */}
-                        <span className="text-sm">({mockReviews.length} reviews)</span>
+                        <span className="text-sm">({reviews.length} reviews)</span>
                       </div>
-                      {/* <div className="flex items-center gap-1">
-                        <BookOpen className="h-4 w-4" />
-                        <span className="text-sm">{tutor.profile.totalSessions} sessions completed</span>
-                      </div> */}
                     </div>
                     <div className="flex items-center gap-2 text-2xl font-bold text-primary mb-4">
                       <DollarSign className="h-6 w-6" />
                       <span>{tutor.hourlyRate.toFixed(2)}/hour</span>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {tutor.subjects.map((subject) => (
+                      {tutor.subjects.map((subject: any) => (
                         <Badge key={subject.name} variant="secondary" className="text-sm px-3 py-1">
                           {subject.name}
                         </Badge>
@@ -188,10 +149,7 @@ export default function TutorProfilePage() {
                     Teaching Style
                   </h3>
                   <p className="text-muted-foreground leading-relaxed">
-                    I focus on building strong fundamentals and helping students develop problem-solving skills. Each
-                    session is tailored to your learning pace and style. I use real-world examples and interactive
-                    exercises to make concepts stick. My goal is not just to help you pass exams, but to truly
-                    understand the material.
+                    I focus on building strong fundamentals and helping students develop problem-solving skills.
                   </p>
                 </div>
                 <Separator />
@@ -230,14 +188,12 @@ export default function TutorProfilePage() {
                     Session Locations
                   </h3>
                   <p className="text-muted-foreground">
-                    I offer sessions both on-campus (AUB Library, Jafet, or other study areas) and online via Zoom. We
-                    can discuss the best option for you when booking.
+                    On-campus (AUB) or online via Zoom.
                   </p>
                 </div>
               </CardContent>
             </Card>
-
-            {/* Availability */}
+             {/* Availability */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -267,39 +223,63 @@ export default function TutorProfilePage() {
               </CardContent>
             </Card>
 
-            {/* Reviews */}
+
+            {/* Reviews Section */}
             <Card>
               <CardHeader>
-                <CardTitle>Student Reviews ({mockReviews.length})</CardTitle>
+                <CardTitle>Student Reviews ({reviews.length})</CardTitle>
                 <CardDescription>What students are saying about {tutor.user.name.split(" ")[0]}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                {mockReviews.map((review, index) => (
-                  <div key={review.id}>
+                {/* Add Review Form */}
+                <Card className="mb-6">
+                  <CardContent className="space-y-2">
+                    <textarea
+                      placeholder="Write your review..."
+                      value={newComment}
+                      onChange={(e) => setNewComment(e.target.value)}
+                      className="w-full border p-2 rounded"
+                    />
+                    <select
+                      value={newRating}
+                      onChange={(e) => setNewRating(Number(e.target.value))}
+                      className="w-full border p-2 rounded"
+                    >
+                      {[5, 4, 3, 2, 1].map((r) => (
+                        <option key={r} value={r}>
+                          {r} Star{r > 1 ? "s" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <Button onClick={submitReview} className="w-full mt-2">
+                      Submit Review
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                {/* Reviews List */}
+                {reviews.map((review, index) => (
+                  <div key={review._id}>
                     <div className="flex items-start gap-4">
                       <Avatar className="h-10 w-10">
-                        <AvatarImage src={review.studentAvatar || "/placeholder.svg"} alt={review.studentName} />
-                        <AvatarFallback>{review.studentName.charAt(0)}</AvatarFallback>
+                        <AvatarFallback>{review.student.name.charAt(0)}</AvatarFallback>
                       </Avatar>
                       <div className="flex-1 space-y-2">
                         <div className="flex items-center justify-between">
                           <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold">{review.studentName}</span>
-                              <Badge variant="outline" className="text-xs">
-                                {review.subject}
-                              </Badge>
-                            </div>
+                            <span className="font-semibold">{review.student.name}</span>
                             <div className="flex items-center gap-2 mt-1">
                               <StarRating rating={review.rating} size="sm" />
-                              <span className="text-sm text-muted-foreground">{review.date}</span>
+                              <span className="text-sm text-muted-foreground">
+                                {new Date(review.createdAt).toLocaleDateString()}
+                              </span>
                             </div>
                           </div>
                         </div>
                         <p className="text-muted-foreground leading-relaxed">{review.comment}</p>
                       </div>
                     </div>
-                    {index !== mockReviews.length - 1 && <Separator className="mt-6" />}
+                    {index !== reviews.length - 1 && <Separator className="mt-6" />}
                   </div>
                 ))}
               </CardContent>
@@ -321,14 +301,6 @@ export default function TutorProfilePage() {
                       <span className="font-semibold text-lg">${tutor.hourlyRate.toFixed(2)}</span>
                     </div>
                     <Separator />
-                    {/* <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Sessions</span>
-                      <span className="font-semibold">{tutor.profile.totalSessions}</span>
-                    </div> */}
-                    {/* <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Rating</span>
-                      <span className="font-semibold">{tutor.profile.averageRating.toFixed(1)}/5.0</span>
-                    </div> */}
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Response Time</span>
                       <span className="font-semibold">Within 2 hours</span>
@@ -341,36 +313,10 @@ export default function TutorProfilePage() {
                       Book Session Now
                     </Button>
                   </a>
-{/* 
-                  <MessageDialog tutor={tutor} /> */}
 
                   <p className="text-xs text-muted-foreground text-center">
                     Have questions? Send a message before booking
                   </p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Why Choose {tutor.user.name.split(" ")[0]}?</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex items-start gap-2 text-sm">
-                    <CheckCircle2 className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
-                    <span className="text-muted-foreground">Verified AUB student tutor</span>
-                  </div>
-                  <div className="flex items-start gap-2 text-sm">
-                    <CheckCircle2 className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
-                    <span className="text-muted-foreground">Highly rated by students</span>
-                  </div>
-                  <div className="flex items-start gap-2 text-sm">
-                    <CheckCircle2 className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
-                    <span className="text-muted-foreground">Flexible scheduling options</span>
-                  </div>
-                  <div className="flex items-start gap-2 text-sm">
-                    <CheckCircle2 className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
-                    <span className="text-muted-foreground">Affordable peer tutoring rates</span>
-                  </div>
                 </CardContent>
               </Card>
             </div>

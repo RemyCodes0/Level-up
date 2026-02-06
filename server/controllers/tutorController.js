@@ -1,5 +1,7 @@
 const User = require('../models/User');
 const TutorApplication = require("../models/Tutor");
+const Review = require('../models/Review');
+const Booking = require('../models/Booking');
 
 exports.getProfile = async(req,res)=>{
     try{
@@ -26,13 +28,34 @@ exports.getProfileWithUserId = async(req,res)=>{
 
 exports.getTutors = async (req, res) => {
   try {
-    const tutors = await TutorApplication.find({status: "approved"}).populate("user", "name email")
+    const tutors = await TutorApplication.find({status: "approved"}).populate("user", "name email").lean()
 
     if (tutors.length === 0) {
       return res.status(404).json({ message: "No tutors found" })
     }
+      for (let t of tutors) {
+      const reviews = await Review.find({ tutor: t._id });
+      if (reviews.length > 0) {
+        t.averageRating = reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length;
+      } else {
+        t.averageRating = 0;
+      }
+    }
+ const tutorsWithSessions = await Promise.all(
+  tutors.map(async (tutor) => {
+    const totalSessions = await Booking.countDocuments({
+      tutor: tutor._id,
+      status: { $in: ["pending", "confirmed", "completed"] }
+    });
+    return {
+      ...tutor,
+      totalSessions
+    };
+  })
+);
 
-    return res.status(200).json(tutors)
+res.json(tutorsWithSessions);
+
   } catch (err) {
     console.error(err)
     return res.status(500).json({ message: "Server error" })
@@ -182,3 +205,4 @@ exports.updateAvailability = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
