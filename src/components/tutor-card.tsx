@@ -10,6 +10,7 @@ interface TutorCardProps {
 }
 
 export function TutorCard({ tutor }) {
+  
   return (
     <Card className="overflow-hidden hover:shadow-lg transition-shadow">
       <CardContent className="p-6">
@@ -25,11 +26,11 @@ export function TutorCard({ tutor }) {
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
               <div className="flex items-center">
-                {/* <Star className="h-4 w-4 fill-yellow-400 text-yellow-400 mr-1" /> */}
-                {/* <span className="font-medium">{tutor.profile.averageRating.toFixed(1)}</span> */}
+                <Star className="h-4 w-4 fill-yellow-400 text-yellow-400 mr-1" />
+                <span className="font-medium">{tutor.averageRating.toFixed(1)}</span>
               </div>
-              {/* <span>•</span> */}
-              {/* <span>{tutor.profile.totalSessions} sessions</span> */}
+              <span>•</span>
+              <span>{tutor.totalSessions} sessions</span>
             </div>
             <div className="flex items-center gap-1 text-sm font-semibold text-primary">
               <DollarSign className="h-4 w-4" />
