@@ -2,7 +2,7 @@ const Booking = require("../models/Booking");
 const Tutor = require("../models/Tutor");
 const User = require("../models/User");
 // const { sendTutorBookingEmail } = require("../services/emailService");
-const sendEmail = require("../services/emailService"); // adjust path if needed
+const sendEmail = require("../services/emailService");
 
 exports.getBookingByTutor = async (req, res) => {
   try {

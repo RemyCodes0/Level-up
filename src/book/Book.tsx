@@ -25,7 +25,8 @@ import {
 } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Calendar, Clock, MapPin, DollarSign } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Calendar, Clock, MapPin, DollarSign, CheckCircle2, ArrowLeft, Sparkles, Info } from "lucide-react";
 import axios from "axios";
 
 export default function BookSessionPage() {
@@ -43,6 +44,7 @@ export default function BookSessionPage() {
   const [success, setSuccess] = useState(false);
 
   const token = localStorage.getItem("token");
+  
   useEffect(() => {
     const fetchTutor = async () => {
       try {
@@ -61,25 +63,31 @@ export default function BookSessionPage() {
 
   if (!tutor) {
     return (
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center">
         <Navbar />
         <div className="container mx-auto px-4 py-8">
-          <div className="text-center">
-            <h1 className="text-2xl font-bold mb-4">Tutor not found</h1>
-            <Button onClick={() => router("/tutors")}>Back to Tutors</Button>
-          </div>
+          <Card className="max-w-md mx-auto border-none shadow-lg">
+            <CardContent className="pt-6 text-center">
+              <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
+                <Calendar className="h-8 w-8 text-muted-foreground" />
+              </div>
+              <h1 className="text-2xl font-bold mb-2">Tutor not found</h1>
+              <p className="text-muted-foreground mb-6">We couldn't find the tutor you're looking for.</p>
+              <Button onClick={() => router("/tutors")} className="w-full">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back to Tutors
+              </Button>
+            </CardContent>
+          </Card>
         </div>
       </div>
     );
   }
+
   const totalAmount = (tutor.hourlyRate * Number.parseInt(duration)) / 60;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // if (!user) {
-    //   router("/login")
-    //   return
-    // }
 
     if (!selectedSlot) {
       alert("Please select an available slot.");
@@ -104,14 +112,13 @@ export default function BookSessionPage() {
           },
         },
       );
-      // Simulate booking creation
+      
       setTimeout(() => {
-        setLoading(false); 
+        setLoading(false);
         setSuccess(true);
 
-        // Redirect to bookings page after 2 seconds
         setTimeout(() => {
-          router("/bookings")
+          router("/bookings");
         }, 2000);
       }, 1000);
     } catch (error) {
@@ -122,27 +129,38 @@ export default function BookSessionPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
       <Navbar />
       <div className="container mx-auto px-4 py-8">
         <Button
           variant="ghost"
           onClick={() => router(`/tutors/${id}`)}
-          className="mb-6"
+          className="mb-6 hover:bg-accent group"
         >
-          ← Back to Profile
+          <ArrowLeft className="mr-2 h-4 w-4 group-hover:-translate-x-1 transition-transform" />
+          Back to Profile
         </Button>
 
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-3xl font-bold mb-2">Book a Session</h1>
-          <p className="text-muted-foreground mb-8">
-            Schedule your tutoring session with {tutor.user.name}
-          </p>
+        <div className="max-w-6xl mx-auto">
+          {/* Header Section */}
+          <div className="mb-8">
+            <div className="flex items-center gap-2 mb-3">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <Badge variant="secondary" className="text-xs">New Booking</Badge>
+            </div>
+            <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
+              Book a Session
+            </h1>
+            <p className="text-lg text-muted-foreground">
+              Schedule your tutoring session with {tutor.user.name}
+            </p>
+          </div>
 
           {success && (
-            <Alert className="mb-6 bg-green-50 border-green-200">
-              <AlertDescription className="text-green-800">
-                Session booked successfully! Redirecting to your bookings...
+            <Alert className="mb-6 border-none shadow-lg bg-gradient-to-r from-emerald-500/10 to-emerald-600/5 border-emerald-500/20">
+              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+              <AlertDescription className="text-emerald-800 dark:text-emerald-200 font-medium">
+                🎉 Session booked successfully! Redirecting to your bookings...
               </AlertDescription>
             </Alert>
           )}
@@ -150,30 +168,37 @@ export default function BookSessionPage() {
           <div className="grid lg:grid-cols-3 gap-8">
             {/* Booking Form */}
             <div className="lg:col-span-2">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Session Details</CardTitle>
+              <Card className="border-none shadow-lg">
+                <CardHeader className="border-b bg-gradient-to-r from-primary/5 to-transparent">
+                  <CardTitle className="text-2xl">Session Details</CardTitle>
                   <CardDescription>
                     Fill in the details for your tutoring session
                   </CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="pt-6">
                   <form onSubmit={handleSubmit} className="space-y-6">
                     {/* Subject */}
                     <div className="space-y-2">
-                      <Label htmlFor="subject">Subject *</Label>
+                      <Label htmlFor="subject" className="text-base font-semibold flex items-center gap-2">
+                        Subject <span className="text-destructive">*</span>
+                      </Label>
                       <Select
                         value={subject}
                         onValueChange={setSubject}
                         required
                       >
-                        <SelectTrigger id="subject">
+                        <SelectTrigger id="subject" className="h-12 border-2 hover:border-primary/50 transition-colors">
                           <SelectValue placeholder="Select a subject" />
                         </SelectTrigger>
                         <SelectContent>
                           {tutor.subjects.map((subj: any) => (
-                            <SelectItem key={subj.code} value={subj.name}>
-                              {subj.name}
+                            <SelectItem key={subj.code} value={subj.name} className="cursor-pointer">
+                              <div className="flex items-center justify-between w-full">
+                                <span>{subj.name}</span>
+                                <Badge variant="outline" className="ml-2 text-xs">
+                                  {subj.code}
+                                </Badge>
+                              </div>
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -182,7 +207,9 @@ export default function BookSessionPage() {
 
                     {/* Availability */}
                     <div className="space-y-2">
-                      <Label>Available Slots *</Label>
+                      <Label className="text-base font-semibold flex items-center gap-2">
+                        Available Slots <span className="text-destructive">*</span>
+                      </Label>
                       <Select
                         value={
                           selectedSlot
@@ -190,7 +217,6 @@ export default function BookSessionPage() {
                             : ""
                         }
                         onValueChange={(slotValue) => {
-                          // Find the corresponding slot object using the unique string
                           const slot = tutor.availability.find(
                             (s) => `${s.day}-${s.from}-${s.to}` === slotValue,
                           );
@@ -198,7 +224,7 @@ export default function BookSessionPage() {
                         }}
                         required
                       >
-                        <SelectTrigger>
+                        <SelectTrigger className="h-12 border-2 hover:border-primary/50 transition-colors">
                           <SelectValue placeholder="Choose an available time" />
                         </SelectTrigger>
                         <SelectContent>
@@ -210,8 +236,14 @@ export default function BookSessionPage() {
                           {tutor.availability.map((slot) => {
                             const slotValue = `${slot.day}-${slot.from}-${slot.to}`;
                             return (
-                              <SelectItem key={slotValue} value={slotValue}>
-                                {slot.day} • {slot.from} – {slot.to}
+                              <SelectItem key={slotValue} value={slotValue} className="cursor-pointer">
+                                <div className="flex items-center gap-2">
+                                  <Calendar className="h-4 w-4 text-primary" />
+                                  <span className="font-medium">{slot.day}</span>
+                                  <span className="text-muted-foreground">•</span>
+                                  <Clock className="h-4 w-4 text-primary" />
+                                  <span>{slot.from} – {slot.to}</span>
+                                </div>
                               </SelectItem>
                             );
                           })}
@@ -221,146 +253,192 @@ export default function BookSessionPage() {
 
                     {/* Duration */}
                     <div className="space-y-2">
-                      <Label htmlFor="duration">Duration *</Label>
+                      <Label htmlFor="duration" className="text-base font-semibold flex items-center gap-2">
+                        Duration <span className="text-destructive">*</span>
+                      </Label>
                       <Select
                         value={duration}
                         onValueChange={setDuration}
                         required
                       >
-                        <SelectTrigger id="duration">
+                        <SelectTrigger id="duration" className="h-12 border-2 hover:border-primary/50 transition-colors">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="30">30 minutes</SelectItem>
-                          <SelectItem value="60">1 hour</SelectItem>
-                          <SelectItem value="90">1.5 hours</SelectItem>
-                          <SelectItem value="120">2 hours</SelectItem>
+                          <SelectItem value="30" className="cursor-pointer">
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-4 w-4" />
+                              30 minutes
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="60" className="cursor-pointer">
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-4 w-4" />
+                              1 hour
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="90" className="cursor-pointer">
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-4 w-4" />
+                              1.5 hours
+                            </div>
+                          </SelectItem>
+                          <SelectItem value="120" className="cursor-pointer">
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-4 w-4" />
+                              2 hours
+                            </div>
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
 
-                    {/* Location */}
-                    {/* <div className="space-y-2">
-                      <Label htmlFor="location">Location *</Label>
-                      <Select value={location} onValueChange={setLocation} required>
-                        <SelectTrigger id="location">
-                          <SelectValue placeholder="Select location" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="jafet">Jafet Library</SelectItem>
-                          <SelectItem value="nicely">Nicely Hall</SelectItem>
-                          <SelectItem value="west-hall">West Hall</SelectItem>
-                          <SelectItem value="bliss">Bliss Hall</SelectItem>
-                          <SelectItem value="online">Online (Zoom/Teams)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div> */}
-
                     {/* Notes */}
                     <div className="space-y-2">
-                      <Label htmlFor="notes">Notes (Optional)</Label>
+                      <Label htmlFor="notes" className="text-base font-semibold">
+                        Notes <span className="text-muted-foreground text-sm font-normal">(Optional)</span>
+                      </Label>
                       <Textarea
                         id="notes"
                         placeholder="Any specific topics or questions you'd like to cover?"
                         value={notes}
                         onChange={(e) => setNotes(e.target.value)}
                         rows={4}
+                        className="resize-none border-2 hover:border-primary/50 transition-colors"
                       />
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Info className="h-3 w-3" />
+                        This helps the tutor prepare for your session
+                      </p>
                     </div>
 
                     <Button
                       type="submit"
-                      className="w-full"
+                      className="w-full h-14 text-lg font-semibold bg-gradient-to-r from-primary to-primary/90 hover:opacity-90 transition-all shadow-lg hover:shadow-xl"
                       size="lg"
                       disabled={loading || success}
                     >
-                      {loading
-                        ? "Booking..."
-                        : success
-                          ? "Booked!"
-                          : "Confirm Booking"}
+                      {loading ? (
+                        <>
+                          <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent mr-2" />
+                          Booking Session...
+                        </>
+                      ) : success ? (
+                        <>
+                          <CheckCircle2 className="mr-2 h-5 w-5" />
+                          Booked Successfully!
+                        </>
+                      ) : (
+                        <>
+                          <Calendar className="mr-2 h-5 w-5" />
+                          Confirm Booking
+                        </>
+                      )}
                     </Button>
                   </form>
                 </CardContent>
               </Card>
             </div>
 
-            {/* Booking Summary */}
+            {/* Booking Summary - Sticky */}
             <div className="lg:col-span-1">
-              <div className="sticky top-20">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Booking Summary</CardTitle>
+              <div className="sticky top-24">
+                <Card className="border-none shadow-xl bg-gradient-to-br from-card via-card to-primary/5">
+                  <CardHeader className="border-b bg-gradient-to-r from-primary/10 to-transparent">
+                    <CardTitle className="text-xl">Booking Summary</CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-6">
-                    <div className="flex items-center gap-3">
-                      <Avatar className="h-12 w-12">
+                  <CardContent className="space-y-6 pt-6">
+                    {/* Tutor Info */}
+                    <div className="flex items-center gap-4 p-4 rounded-xl bg-accent/50 border border-border/50">
+                      <Avatar className="h-14 w-14 ring-2 ring-primary/20">
                         <AvatarImage
                           src={tutor.avatarUrl || "/placeholder.svg"}
                           alt={tutor.user.name}
                         />
-                        <AvatarFallback>
+                        <AvatarFallback className="bg-gradient-to-br from-primary to-primary/80 text-white text-lg">
                           {tutor.user.name.charAt(0)}
                         </AvatarFallback>
                       </Avatar>
-                      <div>
-                        <p className="font-semibold">{tutor.user.name}</p>
-                        <p className="text-sm text-muted-foreground">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-base truncate">{tutor.user.name}</p>
+                        <p className="text-sm text-muted-foreground truncate">
                           {subject || "No subject selected"}
                         </p>
                       </div>
                     </div>
 
-                    <div className="space-y-3 text-sm">
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <Calendar className="h-4 w-4" />
-                        <span>
-                          {selectedSlot ? selectedSlot.day : "No slot selected"}
-                        </span>
+                    {/* Session Details */}
+                    <div className="space-y-4">
+                      <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+                        <div className="h-9 w-9 rounded-lg bg-blue-500/10 flex items-center justify-center flex-shrink-0">
+                          <Calendar className="h-5 w-5 text-blue-600" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">Date</p>
+                          <p className="text-sm font-semibold truncate">
+                            {selectedSlot ? selectedSlot.day : "No slot selected"}
+                          </p>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <Clock className="h-4 w-4" />
-                        <span>
-                          {selectedSlot
-                            ? `${selectedSlot.from} – ${selectedSlot.to}`
-                            : "No time selected"}{" "}
-                          ({duration} minutes)
-                        </span>
+
+                      <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+                        <div className="h-9 w-9 rounded-lg bg-violet-500/10 flex items-center justify-center flex-shrink-0">
+                          <Clock className="h-5 w-5 text-violet-600" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-muted-foreground mb-1">Time & Duration</p>
+                          <p className="text-sm font-semibold">
+                            {selectedSlot
+                              ? `${selectedSlot.from} – ${selectedSlot.to}`
+                              : "No time selected"}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {duration} minutes session
+                          </p>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <MapPin className="h-4 w-4" />
-                        <span>{location || "No location selected"}</span>
-                      </div>
+
+                      {location && (
+                        <div className="flex items-start gap-3 p-3 rounded-lg hover:bg-accent/50 transition-colors">
+                          <div className="h-9 w-9 rounded-lg bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
+                            <MapPin className="h-5 w-5 text-emerald-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-muted-foreground mb-1">Location</p>
+                            <p className="text-sm font-semibold truncate">{location}</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
-                    <div className="border-t pt-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-muted-foreground">
-                          Hourly Rate
-                        </span>
-                        <span className="text-sm">
+                    {/* Pricing Breakdown */}
+                    <div className="border-t pt-4 space-y-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">Hourly Rate</span>
+                        <span className="font-medium">
                           ${tutor.hourlyRate.toFixed(2)}/hour
                         </span>
                       </div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-muted-foreground">
-                          Duration
-                        </span>
-                        <span className="text-sm">{duration} minutes</span>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">Duration</span>
+                        <span className="font-medium">{duration} minutes</span>
                       </div>
-                      <div className="flex items-center justify-between pt-2 border-t">
-                        <span className="font-semibold">Total</span>
-                        <span className="text-xl font-bold text-primary">
-                          ${totalAmount.toFixed(2)}
-                        </span>
+                      <div className="flex items-center justify-between pt-3 border-t">
+                        <span className="font-semibold text-base">Total Amount</span>
+                        <div className="text-right">
+                          <div className="text-2xl font-bold text-primary">
+                            ${totalAmount.toFixed(2)}
+                          </div>
+                          <p className="text-xs text-muted-foreground">USD</p>
+                        </div>
                       </div>
                     </div>
 
-                    <Alert>
-                      <DollarSign className="h-4 w-4" />
-                      <AlertDescription className="text-xs">
-                        Payment will be arranged directly with the tutor after
-                        the session is confirmed.
+                    {/* Payment Notice */}
+                    <Alert className="border-amber-500/20 bg-amber-500/5">
+                      <DollarSign className="h-4 w-4 text-amber-600" />
+                      <AlertDescription className="text-xs text-amber-800 dark:text-amber-200">
+                        Payment will be arranged directly with the tutor after the session is confirmed.
                       </AlertDescription>
                     </Alert>
                   </CardContent>

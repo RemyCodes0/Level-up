@@ -1,7 +1,5 @@
 "use client"
 
-import type React from "react"
-
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "@/lib/auth-context"
@@ -12,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { motion } from "framer-motion"
 
 export default function ProfilePage() {
   const { loading } = useAuth()
@@ -21,32 +20,30 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
 
+  const stored = localStorage.getItem("user")
+  const user = stored ? JSON.parse(stored) : null
 
-
-  const user = JSON.parse(localStorage.getItem("user"))
   useEffect(() => {
-    if (!loading && !user) {
-      router("/login")
-    }
+    if (!loading && !user) router("/login")
     if (user) {
       setFullName(user.fullName)
       setEmail(user.email)
     }
-  }, [user, loading, router])
+  }, [loading, user, router])
 
-  if (loading) {
-    return <div>Loading...</div>
-  }
+  if (loading)
+    return (
+      <div className="min-h-screen flex items-center justify-center text-lg font-semibold animate-pulse">
+        Loading profile...
+      </div>
+    )
 
-  if (!user) {
-    return null
-  }
+  if (!user) return null
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e) => {
     e.preventDefault()
     setSaving(true)
 
-    // Simulate save
     setTimeout(() => {
       setSaving(false)
       setSuccess(true)
@@ -55,32 +52,45 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
       <Navbar />
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-2xl mx-auto">
-          <h1 className="text-3xl font-bold mb-2">Profile Settings</h1>
-          <p className="text-muted-foreground mb-8">Manage your account information</p>
 
-          {success && (
-            <Alert className="mb-6 bg-green-50 border-green-200">
-              <AlertDescription className="text-green-800">Profile updated successfully!</AlertDescription>
-            </Alert>
-          )}
+      <div className="container mx-auto px-4 py-10 max-w-2xl">
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="mb-8"
+        >
+          <h1 className="text-4xl font-extrabold tracking-tight mb-2">Profile Settings</h1>
+          <p className="text-muted-foreground text-lg">Manage and update your personal information.</p>
+        </motion.div>
 
-          <Card>
+        {success && (
+          <Alert className="mb-6 bg-green-50 border-green-200">
+            <AlertDescription className="text-green-800">Profile updated successfully!</AlertDescription>
+          </Alert>
+        )}
+
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+        >
+          <Card className="rounded-2xl backdrop-blur bg-card/40 shadow-sm">
             <CardHeader>
-              <CardTitle>Personal Information</CardTitle>
-              <CardDescription>Update your profile details</CardDescription>
+              <CardTitle className="text-xl font-bold">Personal Information</CardTitle>
+              <CardDescription>Update your account details</CardDescription>
             </CardHeader>
+
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="flex items-center gap-6">
-                  <Avatar className="h-20 w-20">
+                  <Avatar className="h-20 w-20 shadow">
                     <AvatarImage src={user.avatarUrl || "/placeholder.svg"} alt={user.fullName} />
-                    <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
+                    <AvatarFallback>{user.fullName?.charAt(0)}</AvatarFallback>
                   </Avatar>
-                  <Button type="button" variant="outline" className="bg-transparent">
+                  <Button type="button" variant="secondary" className="rounded-xl">
                     Change Photo
                   </Button>
                 </div>
@@ -92,28 +102,39 @@ export default function ProfilePage() {
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     placeholder="Your full name"
+                    className="rounded-xl"
                   />
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="email">Email</Label>
-                  <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+                  <Input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="rounded-xl"
+                  />
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-2 text-sm">
                   <Label>Account Type</Label>
-                  <div className="text-sm text-muted-foreground">
-                    {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
+                  <div className="text-muted-foreground capitalize">
+                    {user.role}
                   </div>
                 </div>
 
-                <Button type="submit" disabled={saving}>
+                <Button
+                  type="submit"
+                  disabled={saving}
+                  className="w-full rounded-xl text-md py-6 font-semibold"
+                >
                   {saving ? "Saving..." : "Save Changes"}
                 </Button>
               </form>
             </CardContent>
           </Card>
-        </div>
+        </motion.div>
       </div>
     </div>
   )
