@@ -206,3 +206,29 @@ exports.updateAvailability = async (req, res) => {
   }
 };
 
+exports.rejectApplications =  async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const application = await TutorApplication.findById(id);
+    
+    if (!application) {
+      return res.status(404).json({ message: 'Application not found' });
+    }
+    
+    application.status = 'rejected';
+    application.reviewedAt = new Date();
+    application.reviewedBy = req.user._id;
+    
+    await application.save();
+    
+    res.json({
+      message: 'Application rejected',
+      application
+    });
+  } catch (error) {
+    console.error('Error rejecting application:', error);
+    res.status(500).json({ message: 'Error rejecting application' });
+  }
+}
+
