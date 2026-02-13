@@ -39,19 +39,19 @@ export default function AdminAnalyticsPage() {
       try {
         // Fetch sessions
         const sessionsRes = await axios.get(
-          "http://localhost:5000/api/admin/sessions",
+          `${import.meta.env.VITE_API_URL}/api/admin/sessions`,
           {
             headers: { Authorization: `Bearer ${token}` },
-          }
+          },
         );
         setAllSessions(sessionsRes.data);
 
         // Fetch users
         const usersRes = await axios.get(
-          "http://localhost:5000/api/admin/users",
+          `${import.meta.env.VITE_API_URL}/api/admin/users`,
           {
             headers: { Authorization: `Bearer ${token}` },
-          }
+          },
         );
         setAllUsers(usersRes.data);
       } catch (err) {
@@ -73,7 +73,7 @@ export default function AdminAnalyticsPage() {
 
   const totalSessions = allSessions.length;
   const completedSessions = allSessions.filter(
-    (s) => s.status === "completed"
+    (s) => s.status === "completed",
   ).length;
   const completionRate =
     totalSessions > 0 ? (completedSessions / totalSessions) * 100 : 0;
@@ -208,9 +208,7 @@ export default function AdminAnalyticsPage() {
           <div className="flex items-center justify-center h-96">
             <div className="flex flex-col items-center gap-4">
               <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-              <p className="text-gray-600 font-medium">
-                Loading analytics...
-              </p>
+              <p className="text-gray-600 font-medium">Loading analytics...</p>
             </div>
           </div>
         </div>

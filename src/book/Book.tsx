@@ -26,7 +26,16 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, MapPin, DollarSign, CheckCircle2, ArrowLeft, Sparkles, Info } from "lucide-react";
+import {
+  Calendar,
+  Clock,
+  MapPin,
+  DollarSign,
+  CheckCircle2,
+  ArrowLeft,
+  Sparkles,
+  Info,
+} from "lucide-react";
 import axios from "axios";
 
 export default function BookSessionPage() {
@@ -44,12 +53,12 @@ export default function BookSessionPage() {
   const [success, setSuccess] = useState(false);
 
   const token = localStorage.getItem("token");
-  
+
   useEffect(() => {
     const fetchTutor = async () => {
       try {
         const res = await axios.get(
-          `http://localhost:5000/api/tutor/${id}/getTutor`,
+          `${import.meta.env.VITE_API_URL}/api/tutor/${id}/getTutor`,
         );
         setTutor(res.data.tutor);
         setSelectedSlot(res.data.tutor.availability[0] || null);
@@ -72,7 +81,9 @@ export default function BookSessionPage() {
                 <Calendar className="h-8 w-8 text-muted-foreground" />
               </div>
               <h1 className="text-2xl font-bold mb-2">Tutor not found</h1>
-              <p className="text-muted-foreground mb-6">We couldn't find the tutor you're looking for.</p>
+              <p className="text-muted-foreground mb-6">
+                We couldn't find the tutor you're looking for.
+              </p>
               <Button onClick={() => router("/tutors")} className="w-full">
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back to Tutors
@@ -98,7 +109,7 @@ export default function BookSessionPage() {
     console.log(selectedSlot);
     try {
       const res = await axios.post(
-        `http://localhost:5000/api/book/${id}`,
+        `${import.meta.env.VITE_API_URL}/api/book/${id}`,
         {
           slot: selectedSlot,
           subject,
@@ -112,7 +123,7 @@ export default function BookSessionPage() {
           },
         },
       );
-      
+
       setTimeout(() => {
         setLoading(false);
         setSuccess(true);
@@ -146,7 +157,9 @@ export default function BookSessionPage() {
           <div className="mb-8">
             <div className="flex items-center gap-2 mb-3">
               <Sparkles className="h-5 w-5 text-primary" />
-              <Badge variant="secondary" className="text-xs">New Booking</Badge>
+              <Badge variant="secondary" className="text-xs">
+                New Booking
+              </Badge>
             </div>
             <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
               Book a Session
@@ -179,7 +192,10 @@ export default function BookSessionPage() {
                   <form onSubmit={handleSubmit} className="space-y-6">
                     {/* Subject */}
                     <div className="space-y-2">
-                      <Label htmlFor="subject" className="text-base font-semibold flex items-center gap-2">
+                      <Label
+                        htmlFor="subject"
+                        className="text-base font-semibold flex items-center gap-2"
+                      >
                         Subject <span className="text-destructive">*</span>
                       </Label>
                       <Select
@@ -187,15 +203,25 @@ export default function BookSessionPage() {
                         onValueChange={setSubject}
                         required
                       >
-                        <SelectTrigger id="subject" className="h-12 border-2 hover:border-primary/50 transition-colors">
+                        <SelectTrigger
+                          id="subject"
+                          className="h-12 border-2 hover:border-primary/50 transition-colors"
+                        >
                           <SelectValue placeholder="Select a subject" />
                         </SelectTrigger>
                         <SelectContent>
                           {tutor.subjects.map((subj: any) => (
-                            <SelectItem key={subj.code} value={subj.name} className="cursor-pointer">
+                            <SelectItem
+                              key={subj.code}
+                              value={subj.name}
+                              className="cursor-pointer"
+                            >
                               <div className="flex items-center justify-between w-full">
                                 <span>{subj.name}</span>
-                                <Badge variant="outline" className="ml-2 text-xs">
+                                <Badge
+                                  variant="outline"
+                                  className="ml-2 text-xs"
+                                >
                                   {subj.code}
                                 </Badge>
                               </div>
@@ -208,7 +234,8 @@ export default function BookSessionPage() {
                     {/* Availability */}
                     <div className="space-y-2">
                       <Label className="text-base font-semibold flex items-center gap-2">
-                        Available Slots <span className="text-destructive">*</span>
+                        Available Slots{" "}
+                        <span className="text-destructive">*</span>
                       </Label>
                       <Select
                         value={
@@ -236,13 +263,23 @@ export default function BookSessionPage() {
                           {tutor.availability.map((slot) => {
                             const slotValue = `${slot.day}-${slot.from}-${slot.to}`;
                             return (
-                              <SelectItem key={slotValue} value={slotValue} className="cursor-pointer">
+                              <SelectItem
+                                key={slotValue}
+                                value={slotValue}
+                                className="cursor-pointer"
+                              >
                                 <div className="flex items-center gap-2">
                                   <Calendar className="h-4 w-4 text-primary" />
-                                  <span className="font-medium">{slot.day}</span>
-                                  <span className="text-muted-foreground">•</span>
+                                  <span className="font-medium">
+                                    {slot.day}
+                                  </span>
+                                  <span className="text-muted-foreground">
+                                    •
+                                  </span>
                                   <Clock className="h-4 w-4 text-primary" />
-                                  <span>{slot.from} – {slot.to}</span>
+                                  <span>
+                                    {slot.from} – {slot.to}
+                                  </span>
                                 </div>
                               </SelectItem>
                             );
@@ -253,7 +290,10 @@ export default function BookSessionPage() {
 
                     {/* Duration */}
                     <div className="space-y-2">
-                      <Label htmlFor="duration" className="text-base font-semibold flex items-center gap-2">
+                      <Label
+                        htmlFor="duration"
+                        className="text-base font-semibold flex items-center gap-2"
+                      >
                         Duration <span className="text-destructive">*</span>
                       </Label>
                       <Select
@@ -261,7 +301,10 @@ export default function BookSessionPage() {
                         onValueChange={setDuration}
                         required
                       >
-                        <SelectTrigger id="duration" className="h-12 border-2 hover:border-primary/50 transition-colors">
+                        <SelectTrigger
+                          id="duration"
+                          className="h-12 border-2 hover:border-primary/50 transition-colors"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -273,8 +316,7 @@ export default function BookSessionPage() {
                           </SelectItem>
                           <SelectItem value="60" className="cursor-pointer">
                             <div className="flex items-center gap-2">
-                              <Clock className="h-4 w-4" />
-                              1 hour
+                              <Clock className="h-4 w-4" />1 hour
                             </div>
                           </SelectItem>
                           <SelectItem value="90" className="cursor-pointer">
@@ -285,8 +327,7 @@ export default function BookSessionPage() {
                           </SelectItem>
                           <SelectItem value="120" className="cursor-pointer">
                             <div className="flex items-center gap-2">
-                              <Clock className="h-4 w-4" />
-                              2 hours
+                              <Clock className="h-4 w-4" />2 hours
                             </div>
                           </SelectItem>
                         </SelectContent>
@@ -295,8 +336,14 @@ export default function BookSessionPage() {
 
                     {/* Notes */}
                     <div className="space-y-2">
-                      <Label htmlFor="notes" className="text-base font-semibold">
-                        Notes <span className="text-muted-foreground text-sm font-normal">(Optional)</span>
+                      <Label
+                        htmlFor="notes"
+                        className="text-base font-semibold"
+                      >
+                        Notes{" "}
+                        <span className="text-muted-foreground text-sm font-normal">
+                          (Optional)
+                        </span>
                       </Label>
                       <Textarea
                         id="notes"
@@ -360,7 +407,9 @@ export default function BookSessionPage() {
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-base truncate">{tutor.user.name}</p>
+                        <p className="font-semibold text-base truncate">
+                          {tutor.user.name}
+                        </p>
                         <p className="text-sm text-muted-foreground truncate">
                           {subject || "No subject selected"}
                         </p>
@@ -374,9 +423,13 @@ export default function BookSessionPage() {
                           <Calendar className="h-5 w-5 text-blue-600" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-muted-foreground mb-1">Date</p>
+                          <p className="text-xs font-medium text-muted-foreground mb-1">
+                            Date
+                          </p>
                           <p className="text-sm font-semibold truncate">
-                            {selectedSlot ? selectedSlot.day : "No slot selected"}
+                            {selectedSlot
+                              ? selectedSlot.day
+                              : "No slot selected"}
                           </p>
                         </div>
                       </div>
@@ -386,7 +439,9 @@ export default function BookSessionPage() {
                           <Clock className="h-5 w-5 text-violet-600" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-muted-foreground mb-1">Time & Duration</p>
+                          <p className="text-xs font-medium text-muted-foreground mb-1">
+                            Time & Duration
+                          </p>
                           <p className="text-sm font-semibold">
                             {selectedSlot
                               ? `${selectedSlot.from} – ${selectedSlot.to}`
@@ -404,8 +459,12 @@ export default function BookSessionPage() {
                             <MapPin className="h-5 w-5 text-emerald-600" />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium text-muted-foreground mb-1">Location</p>
-                            <p className="text-sm font-semibold truncate">{location}</p>
+                            <p className="text-xs font-medium text-muted-foreground mb-1">
+                              Location
+                            </p>
+                            <p className="text-sm font-semibold truncate">
+                              {location}
+                            </p>
                           </div>
                         </div>
                       )}
@@ -414,7 +473,9 @@ export default function BookSessionPage() {
                     {/* Pricing Breakdown */}
                     <div className="border-t pt-4 space-y-3">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Hourly Rate</span>
+                        <span className="text-muted-foreground">
+                          Hourly Rate
+                        </span>
                         <span className="font-medium">
                           ${tutor.hourlyRate.toFixed(2)}/hour
                         </span>
@@ -424,7 +485,9 @@ export default function BookSessionPage() {
                         <span className="font-medium">{duration} minutes</span>
                       </div>
                       <div className="flex items-center justify-between pt-3 border-t">
-                        <span className="font-semibold text-base">Total Amount</span>
+                        <span className="font-semibold text-base">
+                          Total Amount
+                        </span>
                         <div className="text-right">
                           <div className="text-2xl font-bold text-primary">
                             ${totalAmount.toFixed(2)}
@@ -438,7 +501,8 @@ export default function BookSessionPage() {
                     <Alert className="border-amber-500/20 bg-amber-500/5">
                       <DollarSign className="h-4 w-4 text-amber-600" />
                       <AlertDescription className="text-xs text-amber-800 dark:text-amber-200">
-                        Payment will be arranged directly with the tutor after the session is confirmed.
+                        Payment will be arranged directly with the tutor after
+                        the session is confirmed.
                       </AlertDescription>
                     </Alert>
                   </CardContent>

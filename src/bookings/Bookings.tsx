@@ -18,7 +18,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ReviewDialog } from "@/components/review-dialog";
 import { MOCK_TUTORS } from "@/lib/mock-data";
-import { Calendar, Clock, MapPin, Star, Sparkles, AlertCircle, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import {
+  Calendar,
+  Clock,
+  MapPin,
+  Star,
+  Sparkles,
+  AlertCircle,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+} from "lucide-react";
 import axios from "axios";
 
 interface MockSession {
@@ -39,7 +49,9 @@ export default function BookingsPage() {
   const router = useNavigate();
   const [activeTab, setActiveTab] = useState("upcoming");
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
-  const [selectedSession, setSelectedSession] = useState<MockSession | null>(null);
+  const [selectedSession, setSelectedSession] = useState<MockSession | null>(
+    null,
+  );
   const [mockSessions, setMocksessions] = useState();
   const [tutors, setTutors] = useState();
   const [loadingBookings, setLoadingBookings] = useState(true);
@@ -52,7 +64,7 @@ export default function BookingsPage() {
     const fetchBookings = async () => {
       setLoadingBookings(true);
       try {
-        const res = await axios.get(`http://localhost:5000/api/book/student`, {
+        const res = await axios.get(`${import.meta.env.VITE_API_URL}/api/book/student`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -74,7 +86,7 @@ export default function BookingsPage() {
       setLoadingTutors(true);
       try {
         const res = await axios.get(
-          "http://localhost:5000/api/tutor/allTutors",
+          `${import.meta.env.VITE_API_URL}/api/tutor/allTutors`,
         );
         setTutors(res.data);
       } catch (error) {
@@ -97,7 +109,9 @@ export default function BookingsPage() {
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-primary/5">
         <div className="flex flex-col items-center gap-4">
           <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-          <p className="text-sm text-muted-foreground">Loading your bookings...</p>
+          <p className="text-sm text-muted-foreground">
+            Loading your bookings...
+          </p>
         </div>
       </div>
     );
@@ -132,7 +146,7 @@ export default function BookingsPage() {
       <CardContent className="p-6">
         <div className="flex items-start gap-4">
           <Skeleton className="h-14 w-14 rounded-full flex-shrink-0" />
-          
+
           <div className="flex-1 min-w-0 space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1 space-y-2">
@@ -144,7 +158,10 @@ export default function BookingsPage() {
 
             <div className="grid sm:grid-cols-2 gap-3">
               {[...Array(4)].map((_, i) => (
-                <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-accent/50">
+                <div
+                  key={i}
+                  className="flex items-center gap-2 p-2 rounded-lg bg-accent/50"
+                >
                   <Skeleton className="h-8 w-8 rounded-lg flex-shrink-0" />
                   <div className="min-w-0 flex-1 space-y-1">
                     <Skeleton className="h-3 w-16" />
@@ -166,7 +183,7 @@ export default function BookingsPage() {
 
   const SessionCard = ({ session }) => {
     const tutor = tutors?.find((t) => t.id === session.tutorId);
-    
+
     if (loadingTutors) {
       return <SessionCardSkeleton />;
     }
@@ -183,7 +200,7 @@ export default function BookingsPage() {
             icon: CheckCircle2,
             color: "text-emerald-600",
             bgColor: "bg-emerald-500/10",
-            label: "Confirmed"
+            label: "Confirmed",
           };
         case "pending":
           return {
@@ -191,7 +208,7 @@ export default function BookingsPage() {
             icon: Clock,
             color: "text-amber-600",
             bgColor: "bg-amber-500/10",
-            label: "Pending"
+            label: "Pending",
           };
         case "completed":
           return {
@@ -199,7 +216,7 @@ export default function BookingsPage() {
             icon: CheckCircle2,
             color: "text-blue-600",
             bgColor: "bg-blue-500/10",
-            label: "Completed"
+            label: "Completed",
           };
         case "cancelled":
           return {
@@ -207,7 +224,7 @@ export default function BookingsPage() {
             icon: XCircle,
             color: "text-red-600",
             bgColor: "bg-red-500/10",
-            label: "Cancelled"
+            label: "Cancelled",
           };
         default:
           return {
@@ -215,7 +232,7 @@ export default function BookingsPage() {
             icon: AlertCircle,
             color: "text-gray-600",
             bgColor: "bg-gray-500/10",
-            label: status
+            label: status,
           };
       }
     };
@@ -225,7 +242,9 @@ export default function BookingsPage() {
 
     return (
       <Card className="border-none shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1 overflow-hidden">
-        <div className={`h-1 ${session.status === 'confirmed' ? 'bg-gradient-to-r from-emerald-500 to-emerald-600' : session.status === 'pending' ? 'bg-gradient-to-r from-amber-500 to-amber-600' : 'bg-gradient-to-r from-blue-500 to-blue-600'}`} />
+        <div
+          className={`h-1 ${session.status === "confirmed" ? "bg-gradient-to-r from-emerald-500 to-emerald-600" : session.status === "pending" ? "bg-gradient-to-r from-amber-500 to-amber-600" : "bg-gradient-to-r from-blue-500 to-blue-600"}`}
+        />
         <CardContent className="p-6">
           <div className="flex items-start gap-4">
             <Avatar className="h-14 w-14 ring-2 ring-primary/20 flex-shrink-0">
@@ -237,7 +256,7 @@ export default function BookingsPage() {
                 {tutor.user.name.charAt(0)}
               </AvatarFallback>
             </Avatar>
-            
+
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between mb-3 gap-3">
                 <div className="min-w-0 flex-1">
@@ -248,7 +267,7 @@ export default function BookingsPage() {
                     {session.subject}
                   </p>
                 </div>
-                <Badge 
+                <Badge
                   variant={statusConfig.variant}
                   className={`${statusConfig.bgColor} ${statusConfig.color} border-none flex items-center gap-1 px-3 py-1 whitespace-nowrap`}
                 >
@@ -263,7 +282,9 @@ export default function BookingsPage() {
                     <Calendar className="h-4 w-4 text-blue-600" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs text-muted-foreground font-medium">Date & Time</p>
+                    <p className="text-xs text-muted-foreground font-medium">
+                      Date & Time
+                    </p>
                     <p className="text-sm font-semibold truncate">
                       {session.slot.day}: {session.slot.from}-{session.slot.to}
                     </p>
@@ -275,8 +296,12 @@ export default function BookingsPage() {
                     <Clock className="h-4 w-4 text-violet-600" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs text-muted-foreground font-medium">Duration</p>
-                    <p className="text-sm font-semibold">{session.duration} minutes</p>
+                    <p className="text-xs text-muted-foreground font-medium">
+                      Duration
+                    </p>
+                    <p className="text-sm font-semibold">
+                      {session.duration} minutes
+                    </p>
                   </div>
                 </div>
 
@@ -285,8 +310,12 @@ export default function BookingsPage() {
                     <MapPin className="h-4 w-4 text-emerald-600" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs text-muted-foreground font-medium">Location</p>
-                    <p className="text-sm font-semibold truncate">{session.location || "TBD"}</p>
+                    <p className="text-xs text-muted-foreground font-medium">
+                      Location
+                    </p>
+                    <p className="text-sm font-semibold truncate">
+                      {session.location || "TBD"}
+                    </p>
                   </div>
                 </div>
 
@@ -295,15 +324,21 @@ export default function BookingsPage() {
                     <span className="text-sm font-bold text-primary">$</span>
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs text-muted-foreground font-medium">Total Amount</p>
-                    <p className="text-sm font-bold text-primary">${session.totalAmount.toFixed(2)}</p>
+                    <p className="text-xs text-muted-foreground font-medium">
+                      Total Amount
+                    </p>
+                    <p className="text-sm font-bold text-primary">
+                      ${session.totalAmount.toFixed(2)}
+                    </p>
                   </div>
                 </div>
               </div>
 
               {session.notes && (
                 <div className="mb-4 p-3 rounded-lg bg-blue-500/5 border border-blue-500/10">
-                  <p className="text-xs font-medium text-blue-600 mb-1">Session Notes</p>
+                  <p className="text-xs font-medium text-blue-600 mb-1">
+                    Session Notes
+                  </p>
                   <p className="text-sm text-muted-foreground italic">
                     {session.notes}
                   </p>
@@ -370,7 +405,9 @@ export default function BookingsPage() {
         <div className="mb-10">
           <div className="flex items-center gap-2 mb-3">
             <Sparkles className="h-5 w-5 text-primary" />
-            <Badge variant="secondary" className="text-xs">Sessions</Badge>
+            <Badge variant="secondary" className="text-xs">
+              Sessions
+            </Badge>
           </div>
           <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
             My Bookings
@@ -380,17 +417,22 @@ export default function BookingsPage() {
           </p>
         </div>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <Tabs
+          value={activeTab}
+          onValueChange={setActiveTab}
+          className="space-y-6"
+        >
           <TabsList className="grid w-full max-w-md grid-cols-2 h-12 bg-accent/50 p-1">
-            <TabsTrigger 
-              value="upcoming" 
+            <TabsTrigger
+              value="upcoming"
               className="data-[state=active]:bg-background data-[state=active]:shadow-lg transition-all text-sm font-semibold"
               disabled={loadingBookings}
             >
               <Calendar className="mr-2 h-4 w-4" />
-              Upcoming {!loadingBookings && `(${upcomingSessions?.length || 0})`}
+              Upcoming{" "}
+              {!loadingBookings && `(${upcomingSessions?.length || 0})`}
             </TabsTrigger>
-            <TabsTrigger 
+            <TabsTrigger
               value="past"
               className="data-[state=active]:bg-background data-[state=active]:shadow-lg transition-all text-sm font-semibold"
               disabled={loadingBookings}
@@ -417,12 +459,19 @@ export default function BookingsPage() {
                   <div className="h-20 w-20 rounded-full bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center mx-auto mb-6">
                     <Calendar className="h-10 w-10 text-primary" />
                   </div>
-                  <CardTitle className="text-2xl mb-3">No upcoming sessions</CardTitle>
+                  <CardTitle className="text-2xl mb-3">
+                    No upcoming sessions
+                  </CardTitle>
                   <CardDescription className="text-base mb-6 max-w-md mx-auto">
-                    You don't have any scheduled tutoring sessions yet. Start your learning journey by booking a session with one of our expert tutors.
+                    You don't have any scheduled tutoring sessions yet. Start
+                    your learning journey by booking a session with one of our
+                    expert tutors.
                   </CardDescription>
                   <a href="/tutors">
-                    <Button size="lg" className="bg-gradient-to-r from-primary to-primary/90 shadow-lg hover:shadow-xl">
+                    <Button
+                      size="lg"
+                      className="bg-gradient-to-r from-primary to-primary/90 shadow-lg hover:shadow-xl"
+                    >
                       <Sparkles className="mr-2 h-4 w-4" />
                       Find a Tutor
                     </Button>
@@ -448,9 +497,12 @@ export default function BookingsPage() {
                   <div className="h-20 w-20 rounded-full bg-gradient-to-br from-blue-500/10 to-blue-600/5 flex items-center justify-center mx-auto mb-6">
                     <CheckCircle2 className="h-10 w-10 text-blue-600" />
                   </div>
-                  <CardTitle className="text-2xl mb-3">No past sessions</CardTitle>
+                  <CardTitle className="text-2xl mb-3">
+                    No past sessions
+                  </CardTitle>
                   <CardDescription className="text-base max-w-md mx-auto">
-                    Your completed tutoring sessions will appear here once you finish them.
+                    Your completed tutoring sessions will appear here once you
+                    finish them.
                   </CardDescription>
                 </CardContent>
               </Card>

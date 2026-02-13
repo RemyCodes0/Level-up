@@ -8,13 +8,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { 
-  Calendar, 
-  Clock, 
-  MapPin, 
-  User, 
-  ArrowLeft, 
-  Check, 
+import {
+  Calendar,
+  Clock,
+  MapPin,
+  User,
+  ArrowLeft,
+  Check,
   X,
   DollarSign,
   Filter,
@@ -22,7 +22,7 @@ import {
   CalendarDays,
   CheckCircle2,
   XCircle,
-  AlertCircle
+  AlertCircle,
 } from "lucide-react";
 import axios from "axios";
 
@@ -30,7 +30,7 @@ export default function TutorSessionsPage() {
   const router = useNavigate();
   const user = JSON.parse(localStorage.getItem("user"));
   const token = localStorage.getItem("token");
-  
+
   const [sessions, setSessions] = useState([]);
   const [upcomingSessions, setUpcomingSessions] = useState([]);
   const [pastSessions, setPastSessions] = useState([]);
@@ -40,7 +40,7 @@ export default function TutorSessionsPage() {
   const fetchBookings = async () => {
     setIsLoading(true);
     try {
-      const res = await axios.get("http://localhost:5000/api/book/tutor", {
+      const res = await axios.get(`${import.meta.env.VITE_API_URL}/api/book/tutor`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -65,9 +65,9 @@ export default function TutorSessionsPage() {
     setActionLoading(id);
     try {
       await axios.put(
-        `http://localhost:5000/api/book/accept/${id}`,
+        `${import.meta.env.VITE_API_URL}/api/book/accept/${id}`,
         {},
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: { Authorization: `Bearer ${token}` } },
       );
       await fetchBookings();
     } catch (error) {
@@ -81,9 +81,9 @@ export default function TutorSessionsPage() {
     setActionLoading(id);
     try {
       await axios.put(
-        `http://localhost:5000/api/book/decline/${id}`,
+        `${import.meta.env.VITE_API_URL}/api/book/decline/${id}`,
         {},
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: { Authorization: `Bearer ${token}` } },
       );
       await fetchBookings();
     } catch (error) {
@@ -124,27 +124,30 @@ export default function TutorSessionsPage() {
     const configs = {
       confirmed: {
         variant: "default",
-        className: "bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-200",
+        className:
+          "bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-200",
         icon: CheckCircle2,
-        iconColor: "text-emerald-600"
+        iconColor: "text-emerald-600",
       },
       pending: {
         variant: "secondary",
-        className: "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-200",
+        className:
+          "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-200",
         icon: AlertCircle,
-        iconColor: "text-amber-600"
+        iconColor: "text-amber-600",
       },
       completed: {
         variant: "outline",
-        className: "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200",
+        className:
+          "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200",
         icon: CheckCircle2,
-        iconColor: "text-blue-600"
+        iconColor: "text-blue-600",
       },
       canceled: {
         variant: "outline",
         className: "bg-red-100 text-red-700 border-red-200 hover:bg-red-200",
         icon: XCircle,
-        iconColor: "text-red-600"
+        iconColor: "text-red-600",
       },
     };
     return configs[status] || configs.pending;
@@ -158,7 +161,7 @@ export default function TutorSessionsPage() {
     return (
       <Card className="border-0 shadow-md hover:shadow-lg transition-all duration-300 overflow-hidden group">
         <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-blue-500 to-purple-600" />
-        
+
         <CardContent className="p-6">
           <div className="flex items-start justify-between mb-4">
             <div className="flex-1">
@@ -167,7 +170,7 @@ export default function TutorSessionsPage() {
                 <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
                   {session.studentName.charAt(0)}
                 </div>
-                
+
                 <div className="flex-1">
                   <h3 className="font-bold text-lg text-gray-900 mb-1">
                     {session.subject}
@@ -180,7 +183,9 @@ export default function TutorSessionsPage() {
               </div>
             </div>
 
-            <Badge className={`${statusConfig.className} border flex items-center gap-1.5 px-3 py-1`}>
+            <Badge
+              className={`${statusConfig.className} border flex items-center gap-1.5 px-3 py-1`}
+            >
               <StatusIcon className="h-3.5 w-3.5" />
               <span className="capitalize font-medium">{session.status}</span>
             </Badge>
@@ -194,7 +199,9 @@ export default function TutorSessionsPage() {
               </div>
               <div>
                 <div className="text-xs text-gray-500 font-medium">Date</div>
-                <div className="text-gray-900 font-semibold">{session.date}</div>
+                <div className="text-gray-900 font-semibold">
+                  {session.date}
+                </div>
               </div>
             </div>
 
@@ -204,7 +211,9 @@ export default function TutorSessionsPage() {
               </div>
               <div>
                 <div className="text-xs text-gray-500 font-medium">Time</div>
-                <div className="text-gray-900 font-semibold">{session.time}</div>
+                <div className="text-gray-900 font-semibold">
+                  {session.time}
+                </div>
               </div>
             </div>
 
@@ -213,8 +222,12 @@ export default function TutorSessionsPage() {
                 <MapPin className="h-4 w-4 text-emerald-600" />
               </div>
               <div>
-                <div className="text-xs text-gray-500 font-medium">Location</div>
-                <div className="text-gray-900 font-semibold">{session.location}</div>
+                <div className="text-xs text-gray-500 font-medium">
+                  Location
+                </div>
+                <div className="text-gray-900 font-semibold">
+                  {session.location}
+                </div>
               </div>
             </div>
           </div>
@@ -264,9 +277,10 @@ export default function TutorSessionsPage() {
                   </Button>
                 </>
               )}
-              {(session.status === "confirmed" || session.status === "completed") && (
-                <Button 
-                  size="sm" 
+              {(session.status === "confirmed" ||
+                session.status === "completed") && (
+                <Button
+                  size="sm"
                   variant="outline"
                   className="group-hover:bg-gray-100"
                 >
@@ -297,7 +311,10 @@ export default function TutorSessionsPage() {
             </div>
             <div className="grid grid-cols-3 gap-3 mb-4">
               {[1, 2, 3].map((j) => (
-                <div key={j} className="h-16 bg-gray-100 rounded-lg animate-pulse" />
+                <div
+                  key={j}
+                  className="h-16 bg-gray-100 rounded-lg animate-pulse"
+                />
               ))}
             </div>
             <div className="flex items-center justify-between pt-4 border-t">
@@ -319,7 +336,7 @@ export default function TutorSessionsPage() {
         No {type} Sessions
       </h3>
       <p className="text-gray-500 max-w-sm mx-auto">
-        {type === "upcoming" 
+        {type === "upcoming"
           ? "You don't have any pending sessions at the moment. New booking requests will appear here."
           : "You haven't completed any sessions yet. Completed sessions will be shown here."}
       </p>
@@ -329,7 +346,7 @@ export default function TutorSessionsPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/30">
       <Navbar />
-      
+
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-8">
@@ -373,8 +390,8 @@ export default function TutorSessionsPage() {
         {/* Tabs */}
         <Tabs defaultValue="upcoming" className="space-y-6">
           <TabsList className="bg-white shadow-md border-0 p-1">
-            <TabsTrigger 
-              value="upcoming" 
+            <TabsTrigger
+              value="upcoming"
               className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-600 data-[state=active]:to-purple-600 data-[state=active]:text-white rounded-md px-6"
             >
               <AlertCircle className="h-4 w-4 mr-2" />
@@ -383,7 +400,7 @@ export default function TutorSessionsPage() {
                 {upcomingSessions.length}
               </Badge>
             </TabsTrigger>
-            <TabsTrigger 
+            <TabsTrigger
               value="past"
               className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-600 data-[state=active]:to-purple-600 data-[state=active]:text-white rounded-md px-6"
             >

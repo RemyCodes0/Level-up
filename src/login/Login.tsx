@@ -1,68 +1,87 @@
-"use client"
+"use client";
 
-import type React from "react"
-import axios from "axios"
-import { useState } from "react"
-import { useNavigate } from "react-router-dom"
-import { useAuth } from "@/lib/auth-context"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { motion } from "framer-motion"
-import { 
-  Mail, 
-  Lock, 
-  ArrowRight, 
+import type React from "react";
+import axios from "axios";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/lib/auth-context";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { motion } from "framer-motion";
+import {
+  Mail,
+  Lock,
+  ArrowRight,
   AlertCircle,
   Sparkles,
   Eye,
   EyeOff,
-  CheckCircle2
-} from "lucide-react"
+  CheckCircle2,
+} from "lucide-react";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [error, setError] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-  const { signIn } = useAuth()
-  const navigate = useNavigate()
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const { signIn } = useAuth();
+  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError("")
-    setLoading(true)
+    e.preventDefault();
+    setError("");
+    setLoading(true);
 
     try {
-      const res = await axios.post("http://localhost:5000/api/auth/login", { email, password })
-      
-      localStorage.setItem('token', res.data.token)
-      localStorage.setItem("user", JSON.stringify({
-        _id: res.data._id,
-        name: res.data.name,
-        email: res.data.email,
-        role: res.data.role
-      }))
-      
-      navigate('/dashboard')
+      const res = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/login`, {
+        email,
+        password,
+      });
+
+      localStorage.setItem("token", res.data.token);
+      localStorage.setItem(
+        "user",
+        JSON.stringify({
+          _id: res.data._id,
+          name: res.data.name,
+          email: res.data.email,
+          role: res.data.role,
+        }),
+      );
+
+      navigate("/dashboard");
     } catch (error) {
-      console.error(error)
-      setError("Invalid email or password. Please try again.")
+      console.error(error);
+      setError("Invalid email or password. Please try again.");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 p-4 relative overflow-hidden">
       {/* Animated Background Elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-20 left-10 w-72 h-72 bg-blue-400/20 rounded-full blur-3xl animate-pulse"></div>
-        <div className="absolute bottom-20 right-10 w-96 h-96 bg-purple-400/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }}></div>
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-pink-400/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '2s' }}></div>
+        <div
+          className="absolute bottom-20 right-10 w-96 h-96 bg-purple-400/20 rounded-full blur-3xl animate-pulse"
+          style={{ animationDelay: "1s" }}
+        ></div>
+        <div
+          className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-pink-400/20 rounded-full blur-3xl animate-pulse"
+          style={{ animationDelay: "2s" }}
+        ></div>
       </div>
 
       <motion.div
@@ -82,7 +101,11 @@ export default function LoginPage() {
               <div className="relative">
                 <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full blur-lg opacity-50 animate-pulse"></div>
                 <div className="relative bg-gradient-to-r from-blue-600 to-purple-600 overflow-hidden p-3 rounded-full shadow-lg">
-                  <img src="/logo.png" alt="Level Up" className="h-12 w-12 object-cover rounded-full" />
+                  <img
+                    src="/logo.png"
+                    alt="Level Up"
+                    className="h-12 w-12 object-cover rounded-full"
+                  />
                 </div>
               </div>
             </motion.div>
@@ -109,9 +132,14 @@ export default function LoginPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3 }}
                 >
-                  <Alert variant="destructive" className="border-red-200 bg-red-50">
+                  <Alert
+                    variant="destructive"
+                    className="border-red-200 bg-red-50"
+                  >
                     <AlertCircle className="h-4 w-4" />
-                    <AlertDescription className="text-sm">{error}</AlertDescription>
+                    <AlertDescription className="text-sm">
+                      {error}
+                    </AlertDescription>
                   </Alert>
                 </motion.div>
               )}
@@ -122,7 +150,10 @@ export default function LoginPage() {
                 transition={{ duration: 0.5, delay: 0.4 }}
                 className="space-y-2"
               >
-                <Label htmlFor="email" className="text-sm font-semibold text-gray-700">
+                <Label
+                  htmlFor="email"
+                  className="text-sm font-semibold text-gray-700"
+                >
                   Email Address
                 </Label>
                 <div className="relative">
@@ -145,7 +176,10 @@ export default function LoginPage() {
                 transition={{ duration: 0.5, delay: 0.5 }}
                 className="space-y-2"
               >
-                <Label htmlFor="password" className="text-sm font-semibold text-gray-700">
+                <Label
+                  htmlFor="password"
+                  className="text-sm font-semibold text-gray-700"
+                >
                   Password
                 </Label>
                 <div className="relative">
@@ -179,7 +213,10 @@ export default function LoginPage() {
                 transition={{ duration: 0.5, delay: 0.6 }}
                 className="flex items-center justify-end"
               >
-                <a href="/forgot-password" className="text-sm text-blue-600 hover:text-blue-700 font-medium hover:underline">
+                <a
+                  href="/forgot-password"
+                  className="text-sm text-blue-600 hover:text-blue-700 font-medium hover:underline"
+                >
                   Forgot password?
                 </a>
               </motion.div>
@@ -192,9 +229,9 @@ export default function LoginPage() {
                 transition={{ duration: 0.5, delay: 0.7 }}
                 className="w-full"
               >
-                <Button 
-                  type="submit" 
-                  className="w-full h-12 text-base font-semibold bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all group" 
+                <Button
+                  type="submit"
+                  className="w-full h-12 text-base font-semibold bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all group"
                   disabled={loading}
                 >
                   {loading ? (
@@ -222,15 +259,17 @@ export default function LoginPage() {
                     <div className="w-full border-t border-gray-200"></div>
                   </div>
                   <div className="relative flex justify-center text-sm">
-                    <span className="px-4 bg-white text-gray-500">New to Level Up?</span>
+                    <span className="px-4 bg-white text-gray-500">
+                      New to Level Up?
+                    </span>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
                   <a href="/signup">
-                    <Button 
+                    <Button
                       type="button"
-                      variant="outline" 
+                      variant="outline"
                       className="w-full h-11 border-2 hover:bg-blue-50 hover:border-blue-300 transition-all group"
                     >
                       <Sparkles className="mr-2 h-4 w-4 text-blue-600" />
@@ -270,5 +309,5 @@ export default function LoginPage() {
         </motion.div>
       </motion.div>
     </div>
-  )
+  );
 }
