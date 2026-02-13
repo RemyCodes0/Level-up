@@ -42,7 +42,7 @@ export default function AdminApplicationsPage() {
       setIsLoading(true);
       try {
         const res = await axios.get(
-          "http://localhost:5000/api/tutor/applications"
+          `${import.meta.env.VITE_API_URL}/api/tutor/applications`,
         );
         setApplications(res.data);
       } catch (error) {
@@ -58,7 +58,7 @@ export default function AdminApplicationsPage() {
     setProcessingId(appId);
     try {
       const res = await axios.patch(
-        `http://localhost:5000/api/tutor/${appId}/approve`
+        `${import.meta.env.VITE_API_URL}/api/tutor/${appId}/approve`,
       );
       const data = res.data;
       setApplications(
@@ -70,8 +70,8 @@ export default function AdminApplicationsPage() {
                 reviewedAt: new Date(),
                 reviewedBy: user._id,
               }
-            : app
-        )
+            : app,
+        ),
       );
     } catch (error) {
       console.error("Error approving application:", error);
@@ -84,7 +84,7 @@ export default function AdminApplicationsPage() {
     setProcessingId(appId);
     try {
       const res = await axios.patch(
-        `http://localhost:5000/api/tutor/${appId}/reject`
+        `${import.meta.env.VITE_API_URL}/api/tutor/${appId}/reject`,
       );
       setApplications(
         applications.map((app) =>
@@ -95,8 +95,8 @@ export default function AdminApplicationsPage() {
                 reviewedAt: new Date(),
                 reviewedBy: user._id,
               }
-            : app
-        )
+            : app,
+        ),
       );
     } catch (error) {
       console.error("Error rejecting application:", error);
@@ -299,9 +299,7 @@ export default function AdminApplicationsPage() {
                 {pendingApps.length}
               </div>
               <p className="text-xs text-gray-600 mt-1">
-                {pendingApps.length > 0
-                  ? "Needs attention"
-                  : "All caught up!"}
+                {pendingApps.length > 0 ? "Needs attention" : "All caught up!"}
               </p>
             </CardContent>
           </Card>

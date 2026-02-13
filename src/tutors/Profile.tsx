@@ -1,23 +1,29 @@
-"use client"
+"use client";
 
-import { useAuth } from "@/lib/auth-context"
-import { useNavigate } from "react-router-dom"
-import { useEffect, useState } from "react"
-import { Navbar } from "@/components/navbar/Navbar"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { ALL_SUBJECTS, MOCK_TUTORS } from "@/lib/mock-data"
-import { 
-  X, 
-  Plus, 
-  Save, 
+import { useAuth } from "@/lib/auth-context";
+import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Navbar } from "@/components/navbar/Navbar";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { ALL_SUBJECTS, MOCK_TUTORS } from "@/lib/mock-data";
+import {
+  X,
+  Plus,
+  Save,
   ArrowLeft,
   BookOpen,
   DollarSign,
@@ -26,18 +32,38 @@ import {
   Sparkles,
   CheckCircle2,
   User,
-  GraduationCap
-} from "lucide-react"
-import { motion } from "framer-motion"
-import axios from "axios"
+  GraduationCap,
+} from "lucide-react";
+import { motion } from "framer-motion";
+import axios from "axios";
 
 const TEACHING_STYLES = [
-  { value: "structured", label: "Structured & Systematic", description: "Step-by-step approach with clear milestones" },
-  { value: "interactive", label: "Interactive & Conversational", description: "Discussion-based with active engagement" },
-  { value: "visual", label: "Visual & Hands-on", description: "Diagrams, examples, and practical demonstrations" },
-  { value: "adaptive", label: "Adaptive & Flexible", description: "Tailored to each student's learning style" },
-  { value: "exam-focused", label: "Exam-Focused", description: "Strategic preparation for tests and exams" },
-]
+  {
+    value: "structured",
+    label: "Structured & Systematic",
+    description: "Step-by-step approach with clear milestones",
+  },
+  {
+    value: "interactive",
+    label: "Interactive & Conversational",
+    description: "Discussion-based with active engagement",
+  },
+  {
+    value: "visual",
+    label: "Visual & Hands-on",
+    description: "Diagrams, examples, and practical demonstrations",
+  },
+  {
+    value: "adaptive",
+    label: "Adaptive & Flexible",
+    description: "Tailored to each student's learning style",
+  },
+  {
+    value: "exam-focused",
+    label: "Exam-Focused",
+    description: "Strategic preparation for tests and exams",
+  },
+];
 
 const DEFAULT_BENEFITS = [
   "Personalized lesson plans based on your goals",
@@ -45,131 +71,138 @@ const DEFAULT_BENEFITS = [
   "Exam preparation strategies",
   "Flexible scheduling options",
   "Follow-up resources after sessions",
-]
+];
 
 export default function TutorProfileEditPage() {
-  const navigate = useNavigate()
-  
-  const [bio, setBio] = useState("")
-  const [hourlyRate, setHourlyRate] = useState<number | "">("")
-  const [selectedSubjects, setSelectedSubjects] = useState<{code: string, name: string, _id: string}[]>([])
-  const [subjectInput, setSubjectInput] = useState("")
-  
+  const navigate = useNavigate();
+
+  const [bio, setBio] = useState("");
+  const [hourlyRate, setHourlyRate] = useState<number | "">("");
+  const [selectedSubjects, setSelectedSubjects] = useState<
+    { code: string; name: string; _id: string }[]
+  >([]);
+  const [subjectInput, setSubjectInput] = useState("");
+
   // New fields
-  const [location, setLocation] = useState("")
+  const [location, setLocation] = useState("");
   // const [locationType, setLocationType] = useState<"campus" | "online" | "both">("both")
-  const [teachingApproach, setTeachingApproach] = useState("")
-  const [teachingStyle, setTeachingStyle] = useState("")
-  const [studentBenefits, setStudentBenefits] = useState<string[]>(DEFAULT_BENEFITS)
-  const [customBenefit, setCustomBenefit] = useState("")
-  
-  const [loading, setLoading] = useState(false)
-  const [success, setSuccess] = useState(false)
+  const [teachingApproach, setTeachingApproach] = useState("");
+  const [teachingStyle, setTeachingStyle] = useState("");
+  const [studentBenefits, setStudentBenefits] =
+    useState<string[]>(DEFAULT_BENEFITS);
+  const [customBenefit, setCustomBenefit] = useState("");
 
-  const storedUser = localStorage.getItem("user")
-  const user = storedUser ? JSON.parse(storedUser) : null
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
 
-  const token = localStorage.getItem("token")
+  const storedUser = localStorage.getItem("user");
+  const user = storedUser ? JSON.parse(storedUser) : null;
+
+  const token = localStorage.getItem("token");
 
   useEffect(() => {
-    if (!user || (user.role !== "tutor")) {
-      navigate("/")
-      return
+    if (!user || user.role !== "tutor") {
+      navigate("/");
+      return;
     }
 
     // Load existing tutor data
     const fetchTutorData = async () => {
       try {
-        const res = await axios.get(`http://localhost:5000/api/tutor/${user._id}/getTutorWithUserId`)
-        const data = res.data.tutor
+        const res = await axios.get(
+          `${import.meta.env.VITE_API_URL}/api/tutor/${user._id}/getTutorWithUserId`,
+        );
+        const data = res.data.tutor;
 
         if (data) {
-          setBio(data.bio || "")
-          setHourlyRate(data.hourlyRate || "")
-          setSelectedSubjects(data.subjects || [])
-          setLocation(data.location || "")
+          setBio(data.bio || "");
+          setHourlyRate(data.hourlyRate || "");
+          setSelectedSubjects(data.subjects || []);
+          setLocation(data.location || "");
           // setLocationType(data.locationType || "both")
-          setTeachingApproach(data.teachingApproach || "")
-          setTeachingStyle(data.teachingStyle || "")
-          setStudentBenefits(data.studentBenefits || DEFAULT_BENEFITS)
+          setTeachingApproach(data.teachingApproach || "");
+          setTeachingStyle(data.teachingStyle || "");
+          setStudentBenefits(data.studentBenefits || DEFAULT_BENEFITS);
         }
       } catch (error) {
-        console.error("Failed to load tutor data:", error)
+        console.error("Failed to load tutor data:", error);
       }
-    }
-    fetchTutorData()
-  }, [])
+    };
+    fetchTutorData();
+  }, []);
 
-  if (!user || (user.role !== "tutor")) {
-    return null
+  if (!user || user.role !== "tutor") {
+    return null;
   }
 
   const handleAddSubject = (subject: string) => {
-    if (subject && !selectedSubjects.find(s => s.name === subject)) {
+    if (subject && !selectedSubjects.find((s) => s.name === subject)) {
       // In a real app, you'd fetch the subject details from the backend
-      const newSubject = { code: subject, name: subject, _id: `temp-${Date.now()}` }
-      setSelectedSubjects([...selectedSubjects, newSubject])
-      setSubjectInput("")
+      const newSubject = {
+        code: subject,
+        name: subject,
+        _id: `temp-${Date.now()}`,
+      };
+      setSelectedSubjects([...selectedSubjects, newSubject]);
+      setSubjectInput("");
     }
-  }
+  };
 
   const addCustomBenefit = () => {
     if (customBenefit.trim()) {
-      setStudentBenefits([...studentBenefits, customBenefit.trim()])
-      setCustomBenefit("")
+      setStudentBenefits([...studentBenefits, customBenefit.trim()]);
+      setCustomBenefit("");
     }
-  }
+  };
 
   const removeBenefit = (index: number) => {
-    setStudentBenefits(studentBenefits.filter((_, i) => i !== index))
-  }
+    setStudentBenefits(studentBenefits.filter((_, i) => i !== index));
+  };
 
   const handleSave = async () => {
-  setLoading(true)
-  try {
-    // Prepare the data to send to backend
-    const updatedData = new FormData()
-    updatedData.append("bio", bio)
-    updatedData.append("hourlyRate", hourlyRate.toString())
-    updatedData.append("subjects", JSON.stringify(selectedSubjects))
-    updatedData.append("location", location)
-    updatedData.append("teachingApproach", teachingApproach)
-    updatedData.append("teachingStyle", teachingStyle)
-    updatedData.append("studentBenefits", JSON.stringify(studentBenefits))
+    setLoading(true);
+    try {
+      // Prepare the data to send to backend
+      const updatedData = new FormData();
+      updatedData.append("bio", bio);
+      updatedData.append("hourlyRate", hourlyRate.toString());
+      updatedData.append("subjects", JSON.stringify(selectedSubjects));
+      updatedData.append("location", location);
+      updatedData.append("teachingApproach", teachingApproach);
+      updatedData.append("teachingStyle", teachingStyle);
+      updatedData.append("studentBenefits", JSON.stringify(studentBenefits));
 
-    // Optional: append files if you have a file input
-    // if (certificatesFiles.length > 0) {
-    //   certificatesFiles.forEach(file => updatedData.append("certificates", file))
-    // }
-    // if (idCardFile) updatedData.append("idCard", idCardFile)
+      // Optional: append files if you have a file input
+      // if (certificatesFiles.length > 0) {
+      //   certificatesFiles.forEach(file => updatedData.append("certificates", file))
+      // }
+      // if (idCardFile) updatedData.append("idCard", idCardFile)
 
-    // Make API request
+      // Make API request
 
+      const res = await axios.put(
+        `${import.meta.env.VITE_API_URL}/api/tutor/updateProfile`,
+        updatedData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
 
-    const res = await axios.put(
-      `http://localhost:5000/api/tutor/updateProfile`,
-      updatedData,
-      {
-        headers: {
-          "Content-Type": "multipart/form-data",
-          Authorization: `Bearer ${token}`
-        }
-      }
-    )
-
-    setSuccess(true)
-    setTimeout(() => {
-      setSuccess(false)
-      navigate("/tutor/dashboard")
-    }, 2000)
-
-  } catch (error: any) {
-    console.error("Failed to save:", error)
-    alert(error.response?.data?.message || "Failed to save changes")
-  } finally {
-    setLoading(false)
-  }
-}
+      setSuccess(true);
+      setTimeout(() => {
+        setSuccess(false);
+        navigate("/tutor/dashboard");
+      }, 2000);
+    } catch (error: any) {
+      console.error("Failed to save:", error);
+      alert(error.response?.data?.message || "Failed to save changes");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
@@ -182,9 +215,9 @@ export default function TutorProfileEditPage() {
           transition={{ duration: 0.5 }}
           className="mb-8"
         >
-          <Button 
-            variant="ghost" 
-            onClick={() => navigate("/tutor/dashboard")} 
+          <Button
+            variant="ghost"
+            onClick={() => navigate("/tutor/dashboard")}
             className="mb-4 hover:bg-primary/10"
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
@@ -193,7 +226,9 @@ export default function TutorProfileEditPage() {
 
           <div className="flex items-center gap-2 mb-3">
             <Sparkles className="h-5 w-5 text-primary" />
-            <Badge variant="secondary" className="text-xs">Profile Settings</Badge>
+            <Badge variant="secondary" className="text-xs">
+              Profile Settings
+            </Badge>
           </div>
           <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
             Edit Tutor Profile
@@ -234,11 +269,16 @@ export default function TutorProfileEditPage() {
                   </div>
                   <CardTitle className="text-xl">Basic Information</CardTitle>
                 </div>
-                <CardDescription>Update your profile details and bio</CardDescription>
+                <CardDescription>
+                  Update your profile details and bio
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="space-y-2">
-                  <Label htmlFor="bio" className="text-sm font-semibold flex items-center gap-2">
+                  <Label
+                    htmlFor="bio"
+                    className="text-sm font-semibold flex items-center gap-2"
+                  >
                     <BookOpen className="h-4 w-4 text-muted-foreground" />
                     Bio
                   </Label>
@@ -251,11 +291,16 @@ export default function TutorProfileEditPage() {
                     className="border-2 focus:border-blue-500 resize-none"
                     maxLength={500}
                   />
-                  <p className="text-sm text-muted-foreground">{bio?.length}/500 characters</p>
+                  <p className="text-sm text-muted-foreground">
+                    {bio?.length}/500 characters
+                  </p>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="rate" className="text-sm font-semibold flex items-center gap-2">
+                  <Label
+                    htmlFor="rate"
+                    className="text-sm font-semibold flex items-center gap-2"
+                  >
                     <DollarSign className="h-4 w-4 text-muted-foreground" />
                     Hourly Rate (USD)
                   </Label>
@@ -269,7 +314,9 @@ export default function TutorProfileEditPage() {
                     onChange={(e) => setHourlyRate(Number(e.target.value))}
                     className="h-11 border-2 focus:border-blue-500"
                   />
-                  <p className="text-sm text-muted-foreground">Recommended: $15-30 per hour based on subject complexity</p>
+                  <p className="text-sm text-muted-foreground">
+                    Recommended: $15-30 per hour based on subject complexity
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -289,11 +336,15 @@ export default function TutorProfileEditPage() {
                   </div>
                   <CardTitle className="text-xl">Subjects</CardTitle>
                 </div>
-                <CardDescription>Select the subjects you can tutor</CardDescription>
+                <CardDescription>
+                  Select the subjects you can tutor
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="subject" className="text-sm font-semibold">Add Subject</Label>
+                  <Label htmlFor="subject" className="text-sm font-semibold">
+                    Add Subject
+                  </Label>
                   <div className="flex gap-2">
                     <Input
                       id="subject"
@@ -303,9 +354,9 @@ export default function TutorProfileEditPage() {
                       list="subjects-list"
                       className="h-11 border-2 focus:border-purple-500"
                       onKeyPress={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          handleAddSubject(subjectInput)
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleAddSubject(subjectInput);
                         }
                       }}
                     />
@@ -314,7 +365,7 @@ export default function TutorProfileEditPage() {
                         <option key={subject} value={subject} />
                       ))}
                     </datalist>
-                    <Button 
+                    <Button
                       onClick={() => handleAddSubject(subjectInput)}
                       className="h-11 bg-gradient-to-r from-purple-600 to-blue-600"
                     >
@@ -326,11 +377,18 @@ export default function TutorProfileEditPage() {
                 {selectedSubjects?.length > 0 ? (
                   <div className="flex flex-wrap gap-2 p-4 rounded-lg bg-gradient-to-r from-purple-50 to-blue-50 border-2 border-purple-100">
                     {selectedSubjects.map((subject) => (
-                      <Badge key={subject._id} className="bg-white text-gray-700 hover:bg-gray-50 px-3 py-1.5">
+                      <Badge
+                        key={subject._id}
+                        className="bg-white text-gray-700 hover:bg-gray-50 px-3 py-1.5"
+                      >
                         {subject.name}
                         <button
                           onClick={() =>
-                            setSelectedSubjects(selectedSubjects.filter((s) => s._id !== subject._id))
+                            setSelectedSubjects(
+                              selectedSubjects.filter(
+                                (s) => s._id !== subject._id,
+                              ),
+                            )
                           }
                           className="ml-2 hover:text-destructive"
                         >
@@ -362,7 +420,9 @@ export default function TutorProfileEditPage() {
                   </div>
                   <CardTitle className="text-xl">Location</CardTitle>
                 </div>
-                <CardDescription>Specify where you prefer to teach</CardDescription>
+                <CardDescription>
+                  Specify where you prefer to teach
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="space-y-3">
@@ -419,24 +479,44 @@ export default function TutorProfileEditPage() {
                   <div className="h-8 w-8 rounded-lg bg-orange-500/10 flex items-center justify-center">
                     <Target className="h-5 w-5 text-orange-600" />
                   </div>
-                  <CardTitle className="text-xl">Teaching Style & Approach</CardTitle>
+                  <CardTitle className="text-xl">
+                    Teaching Style & Approach
+                  </CardTitle>
                 </div>
-                <CardDescription>Define your teaching methodology</CardDescription>
+                <CardDescription>
+                  Define your teaching methodology
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="space-y-3">
-                  <Label className="text-sm font-semibold">Teaching Style</Label>
-                  <RadioGroup value={teachingStyle} onValueChange={setTeachingStyle}>
+                  <Label className="text-sm font-semibold">
+                    Teaching Style
+                  </Label>
+                  <RadioGroup
+                    value={teachingStyle}
+                    onValueChange={setTeachingStyle}
+                  >
                     <div className="space-y-3">
                       {TEACHING_STYLES.map((style) => (
-                        <div 
-                          key={style.value} 
+                        <div
+                          key={style.value}
                           className="flex items-start space-x-3 p-4 rounded-lg border-2 hover:border-orange-300 transition-colors cursor-pointer"
                         >
-                          <RadioGroupItem value={style.value} id={`${style.value}-edit`} className="mt-1" />
-                          <Label htmlFor={`${style.value}-edit`} className="cursor-pointer flex-1">
-                            <div className="font-semibold text-gray-900">{style.label}</div>
-                            <div className="text-sm text-muted-foreground mt-1">{style.description}</div>
+                          <RadioGroupItem
+                            value={style.value}
+                            id={`${style.value}-edit`}
+                            className="mt-1"
+                          />
+                          <Label
+                            htmlFor={`${style.value}-edit`}
+                            className="cursor-pointer flex-1"
+                          >
+                            <div className="font-semibold text-gray-900">
+                              {style.label}
+                            </div>
+                            <div className="text-sm text-muted-foreground mt-1">
+                              {style.description}
+                            </div>
                           </Label>
                         </div>
                       ))}
@@ -445,7 +525,10 @@ export default function TutorProfileEditPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="teachingApproach" className="text-sm font-semibold">
+                  <Label
+                    htmlFor="teachingApproach"
+                    className="text-sm font-semibold"
+                  >
                     Teaching Approach Description
                   </Label>
                   <Textarea
@@ -473,14 +556,21 @@ export default function TutorProfileEditPage() {
                   <div className="h-8 w-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
                     <Sparkles className="h-5 w-5 text-amber-600" />
                   </div>
-                  <CardTitle className="text-xl">What Students Will Get</CardTitle>
+                  <CardTitle className="text-xl">
+                    What Students Will Get
+                  </CardTitle>
                 </div>
-                <CardDescription>List the benefits students receive from your sessions</CardDescription>
+                <CardDescription>
+                  List the benefits students receive from your sessions
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="p-4 rounded-lg bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-100 space-y-2">
                   {studentBenefits.map((benefit, index) => (
-                    <div key={index} className="flex items-start gap-3 p-2 rounded bg-white/60">
+                    <div
+                      key={index}
+                      className="flex items-start gap-3 p-2 rounded bg-white/60"
+                    >
                       <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
                       <span className="text-sm flex-1">{benefit}</span>
                       <button
@@ -501,14 +591,14 @@ export default function TutorProfileEditPage() {
                     placeholder="Add a custom benefit..."
                     className="h-11 border-2 focus:border-amber-500"
                     onKeyPress={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        addCustomBenefit()
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addCustomBenefit();
                       }
                     }}
                   />
-                  <Button 
-                    type="button" 
+                  <Button
+                    type="button"
                     onClick={addCustomBenefit}
                     className="h-11 bg-gradient-to-r from-amber-500 to-orange-500"
                   >
@@ -526,8 +616,8 @@ export default function TutorProfileEditPage() {
             transition={{ duration: 0.4, delay: 0.6 }}
             className="flex flex-col sm:flex-row gap-4 pt-4"
           >
-            <Button 
-              onClick={handleSave} 
+            <Button
+              onClick={handleSave}
               disabled={loading}
               className="flex-1 h-12 text-base font-semibold bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all"
             >
@@ -543,9 +633,9 @@ export default function TutorProfileEditPage() {
                 </>
               )}
             </Button>
-            <Button 
-              variant="outline" 
-              onClick={() => navigate("/tutor/dashboard")} 
+            <Button
+              variant="outline"
+              onClick={() => navigate("/tutor/dashboard")}
               className="h-12 border-2 hover:bg-muted"
             >
               Cancel
@@ -554,5 +644,5 @@ export default function TutorProfileEditPage() {
         </div>
       </div>
     </div>
-  )
+  );
 }

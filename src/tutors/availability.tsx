@@ -13,16 +13,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import axios from "axios";
-import { 
-  X, 
-  ArrowLeft, 
-  Plus, 
-  Clock, 
+import {
+  X,
+  ArrowLeft,
+  Plus,
+  Clock,
   Calendar,
   Save,
   Trash2,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
 } from "lucide-react";
 
 interface DayAvailability {
@@ -57,8 +57,8 @@ export default function TutorAvailabilityPage() {
       setIsLoading(true);
       try {
         const res = await axios.get(
-          `http://localhost:5000/api/tutor/${user._id}/getTutorWithUserId`,
-          { headers: { Authorization: `Bearer ${token}` } }
+          `${import.meta.env.VITE_API_URL}/api/tutor/${user._id}/getTutorWithUserId`,
+          { headers: { Authorization: `Bearer ${token}` } },
         );
         const data = res.data.tutor;
 
@@ -83,7 +83,7 @@ export default function TutorAvailabilityPage() {
   const updateSlot = (
     index: number,
     field: "from" | "to" | "day",
-    value: string
+    value: string,
   ) => {
     setAvailability((prev) => {
       const updated = [...prev];
@@ -111,9 +111,9 @@ export default function TutorAvailabilityPage() {
     setSaveSuccess(false);
     try {
       await axios.put(
-        `http://localhost:5000/api/tutor/${user._id}/updateAvailability`,
+        `${import.meta.env.VITE_API_URL}/api/tutor/${user._id}/updateAvailability`,
         { availability },
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: { Authorization: `Bearer ${token}` } },
       );
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -127,8 +127,8 @@ export default function TutorAvailabilityPage() {
 
   const calculateTotalHours = () => {
     return availability.reduce((total, day) => {
-      const [fromHour, fromMin] = day.from.split(':').map(Number);
-      const [toHour, toMin] = day.to.split(':').map(Number);
+      const [fromHour, fromMin] = day.from.split(":").map(Number);
+      const [toHour, toMin] = day.to.split(":").map(Number);
       const hours = (toHour * 60 + toMin - (fromHour * 60 + fromMin)) / 60;
       return total + (hours > 0 ? hours : 0);
     }, 0);
@@ -137,7 +137,10 @@ export default function TutorAvailabilityPage() {
   const LoadingSkeleton = () => (
     <div className="space-y-4">
       {[1, 2, 3].map((i) => (
-        <div key={i} className="flex items-center justify-between p-4 border rounded-lg">
+        <div
+          key={i}
+          className="flex items-center justify-between p-4 border rounded-lg"
+        >
           <div className="h-10 w-32 bg-gray-200 rounded animate-pulse" />
           <div className="flex items-center gap-3">
             <div className="h-10 w-24 bg-gray-200 rounded animate-pulse" />
@@ -158,7 +161,9 @@ export default function TutorAvailabilityPage() {
           <div className="flex items-center justify-center h-96">
             <div className="flex flex-col items-center gap-4">
               <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-              <p className="text-gray-600 font-medium">Loading your availability...</p>
+              <p className="text-gray-600 font-medium">
+                Loading your availability...
+              </p>
             </div>
           </div>
         </div>
@@ -169,7 +174,7 @@ export default function TutorAvailabilityPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/30">
       <Navbar />
-      
+
       <div className="container mx-auto px-4 py-8 max-w-4xl">
         {/* Header */}
         <div className="mb-8">
@@ -226,7 +231,8 @@ export default function TutorAvailabilityPage() {
                 </CardDescription>
               </div>
               <Badge variant="secondary" className="text-sm px-3 py-1">
-                {availability.length} {availability.length === 1 ? 'day' : 'days'} active
+                {availability.length}{" "}
+                {availability.length === 1 ? "day" : "days"} active
               </Badge>
             </div>
           </CardHeader>
@@ -235,11 +241,16 @@ export default function TutorAvailabilityPage() {
             {availability.length === 0 ? (
               <div className="text-center py-12">
                 <Calendar className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-                <p className="text-gray-500 font-medium mb-2">No availability set</p>
+                <p className="text-gray-500 font-medium mb-2">
+                  No availability set
+                </p>
                 <p className="text-sm text-gray-400 mb-4">
                   Add your first available day to get started
                 </p>
-                <Button onClick={addDay} className="bg-gradient-to-r from-blue-600 to-purple-600">
+                <Button
+                  onClick={addDay}
+                  className="bg-gradient-to-r from-blue-600 to-purple-600"
+                >
                   <Plus className="h-4 w-4 mr-2" />
                   Add Your First Day
                 </Button>
@@ -247,25 +258,32 @@ export default function TutorAvailabilityPage() {
             ) : (
               <div className="space-y-3">
                 {availability.map((day, idx) => {
-                  const gradient = WEEKDAY_COLORS[day.day as keyof typeof WEEKDAY_COLORS];
-                  
+                  const gradient =
+                    WEEKDAY_COLORS[day.day as keyof typeof WEEKDAY_COLORS];
+
                   return (
                     <div
                       key={idx}
                       className="group relative p-5 border-2 border-gray-100 rounded-xl hover:border-blue-200 hover:shadow-md transition-all duration-300 bg-white"
                     >
                       {/* Colored accent bar */}
-                      <div className={`absolute top-0 left-0 w-2 h-full bg-gradient-to-b ${gradient} rounded-l-xl`} />
+                      <div
+                        className={`absolute top-0 left-0 w-2 h-full bg-gradient-to-b ${gradient} rounded-l-xl`}
+                      />
 
                       <div className="flex items-center justify-between pl-4">
                         {/* Day Selector */}
                         <div className="flex items-center gap-3">
-                          <div className={`p-2 rounded-lg bg-gradient-to-br ${gradient} bg-opacity-10`}>
+                          <div
+                            className={`p-2 rounded-lg bg-gradient-to-br ${gradient} bg-opacity-10`}
+                          >
                             <Calendar className="h-5 w-5 text-gray-700" />
                           </div>
                           <select
                             value={day.day}
-                            onChange={(e) => updateSlot(idx, "day", e.target.value)}
+                            onChange={(e) =>
+                              updateSlot(idx, "day", e.target.value)
+                            }
                             className="px-4 py-2.5 border-2 border-gray-200 rounded-lg text-sm font-semibold hover:border-gray-300 focus:border-blue-500 focus:outline-none transition-colors bg-white"
                           >
                             {WEEKDAYS.map((d) => (
@@ -273,7 +291,7 @@ export default function TutorAvailabilityPage() {
                                 key={d}
                                 value={d}
                                 disabled={availability.some(
-                                  (av, i) => av.day === d && i !== idx
+                                  (av, i) => av.day === d && i !== idx,
                                 )}
                               >
                                 {d}
@@ -289,7 +307,9 @@ export default function TutorAvailabilityPage() {
                             <input
                               type="time"
                               value={day.from}
-                              onChange={(e) => updateSlot(idx, "from", e.target.value)}
+                              onChange={(e) =>
+                                updateSlot(idx, "from", e.target.value)
+                              }
                               className="px-3 py-1.5 border-2 border-gray-200 rounded-lg text-sm font-medium hover:border-gray-300 focus:border-blue-500 focus:outline-none transition-colors bg-white"
                             />
                           </div>
@@ -301,7 +321,9 @@ export default function TutorAvailabilityPage() {
                             <input
                               type="time"
                               value={day.to}
-                              onChange={(e) => updateSlot(idx, "to", e.target.value)}
+                              onChange={(e) =>
+                                updateSlot(idx, "to", e.target.value)
+                              }
                               className="px-3 py-1.5 border-2 border-gray-200 rounded-lg text-sm font-medium hover:border-gray-300 focus:border-blue-500 focus:outline-none transition-colors bg-white"
                             />
                           </div>
@@ -321,11 +343,22 @@ export default function TutorAvailabilityPage() {
                       <div className="mt-3 pl-4 flex items-center gap-2 text-sm text-gray-500">
                         <AlertCircle className="h-3.5 w-3.5" />
                         <span>
-                          Duration: {(() => {
-                            const [fromHour, fromMin] = day.from.split(':').map(Number);
-                            const [toHour, toMin] = day.to.split(':').map(Number);
-                            const hours = ((toHour * 60 + toMin) - (fromHour * 60 + fromMin)) / 60;
-                            return hours > 0 ? `${hours.toFixed(1)} hours` : 'Invalid time range';
+                          Duration:{" "}
+                          {(() => {
+                            const [fromHour, fromMin] = day.from
+                              .split(":")
+                              .map(Number);
+                            const [toHour, toMin] = day.to
+                              .split(":")
+                              .map(Number);
+                            const hours =
+                              (toHour * 60 +
+                                toMin -
+                                (fromHour * 60 + fromMin)) /
+                              60;
+                            return hours > 0
+                              ? `${hours.toFixed(1)} hours`
+                              : "Invalid time range";
                           })()}
                         </span>
                       </div>
@@ -388,10 +421,16 @@ export default function TutorAvailabilityPage() {
             <div className="flex items-start gap-3">
               <AlertCircle className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
               <div className="text-sm text-blue-900">
-                <p className="font-semibold mb-1">Tips for setting availability:</p>
+                <p className="font-semibold mb-1">
+                  Tips for setting availability:
+                </p>
                 <ul className="list-disc list-inside space-y-1 text-blue-800">
-                  <li>Students can only book sessions during your available hours</li>
-                  <li>Make sure to set realistic time ranges you can commit to</li>
+                  <li>
+                    Students can only book sessions during your available hours
+                  </li>
+                  <li>
+                    Make sure to set realistic time ranges you can commit to
+                  </li>
                   <li>You can update your availability anytime</li>
                 </ul>
               </div>

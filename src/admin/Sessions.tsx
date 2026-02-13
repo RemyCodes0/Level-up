@@ -3,12 +3,7 @@
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Navbar } from "@/components/navbar/Navbar";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -65,10 +60,10 @@ export default function AdminSessionsPage() {
       setIsLoading(true);
       try {
         const res = await axios.get(
-          "http://localhost:5000/api/admin/sessions",
+          `${import.meta.env.VITE_API_URL}/api/admin/sessions`,
           {
             headers: { Authorization: `Bearer ${token}` },
-          }
+          },
         );
         setAllSessions(res.data);
       } catch (err) {
@@ -86,17 +81,17 @@ export default function AdminSessionsPage() {
     (session) =>
       session.tutor.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.student.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      session.subject.toLowerCase().includes(searchQuery.toLowerCase())
+      session.subject.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   const upcomingSessions = filteredSessions.filter(
-    (s) => s.status === "confirmed" || s.status === "pending"
+    (s) => s.status === "confirmed" || s.status === "pending",
   );
   const completedSessions = filteredSessions.filter(
-    (s) => s.status === "completed"
+    (s) => s.status === "completed",
   );
   const canceledSessions = filteredSessions.filter(
-    (s) => s.status === "canceled"
+    (s) => s.status === "canceled",
   );
 
   // Calculate stats

@@ -31,29 +31,28 @@ export default function TutorDashboardPage() {
   const [totalSessions, setTotalSessions] = useState(0);
   const [totalHours, setTotalHours] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
-  const [reviews, setReviews] = useState<any[]>([])
+  const [reviews, setReviews] = useState<any[]>([]);
 
   const token = localStorage.getItem("token");
-  const user = JSON.parse(localStorage.getItem("user"))
+  const user = JSON.parse(localStorage.getItem("user"));
 
   useEffect(() => {
     const fetchBookings = async () => {
       setIsLoading(true);
       try {
-        const res = await axios.get("http://localhost:5000/api/book/tutor", {
+        const res = await axios.get(`${import.meta.env.VITE_API_URL}/api/book/tutor`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
         });
         const reviewRes = await axios.get(
-          `http://localhost:5000/api/reviews/${user._id}`,
+          `${import.meta.env.VITE_API_URL}/api/reviews/${user._id}`,
           {
             headers: { Authorization: `Bearer ${token}` },
           },
         );
-       
-        
-        setReviews(reviewRes.data)
+
+        setReviews(reviewRes.data);
         // const avgRating = reviews.length
         //   ? (
         //       reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length
@@ -81,20 +80,18 @@ export default function TutorDashboardPage() {
       }
     };
 
-    
     if (token) {
       fetchBookings();
     }
   }, [token]);
 
-   const calculateAverageRating = () => {
-    if (reviews.length === 0) return 0
-    const sum = reviews.reduce((acc, review) => acc + review.rating, 0)
-    return (sum / reviews.length).toFixed(1)
-  }
+  const calculateAverageRating = () => {
+    if (reviews.length === 0) return 0;
+    const sum = reviews.reduce((acc, review) => acc + review.rating, 0);
+    return (sum / reviews.length).toFixed(1);
+  };
 
-
-  const averageRating = calculateAverageRating()
+  const averageRating = calculateAverageRating();
 
   const stats = [
     {

@@ -1,47 +1,61 @@
-"use client"
+"use client";
 
-import { useState, useMemo, useEffect } from "react"
-import { Navbar } from "@/components/navbar/Navbar"
-import { TutorCard } from "@/components/tutor-card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Slider } from "@/components/ui/slider"
-import { Card } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Search, Filter, Star, DollarSign, Users, TrendingUp, X } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { useState, useMemo, useEffect } from "react";
+import { Navbar } from "@/components/navbar/Navbar";
+import { TutorCard } from "@/components/tutor-card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+  Search,
+  Filter,
+  Star,
+  DollarSign,
+  Users,
+  TrendingUp,
+  X,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export default function TutorsPage() {
-  const [searchQuery, setSearchQuery] = useState("")
-  const [selectedSubject, setSelectedSubject] = useState<string>("all")
-  const [maxPrice, setMaxPrice] = useState([20])
-  const [minRating, setMinRating] = useState([0])
-  const [tutors, setTutors] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [showFilters, setShowFilters] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedSubject, setSelectedSubject] = useState<string>("all");
+  const [maxPrice, setMaxPrice] = useState([20]);
+  const [minRating, setMinRating] = useState([0]);
+  const [tutors, setTutors] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
 
   useEffect(() => {
     const fetchTutors = async () => {
       try {
-        const res = await fetch("http://localhost:5000/api/tutor/allTutors")
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/tutor/allTutors`);
 
         if (!res.ok) {
-          throw new Error("Failed to fetch tutors")
+          throw new Error("Failed to fetch tutors");
         }
 
-        const data = await res.json()
-        setTutors(data)
+        const data = await res.json();
+        setTutors(data);
       } catch (err: any) {
-        setError(err.message)
+        setError(err.message);
       } finally {
-        setLoading(false)
+        setLoading(false);
       }
-    }
+    };
 
-    fetchTutors()
-  }, [])
+    fetchTutors();
+  }, []);
 
   const filteredTutors = useMemo(() => {
     return tutors.filter((tutor) => {
@@ -49,57 +63,64 @@ export default function TutorsPage() {
         searchQuery === "" ||
         tutor.user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         tutor.subjects.some((subject: any) =>
-          subject.name.toLowerCase().includes(searchQuery.toLowerCase())
-        )
+          subject.name.toLowerCase().includes(searchQuery.toLowerCase()),
+        );
 
       const matchesSubject =
         selectedSubject === "all" ||
-        tutor.subjects.some((subject: any) => subject.name === selectedSubject)
+        tutor.subjects.some((subject: any) => subject.name === selectedSubject);
 
-      const matchesPrice = tutor.hourlyRate <= maxPrice[0]
-      const matchesRating = tutor.averageRating >= minRating[0]
+      const matchesPrice = tutor.hourlyRate <= maxPrice[0];
+      const matchesRating = tutor.averageRating >= minRating[0];
 
-      return matchesSearch && matchesSubject && matchesPrice && matchesRating
-    })
-  }, [tutors, searchQuery, selectedSubject, maxPrice, minRating])
+      return matchesSearch && matchesSubject && matchesPrice && matchesRating;
+    });
+  }, [tutors, searchQuery, selectedSubject, maxPrice, minRating]);
 
   const allSubjects = useMemo(() => {
-    const subjects = new Set<string>()
+    const subjects = new Set<string>();
     tutors.forEach((tutor) => {
       tutor.subjects.forEach((subject: any) => {
-        subjects.add(subject.name)
-      })
-    })
-    return Array.from(subjects).sort()
-  }, [tutors])
+        subjects.add(subject.name);
+      });
+    });
+    return Array.from(subjects).sort();
+  }, [tutors]);
 
   const activeFiltersCount = useMemo(() => {
-    let count = 0
-    if (selectedSubject !== "all") count++
-    if (maxPrice[0] < 20) count++
-    if (minRating[0] > 0) count++
-    return count
-  }, [selectedSubject, maxPrice, minRating])
+    let count = 0;
+    if (selectedSubject !== "all") count++;
+    if (maxPrice[0] < 20) count++;
+    if (minRating[0] > 0) count++;
+    return count;
+  }, [selectedSubject, maxPrice, minRating]);
 
   const clearFilters = () => {
-    setSelectedSubject("all")
-    setMaxPrice([20])
-    setMinRating([0])
-    setSearchQuery("")
-  }
+    setSelectedSubject("all");
+    setMaxPrice([20]);
+    setMinRating([0]);
+    setSearchQuery("");
+  };
 
   const stats = useMemo(() => {
     return {
       total: tutors.length,
-      avgRating: tutors.length > 0 
-        ? (tutors.reduce((sum, t) => sum + t.averageRating, 0) / tutors.length).toFixed(1)
-        : "0.0",
-      avgPrice: tutors.length > 0
-        ? (tutors.reduce((sum, t) => sum + t.hourlyRate, 0) / tutors.length).toFixed(2)
-        : "0.00",
-      subjects: allSubjects.length
-    }
-  }, [tutors, allSubjects])
+      avgRating:
+        tutors.length > 0
+          ? (
+              tutors.reduce((sum, t) => sum + t.averageRating, 0) /
+              tutors.length
+            ).toFixed(1)
+          : "0.0",
+      avgPrice:
+        tutors.length > 0
+          ? (
+              tutors.reduce((sum, t) => sum + t.hourlyRate, 0) / tutors.length
+            ).toFixed(2)
+          : "0.00",
+      subjects: allSubjects.length,
+    };
+  }, [tutors, allSubjects]);
 
   if (loading) {
     return (
@@ -112,7 +133,7 @@ export default function TutorsPage() {
           </div>
         </div>
       </div>
-    )
+    );
   }
 
   if (error) {
@@ -126,7 +147,7 @@ export default function TutorsPage() {
           </div>
         </div>
       </div>
-    )
+    );
   }
 
   return (
@@ -151,7 +172,9 @@ export default function TutorsPage() {
                 <Users className="h-5 w-5 text-blue-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-slate-900">{stats.total}</p>
+                <p className="text-2xl font-bold text-slate-900">
+                  {stats.total}
+                </p>
                 <p className="text-xs text-muted-foreground">Total Tutors</p>
               </div>
             </div>
@@ -163,7 +186,9 @@ export default function TutorsPage() {
                 <Star className="h-5 w-5 text-amber-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-slate-900">{stats.avgRating}</p>
+                <p className="text-2xl font-bold text-slate-900">
+                  {stats.avgRating}
+                </p>
                 <p className="text-xs text-muted-foreground">Avg Rating</p>
               </div>
             </div>
@@ -175,7 +200,9 @@ export default function TutorsPage() {
                 <DollarSign className="h-5 w-5 text-emerald-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-slate-900">${stats.avgPrice}</p>
+                <p className="text-2xl font-bold text-slate-900">
+                  ${stats.avgPrice}
+                </p>
                 <p className="text-xs text-muted-foreground">Avg Price/hr</p>
               </div>
             </div>
@@ -187,7 +214,9 @@ export default function TutorsPage() {
                 <TrendingUp className="h-5 w-5 text-purple-600" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-slate-900">{stats.subjects}</p>
+                <p className="text-2xl font-bold text-slate-900">
+                  {stats.subjects}
+                </p>
                 <p className="text-xs text-muted-foreground">Subjects</p>
               </div>
             </div>
@@ -205,7 +234,10 @@ export default function TutorsPage() {
                     Filters
                   </h2>
                   {activeFiltersCount > 0 && (
-                    <Badge variant="secondary" className="bg-primary/10 text-primary">
+                    <Badge
+                      variant="secondary"
+                      className="bg-primary/10 text-primary"
+                    >
                       {activeFiltersCount}
                     </Badge>
                   )}
@@ -226,7 +258,10 @@ export default function TutorsPage() {
               <div className="p-6 space-y-6">
                 {/* Search */}
                 <div>
-                  <Label htmlFor="search" className="text-sm font-semibold mb-3 block">
+                  <Label
+                    htmlFor="search"
+                    className="text-sm font-semibold mb-3 block"
+                  >
                     Search
                   </Label>
                   <div className="relative">
@@ -254,11 +289,20 @@ export default function TutorsPage() {
 
                 {/* Subject Filter */}
                 <div>
-                  <Label htmlFor="subject" className="text-sm font-semibold mb-3 block">
+                  <Label
+                    htmlFor="subject"
+                    className="text-sm font-semibold mb-3 block"
+                  >
                     Subject
                   </Label>
-                  <Select value={selectedSubject} onValueChange={setSelectedSubject}>
-                    <SelectTrigger id="subject" className="border-slate-200 focus:border-primary focus:ring-primary">
+                  <Select
+                    value={selectedSubject}
+                    onValueChange={setSelectedSubject}
+                  >
+                    <SelectTrigger
+                      id="subject"
+                      className="border-slate-200 focus:border-primary focus:ring-primary"
+                    >
                       <SelectValue placeholder="All subjects" />
                     </SelectTrigger>
                     <SelectContent>
@@ -275,16 +319,18 @@ export default function TutorsPage() {
                 {/* Price Filter */}
                 <div>
                   <Label className="text-sm font-semibold mb-3 block">
-                    Max Price: 
-                    <span className="ml-2 text-primary font-bold">${maxPrice[0]}/hour</span>
+                    Max Price:
+                    <span className="ml-2 text-primary font-bold">
+                      ${maxPrice[0]}/hour
+                    </span>
                   </Label>
-                  <Slider 
-                    value={maxPrice} 
-                    onValueChange={setMaxPrice} 
-                    max={20} 
-                    min={10} 
-                    step={0.5} 
-                    className="mt-3" 
+                  <Slider
+                    value={maxPrice}
+                    onValueChange={setMaxPrice}
+                    max={20}
+                    min={10}
+                    step={0.5}
+                    className="mt-3"
                   />
                   <div className="flex justify-between text-xs text-muted-foreground mt-3">
                     <span className="font-medium">$10</span>
@@ -295,18 +341,19 @@ export default function TutorsPage() {
                 {/* Rating Filter */}
                 <div>
                   <Label className="text-sm font-semibold mb-3 block">
-                    Minimum Rating: 
+                    Minimum Rating:
                     <span className="ml-2 text-primary font-bold">
-                      {minRating[0].toFixed(1)} <Star className="inline h-3 w-3 fill-amber-400 text-amber-400" />
+                      {minRating[0].toFixed(1)}{" "}
+                      <Star className="inline h-3 w-3 fill-amber-400 text-amber-400" />
                     </span>
                   </Label>
-                  <Slider 
-                    value={minRating} 
-                    onValueChange={setMinRating} 
-                    max={5} 
-                    min={0} 
-                    step={0.1} 
-                    className="mt-3" 
+                  <Slider
+                    value={minRating}
+                    onValueChange={setMinRating}
+                    max={5}
+                    min={0}
+                    step={0.1}
+                    className="mt-3"
                   />
                   <div className="flex justify-between text-xs text-muted-foreground mt-3">
                     <span className="font-medium">0</span>
@@ -323,13 +370,18 @@ export default function TutorsPage() {
             <div className="mb-6 flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">
-                  Showing <span className="font-semibold text-slate-900">{filteredTutors.length}</span> {filteredTutors.length === 1 ? "tutor" : "tutors"}
+                  Showing{" "}
+                  <span className="font-semibold text-slate-900">
+                    {filteredTutors.length}
+                  </span>{" "}
+                  {filteredTutors.length === 1 ? "tutor" : "tutors"}
                 </p>
                 {(searchQuery || activeFiltersCount > 0) && (
                   <p className="text-xs text-muted-foreground mt-1">
                     {searchQuery && `Searching for "${searchQuery}"`}
                     {searchQuery && activeFiltersCount > 0 && " with "}
-                    {activeFiltersCount > 0 && `${activeFiltersCount} filter${activeFiltersCount > 1 ? 's' : ''} active`}
+                    {activeFiltersCount > 0 &&
+                      `${activeFiltersCount} filter${activeFiltersCount > 1 ? "s" : ""} active`}
                   </p>
                 )}
               </div>
@@ -344,7 +396,10 @@ export default function TutorsPage() {
                 <Filter className="h-4 w-4 mr-2" />
                 Filters
                 {activeFiltersCount > 0 && (
-                  <Badge variant="secondary" className="ml-2 bg-primary/10 text-primary">
+                  <Badge
+                    variant="secondary"
+                    className="ml-2 bg-primary/10 text-primary"
+                  >
                     {activeFiltersCount}
                   </Badge>
                 )}
@@ -364,7 +419,9 @@ export default function TutorsPage() {
                   <div className="w-20 h-20 bg-gradient-to-br from-slate-100 to-slate-200 rounded-full flex items-center justify-center mx-auto mb-4">
                     <Search className="h-10 w-10 text-slate-400" />
                   </div>
-                  <h3 className="text-lg font-semibold text-slate-900 mb-2">No tutors found</h3>
+                  <h3 className="text-lg font-semibold text-slate-900 mb-2">
+                    No tutors found
+                  </h3>
                   <p className="text-muted-foreground mb-4">
                     We couldn't find any tutors matching your criteria.
                   </p>
@@ -379,5 +436,5 @@ export default function TutorsPage() {
         </div>
       </div>
     </div>
-  )
+  );
 }

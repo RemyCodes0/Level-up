@@ -1,66 +1,68 @@
-"use client"
+"use client";
 
 // import { useAuth } from "@/lib/auth-context"
-import { useNavigate } from "react-router-dom"
-import { useEffect, useState } from "react"
-import { Navbar } from "@/components/navbar/Navbar"
-import { Card, CardContent } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { MOCK_TUTORS } from "@/lib/mock-data"
-import { Search, Mail, MoreVertical } from "lucide-react"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import axios from "axios"
+import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Navbar } from "@/components/navbar/Navbar";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MOCK_TUTORS } from "@/lib/mock-data";
+import { Search, Mail, MoreVertical } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import axios from "axios";
 
 type User = {
-  _id: string
-  name: string
-  email: string
-  role: "admin" | "tutor" | "both" | "learner"
-  avatarUrl?: string
-}
+  _id: string;
+  name: string;
+  email: string;
+  role: "admin" | "tutor" | "both" | "learner";
+  avatarUrl?: string;
+};
 
 export default function AdminUsersPage() {
-  const [user, setUser] = useState(null)
-  const [allUsers, setAllUsers] = useState<User[]>([])
-  const router = useNavigate()
-  const [searchQuery, setSearchQuery] = useState("")
+  const [user, setUser] = useState(null);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const router = useNavigate();
+  const [searchQuery, setSearchQuery] = useState("");
 
+  useEffect(() => {
+    const storedUser = localStorage.getItem("user");
 
-
-  useEffect(()=>{
-  const storedUser = localStorage.getItem("user")
-
-    if(storedUser){
-      setUser(JSON.parse(storedUser))
+    if (storedUser) {
+      setUser(JSON.parse(storedUser));
     }
-  },[])
+  }, []);
 
-//   useEffect(() => {
-//     if (!user || user.role !== "admin") {
-//       router.push("/")
-//     }
-//   }, [user, router])
+  //   useEffect(() => {
+  //     if (!user || user.role !== "admin") {
+  //       router.push("/")
+  //     }
+  //   }, [user, router])
 
-//   if (!user || user.role !== "admin") {
-//     return null
-//   }
+  //   if (!user || user.role !== "admin") {
+  //     return null
+  //   }
 
-useEffect(()=>{
-  const fetchUsers = async()=>{
-  try{
-  const res = await axios.get("http://localhost:5000/api/auth/getUsers")
-  setAllUsers(res.data.user)
-  }catch(err){
-    console.error(err)
-  }
-  }
-  fetchUsers()
-
-},[])
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const res = await axios.get(`${import.meta.env.VITE_API_URL}/api/auth/getUsers`);
+        setAllUsers(res.data.user);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchUsers();
+  }, []);
 
   // const allUsers = [
   //   ...MOCK_TUTORS,
@@ -84,10 +86,12 @@ useEffect(()=>{
     (u) =>
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.email.toLowerCase().includes(searchQuery.toLowerCase()),
-  )
+  );
 
-  const tutors = filteredUsers.filter((u) => u.role === "tutor" || u.role === "both")
-  const learners = filteredUsers.filter((u) => u.role === "learner")
+  const tutors = filteredUsers.filter(
+    (u) => u.role === "tutor" || u.role === "both",
+  );
+  const learners = filteredUsers.filter((u) => u.role === "learner");
 
   const UserCard = ({ userData }: { userData: any }) => (
     <Card>
@@ -95,7 +99,10 @@ useEffect(()=>{
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Avatar className="h-12 w-12">
-              <AvatarImage src={userData.avatarUrl || "/placeholder.svg"} alt={userData.name} />
+              <AvatarImage
+                src={userData.avatarUrl || "/placeholder.svg"}
+                alt={userData.name}
+              />
               <AvatarFallback>{userData.name.charAt(0)}</AvatarFallback>
             </Avatar>
             <div>
@@ -119,20 +126,26 @@ useEffect(()=>{
               <DropdownMenuContent align="end">
                 <DropdownMenuItem>View Profile</DropdownMenuItem>
                 <DropdownMenuItem>Send Message</DropdownMenuItem>
-                <DropdownMenuItem className="text-destructive">Delete User</DropdownMenuItem>
+                <DropdownMenuItem className="text-destructive">
+                  Delete User
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </div>
       </CardContent>
     </Card>
-  )
+  );
 
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
       <div className="container mx-auto px-4 py-8">
-        <Button variant="ghost" onClick={() => router("/admin/dashboard")} className="mb-6">
+        <Button
+          variant="ghost"
+          onClick={() => router("/admin/dashboard")}
+          className="mb-6"
+        >
           ← Back to Dashboard
         </Button>
 
@@ -151,9 +164,13 @@ useEffect(()=>{
 
         <Tabs defaultValue="all" className="space-y-6">
           <TabsList>
-            <TabsTrigger value="all">All Users ({filteredUsers.length})</TabsTrigger>
+            <TabsTrigger value="all">
+              All Users ({filteredUsers.length})
+            </TabsTrigger>
             <TabsTrigger value="tutors">Tutors ({tutors.length})</TabsTrigger>
-            <TabsTrigger value="learners">Learners ({learners.length})</TabsTrigger>
+            <TabsTrigger value="learners">
+              Learners ({learners.length})
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="all" className="space-y-4">
@@ -176,5 +193,5 @@ useEffect(()=>{
         </Tabs>
       </div>
     </div>
-  )
+  );
 }

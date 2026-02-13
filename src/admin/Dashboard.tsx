@@ -50,20 +50,20 @@ export default function AdminDashboardPage() {
       try {
         // Fetch applications
         const applicationsRes = await axios.get(
-          "http://localhost:5000/api/tutor/applications",
+          `${import.meta.env.VITE_API_URL}/api/tutor/applications`,
           {
             headers: { Authorization: `Bearer ${token}` },
-          }
+          },
         );
         setApplications(applicationsRes.data);
 
         // Fetch all users (you'll need to create this endpoint)
         try {
           const usersRes = await axios.get(
-            "http://localhost:5000/api/admin/users",
+            `${import.meta.env.VITE_API_URL}/api/admin/users`,
             {
               headers: { Authorization: `Bearer ${token}` },
-            }
+            },
           );
           setAllUsers(usersRes.data);
         } catch (error) {
@@ -73,10 +73,10 @@ export default function AdminDashboardPage() {
         // Fetch all sessions (you'll need to create this endpoint)
         try {
           const sessionsRes = await axios.get(
-            "http://localhost:5000/api/admin/sessions",
+            `${import.meta.env.VITE_API_URL}/api/admin/sessions`,
             {
               headers: { Authorization: `Bearer ${token}` },
-            }
+            },
           );
           setAllSessions(sessionsRes.data);
         } catch (error) {
@@ -89,8 +89,6 @@ export default function AdminDashboardPage() {
       }
     };
 
-    
-
     if (token) {
       fetchAllData();
     }
@@ -102,10 +100,10 @@ export default function AdminDashboardPage() {
   const activeStudents = allUsers.filter((u) => u.role === "student").length;
   const totalSessions = allSessions.length;
   const confirmedSessions = allSessions.filter(
-    (s) => s.status === "confirmed"
+    (s) => s.status === "confirmed",
   ).length;
   const pendingApplications = applications.filter(
-    (app) => app.status === "pending"
+    (app) => app.status === "pending",
   ).length;
   const totalRevenue = allSessions
     .filter((s) => s.status === "confirmed")
