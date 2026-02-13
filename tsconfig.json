@@ -10,9 +10,9 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "strict": false,
-    "noEmitOnError": false,
-    "skipLibCheck": true,
+    "strict": false,           // disable all strict checks
+    "noEmitOnError": false,    // build even with errors
+    "skipLibCheck": true,      // skip checking node_modules
     "forceConsistentCasingInFileNames": false,
     "baseUrl": ".",
     "paths": {
