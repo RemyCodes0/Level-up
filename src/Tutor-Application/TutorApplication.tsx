@@ -114,7 +114,7 @@ export default function ApplyTutorPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const idInputRef = useRef<HTMLInputElement>(null);
   const [user, setUser] = useState<User | null>(null);
-
+const [loadingUser, setLoadingUser] = useState(true);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
@@ -125,7 +125,14 @@ export default function ApplyTutorPage() {
     if (storedUser) {
       setUser(JSON.parse(storedUser));
     }
+      setLoadingUser(false)
   }, []);
+
+useEffect(() => {
+  if (!loadingUser && user === null) {
+    router("/login");
+  }
+}, [user, loadingUser, router]);
 
   // Form fields
   const [bio, setBio] = useState("");
