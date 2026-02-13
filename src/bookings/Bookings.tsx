@@ -311,7 +311,7 @@ export default function BookingsPage() {
               )}
 
               <div className="flex flex-wrap gap-2">
-                <a href={`/tutors/${session.tutor._id}`}>
+                {/* <a href={`/tutors/${session.tutor._id}`}>
                   <Button
                     variant="outline"
                     size="sm"
@@ -319,7 +319,7 @@ export default function BookingsPage() {
                   >
                     View Tutor Profile
                   </Button>
-                </a>
+                </a> */}
                 {isPast && !session.hasReview && (
                   <Button
                     variant="outline"
@@ -342,7 +342,7 @@ export default function BookingsPage() {
                     Reviewed
                   </Button>
                 )}
-                {!isPast && (
+                {/* {!isPast && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -351,7 +351,7 @@ export default function BookingsPage() {
                     <XCircle className="mr-2 h-4 w-4" />
                     Cancel Booking
                   </Button>
-                )}
+                )} */}
               </div>
             </div>
           </div>

@@ -85,3 +85,36 @@ exports.getUser = async(req, res)=>{
         res.status(500).json({message: err})
     }
 }
+
+exports.updateUser = async (req, res) => {
+  const userId = req.params.id;
+
+  try {
+    
+    let user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    
+    const allowedFields = ["name", "email", "major", "year", "subjects", "password"];
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        user[field] = req.body[field];
+      }
+    });
+
+    const updatedUser = await user.save();
+
+    res.status(200).json({
+      _id: updatedUser._id,
+      name: updatedUser.name,
+      email: updatedUser.email,
+      role: updatedUser.role,
+      major: updatedUser.major,
+      year: updatedUser.year,
+      subjects: updatedUser.subjects,
+    });
+
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};

@@ -5,7 +5,7 @@ const Booking = require('../models/Booking');
 
 exports.getProfile = async(req,res)=>{
     try{
-        const tutor= await TutorApplication.findOne({_id: req.params.id}).populate("user", "name email");
+        const tutor= await TutorApplication.findOne({_id: req.params.id}).populate("user", "_id name email");
         if (!tutor) return res.status(404).json({message: 'tutor not found'})
         
             res.json({tutor})
@@ -82,6 +82,59 @@ exports.updateProfile = async (req, res)=>{
     }
 }
 
+
+exports.updateTutorProfile = async (req, res) => {
+  try {
+    const tutorApp = await TutorApplication.findOne({ user: req.user._id });
+    console.log(tutorApp)
+    if (!tutorApp) return res.status(404).json({ message: "Tutor application not found" });
+
+    if (req.body.bio) tutorApp.bio = req.body.bio;
+    if (req.body.subjects) {
+      try {
+        tutorApp.subjects = JSON.parse(req.body.subjects);
+      } catch (err) {
+        return res.status(400).json({ message: "Invalid format for subjects" });
+      }
+    }
+    if (req.body.experiences) tutorApp.experiences = req.body.experiences;
+    if (req.body.hourlyRate) tutorApp.hourlyRate = parseFloat(req.body.hourlyRate);
+    if (req.body.location) tutorApp.location = req.body.location;
+    if (req.body.teachingApproach) tutorApp.teachingApproach = req.body.teachingApproach;
+    if (req.body.teachingStyle) tutorApp.teachingStyle = req.body.teachingStyle;
+    if (req.body.studentBenefits) {
+      try {
+        tutorApp.studentBenefits = JSON.parse(req.body.studentBenefits);
+      } catch (err) {
+        return res.status(400).json({ message: "Invalid format for studentBenefits" });
+      }
+    }
+    if (req.body.gpa) tutorApp.gpa = parseFloat(req.body.gpa);
+    if (req.body.availability) {
+      try {
+        tutorApp.availability = JSON.parse(req.body.availability);
+      } catch (err) {
+        return res.status(400).json({ message: "Invalid format for availability" });
+      }
+    }
+
+if (req.files?.certificates) {
+  tutorApp.certificates = req.files.certificates.map(file => file.originalname); 
+}
+if (req.files?.idCard && req.files.idCard[0]) {
+  tutorApp.idCard = req.files.idCard[0].originalname;
+}
+
+
+    const updatedApp = await tutorApp.save();
+    res.json({ success: true, application: updatedApp });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: error.message || "Failed to update tutor profile" });
+  }
+};
+
+
 exports.getApplications = async(req, res) =>{
     try{
         const applications = await TutorApplication.find().populate("user", "name email")
@@ -91,37 +144,43 @@ exports.getApplications = async(req, res) =>{
     }
 }
 
-exports.apply =async(req,res) =>{
-    try{
-        const existing = await TutorApplication.findOne({user: req.user._id})
+exports.apply = async (req, res) => {
+  try {
+    const existing = await TutorApplication.findOne({ user: req.user._id });
+    if (existing && existing.status === "pending") {
+      return res.status(400).json({ message: "Application already pending" });
+    }
 
-        if(existing && existing.status == "pending"){
-            return res.status(400).json({message: "Application already pending"});
+    const certificates = req.files?.certificates?.map(file => file.path) || [];
+    const idCard = req.files?.idCard?.[0]?.path || null;
 
-        }
-    
-    const certificates = req.files?.certificates?.map(
-        file => file.path
-    );
-    const idCard = req.files?.idCard?.[0]?.path;
+    const subjects = req.body.subjects ? JSON.parse(req.body.subjects) : [];
+    const availability = req.body.availability ? JSON.parse(req.body.availability) : [];
+    const studentBenefits = req.body.studentBenefits ? JSON.parse(req.body.studentBenefits) : [];
+
     const app = await TutorApplication.create({
-        user: req.user._id,
-        bio: req.body.bio, 
-        subjects: JSON.parse(req.body.subjects),
-        experiences: req.body.experiences,
-        hourlyRate: req.body.hourlyRate,
-        certificates,
-        idCard,
-        gpa: req.body.gpa,
-        availability: JSON.parse(req.body.availability)
+      user: req.user._id,
+      bio: req.body.bio,
+      subjects,
+      experiences: req.body.experiences,
+      hourlyRate: parseFloat(req.body.hourlyRate),
+      gpa: parseFloat(req.body.gpa),
+      location: req.body.location || "",
+      teachingApproach: req.body.teachingApproach || "",
+      teachingStyle: req.body.teachingStyle || "",
+      studentBenefits,
+      certificates,
+      idCard,
+      availability,
     });
 
-    res.json({success: true, application: app})
+    res.json({ success: true, application: app });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message || "Failed to submit application" });
+  }
+};
 
-    }catch(err){
-        res.status(500).json({message: err.message})
-    }
-}
 
 
 exports.adminApprove= async(req,res)=>{

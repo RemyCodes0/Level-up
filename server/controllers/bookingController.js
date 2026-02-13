@@ -41,6 +41,14 @@ exports.getBookingByStudent = async (req, res) => {
 
     if (!booking || booking.length === 0)
       return res.status(404).json({ message: "No booking for this student" });
+
+    // for (let t of booking) {
+    //   if (booking.length > 0) {
+    //     t.totalSessions = booking.reduce((sum, r) => sum + 1, 0);
+    //   } else {
+    //     t.totalSessions = 0;
+    //   }
+    // }
     res.status(200).json(booking);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -98,24 +106,24 @@ exports.confirmBooking = async (req, res) => {
       { status: "confirmed" },
       { new: true },
     )
-    .populate({
+      .populate({
         path: "tutor",
         select: "bio user",
         populate: {
           path: "user",
           select: "name email",
         },
-      })  
+      })
       .populate({
-      path: "student",
-      select: "name email",
-    })
-    
+        path: "student",
+        select: "name email",
+      });
+
     if (!book) {
       return res.status(404).json({ message: "Booking not found" });
     }
 
-     await sendEmail({
+    await sendEmail({
       to: book.student.email,
       subject: "Your Booking is Confirmed!",
       text: `Hi ${book.student.name},\n\nYour booking with ${book.tutor.name} for ${book.subject} on ${book.slot.day} from ${book.slot.from} to ${book.slot.to} has been confirmed.\n\nThank you for booking!\n\n- Tutor Booking App`,
@@ -131,13 +139,12 @@ exports.confirmBooking = async (req, res) => {
   }
 };
 
-
 exports.declineBooking = async (req, res) => {
   try {
     const book = await Booking.findByIdAndUpdate(
       req.params.id,
       { status: "canceled" },
-      { new: true }
+      { new: true },
     )
       .populate({
         path: "tutor",
@@ -153,7 +160,6 @@ exports.declineBooking = async (req, res) => {
       return res.status(404).json({ message: "Booking not found" });
     }
 
- 
     await sendEmail({
       to: book.student.email,
       subject: "Your Booking Was Declined",

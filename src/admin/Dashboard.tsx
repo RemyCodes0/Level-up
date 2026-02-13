@@ -89,6 +89,8 @@ export default function AdminDashboardPage() {
       }
     };
 
+    
+
     if (token) {
       fetchAllData();
     }
