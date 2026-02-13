@@ -57,7 +57,7 @@ export default function TutorProfileEditPage() {
   
   // New fields
   const [location, setLocation] = useState("")
-  const [locationType, setLocationType] = useState<"campus" | "online" | "both">("both")
+  // const [locationType, setLocationType] = useState<"campus" | "online" | "both">("both")
   const [teachingApproach, setTeachingApproach] = useState("")
   const [teachingStyle, setTeachingStyle] = useState("")
   const [studentBenefits, setStudentBenefits] = useState<string[]>(DEFAULT_BENEFITS)
@@ -68,6 +68,8 @@ export default function TutorProfileEditPage() {
 
   const storedUser = localStorage.getItem("user")
   const user = storedUser ? JSON.parse(storedUser) : null
+
+  const token = localStorage.getItem("token")
 
   useEffect(() => {
     if (!user || (user.role !== "tutor")) {
@@ -86,7 +88,7 @@ export default function TutorProfileEditPage() {
           setHourlyRate(data.hourlyRate || "")
           setSelectedSubjects(data.subjects || [])
           setLocation(data.location || "")
-          setLocationType(data.locationType || "both")
+          // setLocationType(data.locationType || "both")
           setTeachingApproach(data.teachingApproach || "")
           setTeachingStyle(data.teachingStyle || "")
           setStudentBenefits(data.studentBenefits || DEFAULT_BENEFITS)
@@ -96,7 +98,7 @@ export default function TutorProfileEditPage() {
       }
     }
     fetchTutorData()
-  }, [user, navigate])
+  }, [])
 
   if (!user || (user.role !== "tutor")) {
     return null
@@ -123,34 +125,51 @@ export default function TutorProfileEditPage() {
   }
 
   const handleSave = async () => {
-    setLoading(true)
-    try {
-      // In production, this would be an API call
-      const updatedData = {
-        bio,
-        hourlyRate,
-        subjects: selectedSubjects,
-        location,
-        locationType,
-        teachingApproach,
-        teachingStyle,
-        studentBenefits,
-      }
+  setLoading(true)
+  try {
+    // Prepare the data to send to backend
+    const updatedData = new FormData()
+    updatedData.append("bio", bio)
+    updatedData.append("hourlyRate", hourlyRate.toString())
+    updatedData.append("subjects", JSON.stringify(selectedSubjects))
+    updatedData.append("location", location)
+    updatedData.append("teachingApproach", teachingApproach)
+    updatedData.append("teachingStyle", teachingStyle)
+    updatedData.append("studentBenefits", JSON.stringify(studentBenefits))
 
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      setSuccess(true)
-      setTimeout(() => {
-        setSuccess(false)
-        navigate("/tutor/dashboard")
-      }, 2000)
-    } catch (error) {
-      console.error("Failed to save:", error)
-    } finally {
-      setLoading(false)
-    }
+    // Optional: append files if you have a file input
+    // if (certificatesFiles.length > 0) {
+    //   certificatesFiles.forEach(file => updatedData.append("certificates", file))
+    // }
+    // if (idCardFile) updatedData.append("idCard", idCardFile)
+
+    // Make API request
+
+
+    const res = await axios.put(
+      `http://localhost:5000/api/tutor/updateProfile`,
+      updatedData,
+      {
+        headers: {
+          "Content-Type": "multipart/form-data",
+          Authorization: `Bearer ${token}`
+        }
+      }
+    )
+
+    setSuccess(true)
+    setTimeout(() => {
+      setSuccess(false)
+      navigate("/tutor/dashboard")
+    }, 2000)
+
+  } catch (error: any) {
+    console.error("Failed to save:", error)
+    alert(error.response?.data?.message || "Failed to save changes")
+  } finally {
+    setLoading(false)
   }
+}
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
@@ -341,14 +360,14 @@ export default function TutorProfileEditPage() {
                   <div className="h-8 w-8 rounded-lg bg-green-500/10 flex items-center justify-center">
                     <MapPin className="h-5 w-5 text-green-600" />
                   </div>
-                  <CardTitle className="text-xl">Location & Session Type</CardTitle>
+                  <CardTitle className="text-xl">Location</CardTitle>
                 </div>
                 <CardDescription>Specify where you prefer to teach</CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="space-y-3">
-                  <Label className="text-sm font-semibold">Session Type</Label>
-                  <RadioGroup value={locationType} onValueChange={(value: any) => setLocationType(value)}>
+                  {/* <Label className="text-sm font-semibold">Session Type</Label> */}
+                  {/* <RadioGroup value={locationType} onValueChange={(value: any) => setLocationType(value)}>
                     <div className="grid grid-cols-3 gap-3">
                       <div className="flex items-center space-x-2 p-3 rounded-lg border-2 hover:border-green-300 transition-colors cursor-pointer">
                         <RadioGroupItem value="campus" id="campus-edit" />
@@ -369,7 +388,7 @@ export default function TutorProfileEditPage() {
                         </Label>
                       </div>
                     </div>
-                  </RadioGroup>
+                  </RadioGroup> */}
                 </div>
 
                 <div className="space-y-2">

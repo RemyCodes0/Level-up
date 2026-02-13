@@ -99,7 +99,7 @@ export default function ApplyTutorPage() {
   
   // New fields
   const [location, setLocation] = useState("")
-  const [locationType, setLocationType] = useState<"campus" | "online" | "both">("both")
+  // const [locationType, setLocationType] = useState<"campus" | "online" | "both">("both")
   const [teachingApproach, setTeachingApproach] = useState("")
   const [teachingStyle, setTeachingStyle] = useState("")
   const [studentBenefits, setStudentBenefits] = useState<string[]>(DEFAULT_BENEFITS)
@@ -158,7 +158,7 @@ export default function ApplyTutorPage() {
     formData.append("hourlyRate", hourlyRate)
     formData.append("gpa", gpa)
     formData.append("location", location)
-    formData.append("locationType", locationType)
+    // formData.append("locationType", locationType)
     formData.append("teachingApproach", teachingApproach)
     formData.append("teachingStyle", teachingStyle)
     formData.append("subjects", JSON.stringify(subjects))
@@ -446,8 +446,8 @@ export default function ApplyTutorPage() {
                   </div>
 
                   <div className="space-y-3">
-                    <Label className="text-sm font-semibold">Session Type *</Label>
-                    <RadioGroup value={locationType} onValueChange={(value: any) => setLocationType(value)}>
+                    {/* <Label className="text-sm font-semibold">Session Type *</Label> */}
+                    {/* <RadioGroup value={locationType} onValueChange={(value: any) => setLocationType(value)}>
                       <div className="grid grid-cols-3 gap-3">
                         <div className="flex items-center space-x-2 p-3 rounded-lg border-2 hover:border-green-300 transition-colors cursor-pointer">
                           <RadioGroupItem value="campus" id="campus" />
@@ -468,7 +468,7 @@ export default function ApplyTutorPage() {
                           </Label>
                         </div>
                       </div>
-                    </RadioGroup>
+                    </RadioGroup> */}
                   </div>
 
                   <div className="space-y-2">

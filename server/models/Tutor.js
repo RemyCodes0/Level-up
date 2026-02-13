@@ -17,9 +17,20 @@ const TutorApplicationSchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
+    location:{
+      type: String
+    },
+    teachingApproach:{
+      type:String
+    },
+    teachingStyle:{
+      type: String
+    },
+    studentBenefits:[{type: String}],
     certificates: [{ type: String }],
     idCard: { type: String },
     gpa: { type: Number },
+  
     availability: [{ day: String, from: String, to: String }],
     status: {
       type: String,

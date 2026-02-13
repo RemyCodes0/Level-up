@@ -13,6 +13,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { motion } from "framer-motion"
+import axios from "axios"
 import {
   User,
   Mail,
@@ -24,7 +25,8 @@ import {
   BookOpen,
   Calendar,
   Award,
-  LogOut
+  LogOut,
+  AlertCircle
 } from "lucide-react"
 
 export default function ProfilePage() {
@@ -34,9 +36,15 @@ export default function ProfilePage() {
   const [email, setEmail] = useState("")
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
+  const [error, setError] = useState(false)
+  const [statsLoading, setStatsLoading] = useState(true)
+  const [totalSessions, setTotalSessions] = useState(0)
+  const [thisMonthSessions, setThisMonthSessions] = useState(0)
+  const [completedSessions, setCompletedSessions] = useState(0)
 
   const stored = localStorage.getItem("user")
   const user = stored ? JSON.parse(stored) : null
+  const token = localStorage.getItem("token")
 
   useEffect(() => {
     if (!loading && !user) router("/login")
@@ -44,7 +52,45 @@ export default function ProfilePage() {
       setFullName(user.name || user.fullName)
       setEmail(user.email)
     }
-  }, [loading, user, router])
+  }, [loading])
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      if (!token) return
+      
+      setStatsLoading(true)
+      try {
+        const res = await axios.get(`http://localhost:5000/api/book/student`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+        
+        const bookings = res.data
+        setTotalSessions(bookings.length)
+        
+        // Calculate sessions this month
+        const now = new Date()
+        const thisMonth = bookings.filter(b => {
+          const bookingDate = new Date(b.date)
+          return bookingDate.getMonth() === now.getMonth() && 
+                 bookingDate.getFullYear() === now.getFullYear()
+        }).length
+        setThisMonthSessions(thisMonth)
+        
+        // Calculate completed sessions
+        const completed = bookings.filter(b => b.status === "completed").length
+        setCompletedSessions(completed)
+        
+      } catch (error) {
+        console.error("Error fetching stats:", error)
+      } finally {
+        setStatsLoading(false)
+      }
+    }
+    
+    fetchStats()
+  }, [token])
 
   if (loading)
     return (
@@ -58,19 +104,41 @@ export default function ProfilePage() {
 
   if (!user) return null
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setSaving(true)
+    setError(false)
 
-    setTimeout(() => {
+    try {
+      const res = await axios.put(
+        `http://localhost:5000/api/auth/${user._id}`,
+        {
+          name: fullName,
+          email: email,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      )
+
       // Update localStorage with new values
-      const updatedUser = { ...user, name: fullName, email }
-      localStorage.setItem("user", JSON.stringify(updatedUser))
-      
+      localStorage.setItem("user", JSON.stringify(res.data))
+
       setSaving(false)
       setSuccess(true)
+
+      // Hide success message after 3 seconds
       setTimeout(() => setSuccess(false), 3000)
-    }, 1000)
+    } catch (error) {
+      setSaving(false)
+      setError(true)
+      console.error("Update failed:", error)
+      
+      // Hide error message after 5 seconds
+      setTimeout(() => setError(false), 5000)
+    }
   }
 
   const handleLogout = () => {
@@ -126,10 +194,27 @@ export default function ProfilePage() {
             exit={{ opacity: 0 }}
             className="mb-6"
           >
-            <Alert className="bg-gradient-to-r from-green-50 to-emerald-50 border-green-200 shadow-lg">
-              <CheckCircle2 className="h-5 w-5 text-green-600" />
-              <AlertDescription className="text-green-800 font-medium">
+            <Alert className="bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-950/50 dark:to-emerald-950/50 border-green-200 dark:border-green-800 shadow-lg">
+              <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
+              <AlertDescription className="text-green-800 dark:text-green-200 font-medium">
                 Profile updated successfully!
+              </AlertDescription>
+            </Alert>
+          </motion.div>
+        )}
+
+        {/* Error Alert */}
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="mb-6"
+          >
+            <Alert className="bg-gradient-to-r from-red-50 to-rose-50 dark:from-red-950/50 dark:to-rose-950/50 border-red-200 dark:border-red-800 shadow-lg">
+              <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+              <AlertDescription className="text-red-800 dark:text-red-200 font-medium">
+                Failed to update profile. Please try again.
               </AlertDescription>
             </Alert>
           </motion.div>
@@ -163,8 +248,8 @@ export default function ProfilePage() {
                   </div>
 
                   {/* User Info */}
-                  <h2 className="text-2xl font-bold mb-1">{user.name || user.fullName}</h2>
-                  <p className="text-sm text-muted-foreground mb-4">{user.email}</p>
+                  <h2 className="text-2xl font-bold mb-1">{fullName}</h2>
+                  <p className="text-sm text-muted-foreground mb-4">{email}</p>
                   
                   {/* Role Badge */}
                   <Badge 
@@ -185,7 +270,11 @@ export default function ProfilePage() {
                         </div>
                         <span className="text-sm font-medium">Total Sessions</span>
                       </div>
-                      <span className="text-lg font-bold text-blue-600 dark:text-blue-400">12</span>
+                      {statsLoading ? (
+                        <div className="h-6 w-8 bg-blue-200/50 dark:bg-blue-800/30 rounded animate-pulse" />
+                      ) : (
+                        <span className="text-lg font-bold text-blue-600 dark:text-blue-400">{totalSessions}</span>
+                      )}
                     </div>
 
                     <div className="flex items-center justify-between p-3 rounded-lg bg-purple-50 dark:bg-purple-950/30">
@@ -195,7 +284,11 @@ export default function ProfilePage() {
                         </div>
                         <span className="text-sm font-medium">This Month</span>
                       </div>
-                      <span className="text-lg font-bold text-purple-600 dark:text-purple-400">3</span>
+                      {statsLoading ? (
+                        <div className="h-6 w-8 bg-purple-200/50 dark:bg-purple-800/30 rounded animate-pulse" />
+                      ) : (
+                        <span className="text-lg font-bold text-purple-600 dark:text-purple-400">{thisMonthSessions}</span>
+                      )}
                     </div>
 
                     <div className="flex items-center justify-between p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30">
@@ -203,9 +296,13 @@ export default function ProfilePage() {
                         <div className="h-8 w-8 rounded-lg bg-amber-500/20 flex items-center justify-center">
                           <Award className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                         </div>
-                        <span className="text-sm font-medium">Achievements</span>
+                        <span className="text-sm font-medium">Completed</span>
                       </div>
-                      <span className="text-lg font-bold text-amber-600 dark:text-amber-400">5</span>
+                      {statsLoading ? (
+                        <div className="h-6 w-8 bg-amber-200/50 dark:bg-amber-800/30 rounded animate-pulse" />
+                      ) : (
+                        <span className="text-lg font-bold text-amber-600 dark:text-amber-400">{completedSessions}</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -241,6 +338,7 @@ export default function ProfilePage() {
                         onChange={(e) => setFullName(e.target.value)}
                         placeholder="Enter your full name"
                         className="h-12 pl-4 border-2 focus:border-primary transition-colors"
+                        required
                       />
                     </div>
                   </div>
@@ -259,6 +357,7 @@ export default function ProfilePage() {
                         onChange={(e) => setEmail(e.target.value)}
                         placeholder="your-email@mail.aub.edu"
                         className="h-12 pl-4 border-2 focus:border-primary transition-colors"
+                        required
                       />
                     </div>
                   </div>
@@ -311,32 +410,6 @@ export default function ProfilePage() {
                 </form>
               </CardContent>
             </Card>
-
-            {/* Additional Settings Card */}
-            <motion.div variants={itemVariants}>
-              <Card className="mt-6 border-none shadow-lg">
-                <CardHeader>
-                  <CardTitle className="text-lg">Account Actions</CardTitle>
-                  <CardDescription>Manage your account settings</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <Button 
-                    variant="outline" 
-                    className="w-full justify-start h-11 hover:bg-blue-50 hover:border-blue-300 transition-colors"
-                  >
-                    <Mail className="mr-2 h-4 w-4" />
-                    Change Password
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    className="w-full justify-start h-11 hover:bg-amber-50 hover:border-amber-300 transition-colors"
-                  >
-                    <Shield className="mr-2 h-4 w-4" />
-                    Privacy Settings
-                  </Button>
-                </CardContent>
-              </Card>
-            </motion.div>
           </motion.div>
         </motion.div>
       </div>

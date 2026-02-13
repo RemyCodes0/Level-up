@@ -15,6 +15,25 @@ exports.getReviewsByTutor = async (req, res) => {
   }
 };
 
+exports.getReviewsByUser = async (req, res) => {
+  try {
+    console.log("=== getReviewsByUser Debug ===");
+    console.log("req.user:", req.user);
+    console.log("req.user._id:", req.user._id);
+    
+    const reviews = await Review.find({ tutor: req.user._id })
+      .populate("student", "name email")
+      .sort({ createdAt: -1 });
+
+    console.log("Found reviews:", reviews.length);
+    
+    res.status(200).json(reviews);
+  } catch (err) {
+    console.error("Error in getReviewsByUser:", err);
+    res.status(500).json({ message: err.message, stack: err.stack });
+  }
+};
+
 exports.addReview = async (req, res) => {
   try {
     const { tutorId } = req.params;
@@ -30,7 +49,7 @@ exports.addReview = async (req, res) => {
         .json({ message: "You have already reviewed this tutor" });
     }
 
-     const booking = await Booking.findOne({
+    const booking = await Booking.findOne({
       tutor: tutorId,
       student: req.user._id,
       status: { $in: ["pending", "confirmed", "completed"] }
@@ -55,5 +74,3 @@ exports.addReview = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
-

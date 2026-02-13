@@ -60,12 +60,14 @@ export default function TutorProfilePage() {
       try {
         const res = await axios.get(`http://localhost:5000/api/reviews/${id}`)
         setReviews(res.data)
+      
       } catch (err) {
         console.error(err)
       }
     }
     fetchReviews()
   }, [id])
+  
 
   // Submit a new review
   const submitReview = async () => {
@@ -233,105 +235,138 @@ export default function TutorProfilePage() {
                   </h2>
                   <p className="text-muted-foreground leading-relaxed text-base">{tutor.bio}</p>
                 </div>
+
+                {/* Experience */}
+                {tutor.experiences && (
+                  <>
+                    <Separator className="my-6" />
+                    <div>
+                      <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                        <Award className="h-6 w-6 text-primary" />
+                        Experience
+                      </h2>
+                      <p className="text-muted-foreground leading-relaxed text-base">{tutor.experiences}</p>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
 
-            {/* Teaching Approach */}
-            <Card className="border-0 shadow-lg bg-white/80 backdrop-blur">
-              <CardHeader className="bg-gradient-to-r from-slate-50 to-blue-50">
-                <CardTitle className="flex items-center gap-2">
-                  <Award className="h-6 w-6 text-primary" />
-                  My Teaching Approach
-                </CardTitle>
-                <CardDescription>What you can expect from our sessions</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6 pt-6">
-                <div className="p-4 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100">
-                  <h3 className="font-semibold mb-2 flex items-center gap-2">
-                    <BookOpen className="h-5 w-5 text-primary" />
-                    Teaching Style
-                  </h3>
-                  <p className="text-muted-foreground leading-relaxed">
-                    I focus on building strong fundamentals and helping students develop problem-solving skills 
-                    through interactive sessions and real-world examples.
-                  </p>
-                </div>
+            {/* Teaching Approach - Only show if data exists */}
+            {(tutor.teachingApproach || tutor.teachingStyle || tutor.studentBenefits?.length > 0 || tutor.location) && (
+              <Card className="border-0 shadow-lg bg-white/80 backdrop-blur">
+                <CardHeader className="bg-gradient-to-r from-slate-50 to-blue-50">
+                  <CardTitle className="flex items-center gap-2">
+                    <Award className="h-6 w-6 text-primary" />
+                    My Teaching Approach
+                  </CardTitle>
+                  <CardDescription>What you can expect from our sessions</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6 pt-6">
+                  {/* Teaching Approach */}
+                  {tutor.teachingApproach && (
+                    <div className="p-4 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100">
+                      <h3 className="font-semibold mb-2 flex items-center gap-2">
+                        <Award className="h-5 w-5 text-primary" />
+                        Teaching Approach
+                      </h3>
+                      <p className="text-muted-foreground leading-relaxed">
+                        {tutor.teachingApproach}
+                      </p>
+                    </div>
+                  )}
 
-                <div>
-                  <h3 className="font-semibold mb-4 flex items-center gap-2 text-lg">
-                    <CheckCircle2 className="h-5 w-5 text-primary" />
-                    What You'll Get
-                  </h3>
-                  <div className="grid md:grid-cols-2 gap-3">
-                    {[
-                      "Personalized lesson plans based on your goals",
-                      "Practice problems with detailed explanations",
-                      "Exam preparation strategies",
-                      "Flexible scheduling options",
-                      "Follow-up resources after sessions",
-                      "On-campus or online sessions"
-                    ].map((benefit, index) => (
-                      <div key={index} className="flex items-start gap-3 p-3 rounded-lg hover:bg-slate-50 transition-colors">
-                        <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
-                        <span className="text-sm text-slate-700">{benefit}</span>
+                  {/* Teaching Style */}
+                  {tutor.teachingStyle && (
+                    <div className="p-4 rounded-lg bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-100">
+                      <h3 className="font-semibold mb-2 flex items-center gap-2">
+                        <BookOpen className="h-5 w-5 text-purple-600" />
+                        Teaching Style
+                      </h3>
+                      <p className="text-muted-foreground leading-relaxed">
+                        {tutor.teachingStyle}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Student Benefits */}
+                  {tutor.studentBenefits && tutor.studentBenefits.length > 0 && (
+                    <div>
+                      <h3 className="font-semibold mb-4 flex items-center gap-2 text-lg">
+                        <CheckCircle2 className="h-5 w-5 text-primary" />
+                        What You'll Get
+                      </h3>
+                      <div className="grid md:grid-cols-2 gap-3">
+                        {tutor.studentBenefits.map((benefit: string, index: number) => (
+                          <div key={index} className="flex items-start gap-3 p-3 rounded-lg hover:bg-slate-50 transition-colors">
+                            <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+                            <span className="text-sm text-slate-700">{benefit}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Session Location */}
+                  {tutor.location && (
+                    <>
+                      {(tutor.teachingApproach || tutor.teachingStyle || tutor.studentBenefits?.length > 0) && <Separator />}
+                      <div className="flex items-start gap-3 p-4 rounded-lg bg-amber-50 border border-amber-200">
+                        <MapPin className="h-5 w-5 text-amber-600 mt-0.5" />
+                        <div>
+                          <h3 className="font-semibold mb-1 text-amber-900">Session Locations</h3>
+                          <p className="text-sm text-amber-700">
+                            {tutor.location}
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Availability */}
+            {tutor.availability && tutor.availability.length > 0 && (
+              <Card className="border-0 shadow-lg bg-white/80 backdrop-blur">
+                <CardHeader className="bg-gradient-to-r from-slate-50 to-blue-50">
+                  <CardTitle className="flex items-center gap-2">
+                    <Clock className="h-6 w-6 text-primary" />
+                    Weekly Availability
+                  </CardTitle>
+                  <CardDescription>
+                    Times when {tutor.user.name.split(" ")[0]} is available for sessions
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-6">
+                  <div className="space-y-3">
+                    {tutor.availability.map((day: any, index: number) => (
+                      <div 
+                        key={day.day} 
+                        className="flex items-center gap-4 p-4 rounded-lg bg-gradient-to-r from-slate-50 to-blue-50 border border-slate-200 hover:border-primary/50 transition-colors"
+                      >
+                        <div className="w-28 font-semibold text-slate-900">{day.day}</div>
+                        <div className="flex-1">
+                          <Badge 
+                            variant="outline" 
+                            className="text-sm bg-white border-primary/20 text-primary px-3 py-1"
+                          >
+                            <Clock className="h-3 w-3 mr-1.5" />
+                            {day.from} - {day.to}
+                          </Badge>
+                        </div>
                       </div>
                     ))}
                   </div>
-                </div>
-
-                <Separator />
-
-                <div className="flex items-start gap-3 p-4 rounded-lg bg-amber-50 border border-amber-200">
-                  <MapPin className="h-5 w-5 text-amber-600 mt-0.5" />
-                  <div>
-                    <h3 className="font-semibold mb-1 text-amber-900">Session Locations</h3>
-                    <p className="text-sm text-amber-700">
-                      On-campus (AUB) or online via Zoom - your choice!
+                  <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200">
+                    <p className="text-sm text-blue-700">
+                      <span className="font-semibold">Note:</span> Availability may vary during exam periods. 
+                      Please message to confirm specific times.
                     </p>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Availability */}
-            <Card className="border-0 shadow-lg bg-white/80 backdrop-blur">
-              <CardHeader className="bg-gradient-to-r from-slate-50 to-blue-50">
-                <CardTitle className="flex items-center gap-2">
-                  <Clock className="h-6 w-6 text-primary" />
-                  Weekly Availability
-                </CardTitle>
-                <CardDescription>
-                  Times when {tutor.user.name.split(" ")[0]} is available for sessions
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="pt-6">
-                <div className="space-y-3">
-                  {tutor.availability.map((day: any, index: number) => (
-                    <div 
-                      key={day.day} 
-                      className="flex items-center gap-4 p-4 rounded-lg bg-gradient-to-r from-slate-50 to-blue-50 border border-slate-200 hover:border-primary/50 transition-colors"
-                    >
-                      <div className="w-28 font-semibold text-slate-900">{day.day}</div>
-                      <div className="flex-1">
-                        <Badge 
-                          variant="outline" 
-                          className="text-sm bg-white border-primary/20 text-primary px-3 py-1"
-                        >
-                          <Clock className="h-3 w-3 mr-1.5" />
-                          {day.from} - {day.to}
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200">
-                  <p className="text-sm text-blue-700">
-                    <span className="font-semibold">Note:</span> Availability may vary during exam periods. 
-                    Please message to confirm specific times.
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Reviews Section */}
             <Card className="border-0 shadow-lg bg-white/80 backdrop-blur">

@@ -11,17 +11,17 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { 
-  DollarSign, 
-  Calendar, 
-  Clock, 
-  TrendingUp, 
-  Users, 
+import {
+  DollarSign,
+  Calendar,
+  Clock,
+  TrendingUp,
+  Users,
   MapPin,
   ChevronRight,
   BookOpen,
   Award,
-  Activity
+  Activity,
 } from "lucide-react";
 import axios from "axios";
 
@@ -31,8 +31,10 @@ export default function TutorDashboardPage() {
   const [totalSessions, setTotalSessions] = useState(0);
   const [totalHours, setTotalHours] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [reviews, setReviews] = useState<any[]>([])
 
   const token = localStorage.getItem("token");
+  const user = JSON.parse(localStorage.getItem("user"))
 
   useEffect(() => {
     const fetchBookings = async () => {
@@ -43,7 +45,21 @@ export default function TutorDashboardPage() {
             Authorization: `Bearer ${token}`,
           },
         });
+        const reviewRes = await axios.get(
+          `http://localhost:5000/api/reviews/${user._id}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+       
         
+        setReviews(reviewRes.data)
+        // const avgRating = reviews.length
+        //   ? (
+        //       reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length
+        //     ).toFixed(1)
+        //   : 0;
+        // setRating(avgRating);
         const total = res.data
           .filter((b) => b.status === "confirmed")
           .reduce((acc, b) => acc + b.totalAmount, 0);
@@ -65,10 +81,20 @@ export default function TutorDashboardPage() {
       }
     };
 
+    
     if (token) {
       fetchBookings();
     }
   }, [token]);
+
+   const calculateAverageRating = () => {
+    if (reviews.length === 0) return 0
+    const sum = reviews.reduce((acc, review) => acc + review.rating, 0)
+    return (sum / reviews.length).toFixed(1)
+  }
+
+
+  const averageRating = calculateAverageRating()
 
   const stats = [
     {
@@ -79,7 +105,7 @@ export default function TutorDashboardPage() {
       trendUp: true,
       bgGradient: "from-emerald-500 to-teal-600",
       iconBg: "bg-emerald-100",
-      iconColor: "text-emerald-600"
+      iconColor: "text-emerald-600",
     },
     {
       title: "Total Sessions",
@@ -89,7 +115,7 @@ export default function TutorDashboardPage() {
       trendUp: true,
       bgGradient: "from-blue-500 to-indigo-600",
       iconBg: "bg-blue-100",
-      iconColor: "text-blue-600"
+      iconColor: "text-blue-600",
     },
     {
       title: "Hours Taught",
@@ -99,18 +125,18 @@ export default function TutorDashboardPage() {
       trendUp: true,
       bgGradient: "from-purple-500 to-pink-600",
       iconBg: "bg-purple-100",
-      iconColor: "text-purple-600"
+      iconColor: "text-purple-600",
     },
-    {
-      title: "Success Rate",
-      value: "98%",
-      icon: Award,
-      trend: "+2% this month",
-      trendUp: true,
-      bgGradient: "from-orange-500 to-red-600",
-      iconBg: "bg-orange-100",
-      iconColor: "text-orange-600"
-    },
+    // {
+    //   title: "Rate",
+    //   value: averageRating,
+    //   icon: Award,
+    //   trend: "+2% this month",
+    //   trendUp: true,
+    //   bgGradient: "from-orange-500 to-red-600",
+    //   iconBg: "bg-orange-100",
+    //   iconColor: "text-orange-600",
+    // },
   ];
 
   const quickActions = [
@@ -120,7 +146,7 @@ export default function TutorDashboardPage() {
       href: "/tutor/profile",
       description: "Update your information",
       color: "text-blue-600",
-      bgColor: "bg-blue-50 hover:bg-blue-100"
+      bgColor: "bg-blue-50 hover:bg-blue-100",
     },
     {
       title: "Manage Availability",
@@ -128,7 +154,7 @@ export default function TutorDashboardPage() {
       href: "/tutor/availability",
       description: "Set your schedule",
       color: "text-purple-600",
-      bgColor: "bg-purple-50 hover:bg-purple-100"
+      bgColor: "bg-purple-50 hover:bg-purple-100",
     },
     {
       title: "View Sessions",
@@ -136,7 +162,7 @@ export default function TutorDashboardPage() {
       href: "/tutor/sessions",
       description: "See all bookings",
       color: "text-emerald-600",
-      bgColor: "bg-emerald-50 hover:bg-emerald-100"
+      bgColor: "bg-emerald-50 hover:bg-emerald-100",
     },
   ];
 
@@ -161,7 +187,9 @@ export default function TutorDashboardPage() {
           <div className="flex items-center justify-center h-96">
             <div className="flex flex-col items-center gap-4">
               <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-              <p className="text-gray-600 font-medium">Loading your dashboard...</p>
+              <p className="text-gray-600 font-medium">
+                Loading your dashboard...
+              </p>
             </div>
           </div>
         </div>
@@ -172,25 +200,29 @@ export default function TutorDashboardPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/30">
       <Navbar />
-      
+
       <div className="container mx-auto px-4 py-8">
         {/* Welcome Header */}
         <div className="mb-8 animate-fade-in">
           <h1 className="text-4xl font-bold bg-gradient-to-r from-gray-900 via-blue-800 to-purple-800 bg-clip-text text-transparent mb-2">
             Tutor Dashboard
           </h1>
-          <p className="text-gray-600 text-lg">Track your performance and manage your sessions</p>
+          <p className="text-gray-600 text-lg">
+            Track your performance and manage your sessions
+          </p>
         </div>
 
         {/* Stats Grid */}
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           {stats.map((stat, index) => (
-            <Card 
-              key={index} 
+            <Card
+              key={index}
               className="relative overflow-hidden border-0 shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1 group"
             >
-              <div className={`absolute inset-0 bg-gradient-to-br ${stat.bgGradient} opacity-0 group-hover:opacity-5 transition-opacity duration-300`} />
-              
+              <div
+                className={`absolute inset-0 bg-gradient-to-br ${stat.bgGradient} opacity-0 group-hover:opacity-5 transition-opacity duration-300`}
+              />
+
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium text-gray-600">
                   {stat.title}
@@ -199,15 +231,15 @@ export default function TutorDashboardPage() {
                   <stat.icon className={`h-5 w-5 ${stat.iconColor}`} />
                 </div>
               </CardHeader>
-              
+
               <CardContent>
                 <div className="text-3xl font-bold text-gray-900 mb-1">
                   {stat.value}
                 </div>
-                <div className="flex items-center gap-1 text-sm">
+                {/* <div className="flex items-center gap-1 text-sm">
                   <TrendingUp className="h-3 w-3 text-emerald-600" />
                   <span className="text-emerald-600 font-medium">{stat.trend}</span>
-                </div>
+                </div> */}
               </CardContent>
             </Card>
           ))}
@@ -221,7 +253,9 @@ export default function TutorDashboardPage() {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle className="text-2xl">Upcoming Sessions</CardTitle>
+                    <CardTitle className="text-2xl">
+                      Upcoming Sessions
+                    </CardTitle>
                     <CardDescription className="mt-1">
                       Your scheduled tutoring sessions
                     </CardDescription>
@@ -231,7 +265,7 @@ export default function TutorDashboardPage() {
                   </Badge>
                 </div>
               </CardHeader>
-              
+
               <CardContent>
                 <div className="space-y-3">
                   {upcomingSessions.length > 0 ? (
@@ -241,7 +275,7 @@ export default function TutorDashboardPage() {
                         className="group relative p-5 border-2 border-gray-100 rounded-xl hover:border-blue-200 hover:shadow-md transition-all duration-300 bg-white"
                       >
                         {/* Status Badge */}
-                        <Badge 
+                        <Badge
                           className={`absolute top-4 right-4 ${getStatusColor(session.status)} border`}
                         >
                           {session.status}
@@ -258,11 +292,11 @@ export default function TutorDashboardPage() {
                             <div className="font-semibold text-lg text-gray-900 mb-1">
                               {session.student.name}
                             </div>
-                            
+
                             <div className="text-sm font-medium text-blue-600 mb-3">
                               {session.subject}
                             </div>
-                            
+
                             <div className="flex flex-wrap gap-4 text-sm text-gray-600">
                               <span className="flex items-center gap-1.5">
                                 <Calendar className="h-4 w-4 text-gray-400" />
@@ -280,24 +314,28 @@ export default function TutorDashboardPage() {
                           </div>
 
                           {/* Action Button */}
-                          <a href="/tutor/sessions">
-                            <Button 
-                              variant="outline" 
+                          {/* <a href="/tutor/sessions">
+                            <Button
+                              variant="outline"
                               size="sm"
                               className="opacity-0 group-hover:opacity-100 transition-opacity"
                             >
                               Details
                               <ChevronRight className="h-4 w-4 ml-1" />
                             </Button>
-                          </a>
+                          </a> */}
                         </div>
                       </div>
                     ))
                   ) : (
                     <div className="text-center py-12">
                       <Calendar className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-                      <p className="text-gray-500 font-medium">No upcoming sessions</p>
-                      <p className="text-sm text-gray-400 mt-1">New bookings will appear here</p>
+                      <p className="text-gray-500 font-medium">
+                        No upcoming sessions
+                      </p>
+                      <p className="text-sm text-gray-400 mt-1">
+                        New bookings will appear here
+                      </p>
                     </div>
                   )}
                 </div>
@@ -333,8 +371,12 @@ export default function TutorDashboardPage() {
                           <action.icon className={`h-5 w-5 ${action.color}`} />
                         </div>
                         <div className="flex-1 text-left">
-                          <div className="font-semibold text-gray-900">{action.title}</div>
-                          <div className="text-xs text-gray-600">{action.description}</div>
+                          <div className="font-semibold text-gray-900">
+                            {action.title}
+                          </div>
+                          <div className="text-xs text-gray-600">
+                            {action.description}
+                          </div>
                         </div>
                         <ChevronRight className="h-4 w-4 text-gray-400 group-hover:translate-x-1 transition-transform" />
                       </div>
@@ -359,17 +401,21 @@ export default function TutorDashboardPage() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-blue-100">Hours</span>
-                  <span className="text-2xl font-bold">{totalHours.toFixed(0)}h</span>
+                  <span className="text-2xl font-bold">
+                    {totalHours.toFixed(0)}h
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-blue-100">Earnings</span>
-                  <span className="text-2xl font-bold">${totalEarnings.toFixed(0)}</span>
+                  <span className="text-2xl font-bold">
+                    ${totalEarnings.toFixed(0)}
+                  </span>
                 </div>
-                <div className="pt-4 border-t border-blue-400/30">
+                {/* <div className="pt-4 border-t border-blue-400/30">
                   <p className="text-sm text-blue-100">
                     🎉 You're in the top 15% of tutors this month!
                   </p>
-                </div>
+                </div> */}
               </CardContent>
             </Card>
           </div>
