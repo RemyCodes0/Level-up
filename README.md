@@ -7,9 +7,8 @@ Level Up is a comprehensive peer-to-peer tutoring platform designed specifically
 Level Up facilitates meaningful educational connections by allowing students to:
 - **Find tutors** in their subjects of interest
 - **Book tutoring sessions** at flexible times
-- **Communicate directly** with tutors before committing
 - **Leave reviews** to help future learners make informed decisions
-- **Manage their learning journey** through an intuitive dashboard
+- **Manage their learning journey** through an intuitive dashboard 
 
 ## ✨ Features
 
