@@ -43,7 +43,7 @@ export default function DashboardPage() {
   useEffect(() => {
     const fetchBookings = async () => {
       try {
-        const res = await axios.get(`localhost:5000/api/book/student`, {
+        const res = await axios.get(`${import.meta.env.VITE_API_URL}/api/book/student`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
