@@ -23,13 +23,14 @@ import TutorProfilePage from './tutors/tutors-detail/tutors-detail'
 import MessagesPage from './messages/Messages'
 import BookSessionPage from './book/Book'
 import ApplyTutorPage from './Tutor-Application/TutorApplication'
-
+import Analytics from "./Analytics";
 function App() {
 
 
   return (
     
     <BrowserRouter>
+    <Analytics />
     <AuthProvider>
     <Routes>
       <Route path="/" element={<Landing/>}/>
