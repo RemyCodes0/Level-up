@@ -60,12 +60,12 @@ export default function AdminDashboardPage() {
         // Fetch all users (you'll need to create this endpoint)
         try {
           const usersRes = await axios.get(
-            `${import.meta.env.VITE_API_URL}/api/admin/users`,
+            `${import.meta.env.VITE_API_URL}/api/auth/getUsers`,
             {
               headers: { Authorization: `Bearer ${token}` },
             },
           );
-          setAllUsers(usersRes.data);
+          setAllUsers(usersRes.data.user);
         } catch (error) {
           console.log("Users endpoint not available:", error);
         }
@@ -73,7 +73,7 @@ export default function AdminDashboardPage() {
         // Fetch all sessions (you'll need to create this endpoint)
         try {
           const sessionsRes = await axios.get(
-            `${import.meta.env.VITE_API_URL}/api/admin/sessions`,
+            `${import.meta.env.VITE_API_URL}/api/book/allBookings`,
             {
               headers: { Authorization: `Bearer ${token}` },
             },
@@ -97,7 +97,7 @@ export default function AdminDashboardPage() {
   // Calculate statistics
   const totalUsers = allUsers.length;
   const activeTutors = allUsers.filter((u) => u.role === "tutor").length;
-  const activeStudents = allUsers.filter((u) => u.role === "student").length;
+  const activeStudents = allUsers.filter((u) => u.role === "learner").length;
   const totalSessions = allSessions.length;
   const confirmedSessions = allSessions.filter(
     (s) => s.status === "confirmed",
@@ -378,7 +378,7 @@ export default function AdminDashboardPage() {
                   {stat.value}
                 </div>
                 <p className="text-xs text-gray-600 mb-2">{stat.subtitle}</p>
-                <div className="flex items-center gap-1 text-sm">
+                {/* <div className="flex items-center gap-1 text-sm">
                   {stat.trendUp ? (
                     <TrendingUp className="h-3 w-3 text-emerald-600" />
                   ) : (
@@ -391,7 +391,7 @@ export default function AdminDashboardPage() {
                   >
                     {stat.trend}
                   </span>
-                </div>
+                </div> */}
               </CardContent>
             </Card>
           ))}

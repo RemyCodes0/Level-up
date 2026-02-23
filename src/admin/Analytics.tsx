@@ -39,7 +39,7 @@ export default function AdminAnalyticsPage() {
       try {
         // Fetch sessions
         const sessionsRes = await axios.get(
-          `${import.meta.env.VITE_API_URL}/api/admin/sessions`,
+          `${import.meta.env.VITE_API_URL}/api/book/allBookings`,
           {
             headers: { Authorization: `Bearer ${token}` },
           },
@@ -48,12 +48,13 @@ export default function AdminAnalyticsPage() {
 
         // Fetch users
         const usersRes = await axios.get(
-          `${import.meta.env.VITE_API_URL}/api/admin/users`,
+          `${import.meta.env.VITE_API_URL}/api/auth/getUsers`,
           {
             headers: { Authorization: `Bearer ${token}` },
           },
         );
-        setAllUsers(usersRes.data);
+        
+        setAllUsers(usersRes.data.user);
       } catch (err) {
         console.error("Error fetching analytics data:", err);
       } finally {
@@ -143,10 +144,10 @@ export default function AdminAnalyticsPage() {
     const tutorStats = {};
 
     allSessions.forEach((session) => {
-      const tutorId = session.tutor._id;
+      const tutorId = session.tutor?._id;
       if (!tutorStats[tutorId]) {
         tutorStats[tutorId] = {
-          name: session.tutor.name,
+          name: session.tutor?.user?.name,
           sessions: 0,
           earnings: 0,
         };

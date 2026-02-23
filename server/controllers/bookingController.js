@@ -4,6 +4,29 @@ const User = require("../models/User");
 // const { sendTutorBookingEmail } = require("../services/emailService");
 const sendEmail = require("../services/emailService");
 
+exports.getAllBookings = async (req, res) => {
+  try {
+    const bookings = await Booking.find()
+      .populate({
+        path: "tutor",
+        select: "bio user location _id",
+        populate: {
+          path: "user",
+          select: "name email"
+        }
+      })
+      .populate({
+        path: "student",
+        select: "name email"
+      });
+
+  
+    return res.status(200).json(bookings);
+
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+};
 exports.getBookingByTutor = async (req, res) => {
   try {
     const booking = await Booking.find({ student: req.user._id })
