@@ -60,7 +60,7 @@ export default function AdminSessionsPage() {
       setIsLoading(true);
       try {
         const res = await axios.get(
-          `${import.meta.env.VITE_API_URL}/api/admin/sessions`,
+          `${import.meta.env.VITE_API_URL}/api/book/allBookings`,
           {
             headers: { Authorization: `Bearer ${token}` },
           },
@@ -79,7 +79,7 @@ export default function AdminSessionsPage() {
 
   const filteredSessions = allSessions.filter(
     (session) =>
-      session.tutor.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      session.tutor?.user?.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.student.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.subject.toLowerCase().includes(searchQuery.toLowerCase()),
   );
@@ -146,7 +146,7 @@ export default function AdminSessionsPage() {
               <div className="flex items-center gap-2 text-sm text-gray-600">
                 <GraduationCap className="h-4 w-4 text-blue-600" />
                 <span className="font-medium">Tutor:</span>
-                <span>{session.tutor.name}</span>
+                <span>{session.tutor?.user?.name}</span>
               </div>
               <div className="flex items-center gap-2 text-sm text-gray-600">
                 <User className="h-4 w-4 text-purple-600" />
@@ -176,7 +176,7 @@ export default function AdminSessionsPage() {
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-700">
             <MapPin className="h-4 w-4 text-gray-500" />
-            <span>{session.location}</span>
+            <span>{session.tutor?.location}</span>
           </div>
         </div>
 
