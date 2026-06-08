@@ -40,6 +40,7 @@ import {
   TrendingUp,
   Users,
 } from "lucide-react";
+import { Helmet } from "react-helmet-async";
 
 export default function TutorProfilePage() {
   const { id } = useParams<{ id: string }>();
@@ -117,6 +118,7 @@ export default function TutorProfilePage() {
     });
     return distribution;
   };
+  
 
   if (loading) {
     return (
@@ -156,12 +158,54 @@ export default function TutorProfilePage() {
       </div>
     );
   }
-
+  const subjects = tutor.subjects
+  ?.map((s: any) => s.name)
+  .join(", ");
   const averageRating = calculateAverageRating();
   const ratingDistribution = getRatingDistribution();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
+      return (
+  <>
+    <Helmet>
+      <title>
+        {tutor.user.name} | {subjects} Tutor at AUB | Level Up
+      </title>
+
+      <meta
+        name="description"
+        content={`${tutor.user.name} is an AUB tutor specializing in ${subjects}. Book personalized tutoring sessions through Level Up.`}
+      />
+
+      <meta
+        property="og:title"
+        content={`${tutor.user.name} | Tutor at AUB`}
+      />
+
+      <meta
+        property="og:description"
+        content={`${tutor.user.name} teaches ${subjects} through Level Up.`}
+      />
+
+      <meta
+        property="og:url"
+        content={`https://levelup-snowy.vercel.app/tutors/${id}`}
+      />
+
+      <meta property="og:type" content="profile" />
+
+      <link
+        rel="canonical"
+        href={`https://levelup-snowy.vercel.app/tutors/${id}`}
+      />
+    </Helmet>
+
+    <div className="min-h-screen ...">
+      ...
+    </div>
+  </>
+);
       <Navbar />
       <div className="container mx-auto px-4 py-8 max-w-7xl">
         <Button
