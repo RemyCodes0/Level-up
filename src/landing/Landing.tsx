@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button"
+import { Helmet } from "react-helmet-async"
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Navbar } from "@/components/navbar/Navbar"
@@ -22,14 +23,14 @@ import { useNavigate } from "react-router-dom"
 import { motion } from "framer-motion"
 
 export default function HomePage() {
-  // const user = JSON.parse(localStorage.getItem("user"))
+  const user = JSON.parse(localStorage.getItem("user") || "")
   const router = useNavigate()
   
-  // useEffect(() => {
-  //   if (user) {
-  //     router("/dashboard")
-  //   }
-  // }, [user])
+  useEffect(() => {
+    if (user) {
+      router("/dashboard")
+    }
+  }, [user])
 
   const features = [
     {
@@ -115,6 +116,16 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background via-blue-50/30 to-purple-50/30">
+         <Helmet>
+        <title>Level Up | Peer Tutoring Platform for AUB Students</title>
+        <meta name="description" content="Connect with verified AUB peer tutors for affordable one-on-one tutoring sessions. Find tutors for calculus, physics, biology, computer science and more at the American University of Beirut." />
+        <meta name="keywords" content="AUB tutoring, peer tutoring AUB, American University Beirut tutor, AUB student tutor, calculus tutor AUB, physics tutor AUB, affordable tutoring Beirut" />
+        <meta property="og:title" content="Level Up | Peer Tutoring for AUB Students" />
+        <meta property="og:description" content="Find affordable, verified peer tutors at AUB. Book sessions for any subject, anytime." />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content="https://levelup-snowy.vercel.app/" />
+        <link rel="canonical" href="https://levelup-snowy.vercel.app/" />
+      </Helmet>
       <Navbar />
 
       {/* Hero Section */}

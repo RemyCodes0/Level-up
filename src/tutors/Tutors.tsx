@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { Navbar } from "@/components/navbar/Navbar";
+import { Helmet } from "react-helmet-async";
 import { TutorCard } from "@/components/tutor-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -151,13 +152,49 @@ export default function TutorsPage() {
   }
 
   return (
+    
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
+      <Helmet>
+  <title>AUB Tutors | Find Verified Peer Tutors - Level Up</title>
+
+  <meta
+    name="description"
+    content="Browse verified AUB student tutors for mathematics, physics, biology, computer science, economics, engineering, and more. Book affordable tutoring sessions through Level Up."
+  />
+
+  <meta
+    name="keywords"
+    content="AUB tutors, AUB tutoring, peer tutoring AUB, American University of Beirut tutors, calculus tutor AUB, physics tutor AUB, computer science tutor AUB"
+  />
+
+  <meta
+    property="og:title"
+    content="Find Verified AUB Tutors | Level Up"
+  />
+
+  <meta
+    property="og:description"
+    content="Connect with verified peer tutors from the American University of Beirut."
+  />
+
+  <meta property="og:type" content="website" />
+
+  <meta
+    property="og:url"
+    content="https://levelup-snowy.vercel.app/tutors"
+  />
+
+  <link
+    rel="canonical"
+    href="https://levelup-snowy.vercel.app/tutors"
+  />
+</Helmet>
       <Navbar />
       <div className="container mx-auto px-4 py-8">
         {/* Header Section */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold mb-3 bg-gradient-to-r from-slate-900 to-slate-700 bg-clip-text text-transparent">
-            Find Your Perfect Tutor
+            Find Verified AUB Tutors
           </h1>
           <p className="text-muted-foreground text-lg">
             Browse verified AUB student tutors across all subjects
