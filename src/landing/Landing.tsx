@@ -123,6 +123,7 @@ export default function HomePage() {
         <meta property="og:title" content="Level Up | Peer Tutoring for AUB Students" />
         <meta property="og:description" content="Find affordable, verified peer tutors at AUB. Book sessions for any subject, anytime." />
         <meta property="og:type" content="website" />
+        <meta name="google-site-verification" content="hV5PYthBQ90n6hk9UceIy9ua8pHEN-jy2TKhsS1BpzY" />
         <meta property="og:url" content="https://levelup-snowy.vercel.app/" />
         <link rel="canonical" href="https://levelup-snowy.vercel.app/" />
       </Helmet>
