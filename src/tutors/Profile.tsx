@@ -16,10 +16,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ALL_SUBJECTS, MOCK_TUTORS } from "@/lib/mock-data";
+import { ALL_SUBJECTS } from "@/lib/mock-data";
 import {
   X,
   Plus,
@@ -73,6 +72,55 @@ const DEFAULT_BENEFITS = [
   "Follow-up resources after sessions",
 ];
 
+const SECTIONS = [
+  { id: "basic", label: "Basic Info", icon: User },
+  { id: "subjects", label: "Subjects", icon: GraduationCap },
+  { id: "location", label: "Location", icon: MapPin },
+  { id: "style", label: "Teaching Style", icon: Target },
+  { id: "benefits", label: "Benefits", icon: Sparkles },
+];
+
+function SectionCard({
+  icon: Icon,
+  title,
+  description,
+  children,
+  delay = 0,
+  id,
+}: {
+  icon: React.ElementType;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+  delay?: number;
+  id?: string;
+}) {
+  return (
+    <motion.div
+      id={id}
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, delay }}
+      className="scroll-mt-24"
+    >
+      <Card className="border border-border/60 shadow-sm">
+        <CardHeader>
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Icon className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-lg">{title}</CardTitle>
+              <CardDescription>{description}</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5">{children}</CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
 export default function TutorProfileEditPage() {
   const navigate = useNavigate();
 
@@ -83,9 +131,7 @@ export default function TutorProfileEditPage() {
   >([]);
   const [subjectInput, setSubjectInput] = useState("");
 
-  // New fields
   const [location, setLocation] = useState("");
-  // const [locationType, setLocationType] = useState<"campus" | "online" | "both">("both")
   const [teachingApproach, setTeachingApproach] = useState("");
   const [teachingStyle, setTeachingStyle] = useState("");
   const [studentBenefits, setStudentBenefits] =
@@ -106,7 +152,6 @@ export default function TutorProfileEditPage() {
       return;
     }
 
-    // Load existing tutor data
     const fetchTutorData = async () => {
       try {
         const res = await axios.get(
@@ -119,7 +164,6 @@ export default function TutorProfileEditPage() {
           setHourlyRate(data.hourlyRate || "");
           setSelectedSubjects(data.subjects || []);
           setLocation(data.location || "");
-          // setLocationType(data.locationType || "both")
           setTeachingApproach(data.teachingApproach || "");
           setTeachingStyle(data.teachingStyle || "");
           setStudentBenefits(data.studentBenefits || DEFAULT_BENEFITS);
@@ -137,7 +181,6 @@ export default function TutorProfileEditPage() {
 
   const handleAddSubject = (subject: string) => {
     if (subject && !selectedSubjects.find((s) => s.name === subject)) {
-      // In a real app, you'd fetch the subject details from the backend
       const newSubject = {
         code: subject,
         name: subject,
@@ -162,7 +205,6 @@ export default function TutorProfileEditPage() {
   const handleSave = async () => {
     setLoading(true);
     try {
-      // Prepare the data to send to backend
       const updatedData = new FormData();
       updatedData.append("bio", bio);
       updatedData.append("hourlyRate", hourlyRate.toString());
@@ -172,15 +214,7 @@ export default function TutorProfileEditPage() {
       updatedData.append("teachingStyle", teachingStyle);
       updatedData.append("studentBenefits", JSON.stringify(studentBenefits));
 
-      // Optional: append files if you have a file input
-      // if (certificatesFiles.length > 0) {
-      //   certificatesFiles.forEach(file => updatedData.append("certificates", file))
-      // }
-      // if (idCardFile) updatedData.append("idCard", idCardFile)
-
-      // Make API request
-
-      const res = await axios.put(
+      await axios.put(
         `${import.meta.env.VITE_API_URL}/api/tutor/updateProfile`,
         updatedData,
         {
@@ -204,40 +238,75 @@ export default function TutorProfileEditPage() {
     }
   };
 
+  const profileFields = [
+    bio,
+    hourlyRate !== "" ? "rate" : "",
+    selectedSubjects.length ? "subjects" : "",
+    location,
+    teachingStyle,
+    teachingApproach,
+  ];
+  const completed = profileFields.filter(Boolean).length;
+  const completion = Math.round((completed / profileFields.length) * 100);
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
+    <div className="min-h-screen bg-background">
       <Navbar />
-      <div className="container mx-auto px-4 py-8 max-w-4xl">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="mb-8"
-        >
+
+      {/* Header band */}
+      <div className="border-b border-border/60 bg-card">
+        <div className="container mx-auto max-w-5xl px-4 py-8">
           <Button
             variant="ghost"
+            size="sm"
             onClick={() => navigate("/tutor/dashboard")}
-            className="mb-4 hover:bg-primary/10"
+            className="mb-4 -ml-2 text-muted-foreground"
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Dashboard
           </Button>
 
-          <div className="flex items-center gap-2 mb-3">
-            <Sparkles className="h-5 w-5 text-primary" />
-            <Badge variant="secondary" className="text-xs">
-              Profile Settings
-            </Badge>
-          </div>
-          <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
-            Edit Tutor Profile
-          </h1>
-          <p className="text-lg text-muted-foreground">
-            Update your profile to attract more students
-          </p>
-        </motion.div>
+          <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+            <div>
+              <Badge
+                variant="secondary"
+                className="mb-3 gap-1.5 bg-primary/10 text-primary hover:bg-primary/10"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Profile Settings
+              </Badge>
+              <h1 className="text-balance text-3xl font-bold tracking-tight md:text-4xl">
+                Edit Tutor Profile
+              </h1>
+              <p className="mt-2 max-w-lg text-pretty text-muted-foreground">
+                Keep your profile fresh and detailed to attract more students
+                and stand out in search.
+              </p>
+            </div>
 
+            {/* Completion meter */}
+            <div className="w-full max-w-xs rounded-xl border border-border/60 bg-background p-4">
+              <div className="mb-2 flex items-center justify-between text-sm">
+                <span className="font-medium">Profile completion</span>
+                <span className="font-semibold text-primary">
+                  {completion}%
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-500"
+                  style={{ width: `${completion}%` }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {completed} of {profileFields.length} key sections filled in
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="container mx-auto max-w-5xl px-4 py-8">
         {/* Success Alert */}
         {success && (
           <motion.div
@@ -245,402 +314,337 @@ export default function TutorProfileEditPage() {
             animate={{ opacity: 1, y: 0 }}
             className="mb-6"
           >
-            <Alert className="bg-gradient-to-r from-green-50 to-emerald-50 border-green-200 shadow-lg">
-              <CheckCircle2 className="h-5 w-5 text-green-600" />
-              <AlertDescription className="text-green-800 font-medium">
+            <Alert className="border-primary/30 bg-primary/5">
+              <CheckCircle2 className="h-5 w-5 text-primary" />
+              <AlertDescription className="font-medium text-foreground">
                 Profile updated successfully! Redirecting...
               </AlertDescription>
             </Alert>
           </motion.div>
         )}
 
-        <div className="space-y-6">
-          {/* Basic Information */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.1 }}
-          >
-            <Card className="border-none shadow-lg hover:shadow-xl transition-shadow duration-300">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                    <User className="h-5 w-5 text-blue-600" />
-                  </div>
-                  <CardTitle className="text-xl">Basic Information</CardTitle>
-                </div>
-                <CardDescription>
-                  Update your profile details and bio
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="bio"
-                    className="text-sm font-semibold flex items-center gap-2"
+        <div className="grid gap-8 lg:grid-cols-[200px_1fr]">
+          {/* Section nav */}
+          <aside className="hidden lg:block">
+            <nav className="sticky top-24 space-y-1">
+              {SECTIONS.map((section) => {
+                const Icon = section.icon;
+                return (
+                  <a
+                    key={section.id}
+                    href={`#${section.id}`}
+                    className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   >
-                    <BookOpen className="h-4 w-4 text-muted-foreground" />
-                    Bio
-                  </Label>
-                  <Textarea
-                    id="bio"
-                    value={bio}
-                    onChange={(e) => setBio(e.target.value)}
-                    placeholder="Tell students about yourself, your teaching style, and experience..."
-                    rows={6}
-                    className="border-2 focus:border-blue-500 resize-none"
-                    maxLength={500}
-                  />
-                  <p className="text-sm text-muted-foreground">
-                    {bio?.length}/500 characters
-                  </p>
-                </div>
+                    <Icon className="h-4 w-4" />
+                    {section.label}
+                  </a>
+                );
+              })}
+            </nav>
+          </aside>
 
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="rate"
-                    className="text-sm font-semibold flex items-center gap-2"
-                  >
-                    <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    Hourly Rate (USD)
-                  </Label>
-                  <Input
-                    id="rate"
-                    type="number"
-                    step="0.50"
-                    min="5"
-                    max="100"
-                    value={hourlyRate}
-                    onChange={(e) => setHourlyRate(Number(e.target.value))}
-                    className="h-11 border-2 focus:border-blue-500"
-                  />
-                  <p className="text-sm text-muted-foreground">
-                    Recommended: $15-30 per hour based on subject complexity
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
+          {/* Form sections */}
+          <div className="space-y-6">
+            {/* Basic Information */}
+            <SectionCard
+              id="basic"
+              icon={User}
+              title="Basic Information"
+              description="Update your profile details and bio"
+              delay={0.05}
+            >
+              <div className="space-y-2">
+                <Label
+                  htmlFor="bio"
+                  className="flex items-center gap-2 text-sm font-medium"
+                >
+                  <BookOpen className="h-4 w-4 text-muted-foreground" />
+                  Bio
+                </Label>
+                <Textarea
+                  id="bio"
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                  placeholder="Tell students about yourself, your teaching style, and experience..."
+                  rows={6}
+                  className="resize-none"
+                  maxLength={500}
+                />
+                <p className="text-right text-xs text-muted-foreground">
+                  {bio?.length || 0}/500 characters
+                </p>
+              </div>
 
-          {/* Subjects */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.2 }}
-          >
-            <Card className="border-none shadow-lg hover:shadow-xl transition-shadow duration-300">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                    <GraduationCap className="h-5 w-5 text-purple-600" />
-                  </div>
-                  <CardTitle className="text-xl">Subjects</CardTitle>
-                </div>
-                <CardDescription>
-                  Select the subjects you can tutor
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="subject" className="text-sm font-semibold">
-                    Add Subject
-                  </Label>
-                  <div className="flex gap-2">
-                    <Input
-                      id="subject"
-                      value={subjectInput}
-                      onChange={(e) => setSubjectInput(e.target.value)}
-                      placeholder="Type or select a subject..."
-                      list="subjects-list"
-                      className="h-11 border-2 focus:border-purple-500"
-                      onKeyPress={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          handleAddSubject(subjectInput);
-                        }
-                      }}
-                    />
-                    <datalist id="subjects-list">
-                      {ALL_SUBJECTS.map((subject) => (
-                        <option key={subject} value={subject} />
-                      ))}
-                    </datalist>
-                    <Button
-                      onClick={() => handleAddSubject(subjectInput)}
-                      className="h-11 bg-gradient-to-r from-purple-600 to-blue-600"
-                    >
-                      <Plus className="h-5 w-5" />
-                    </Button>
-                  </div>
-                </div>
+              <div className="space-y-2">
+                <Label
+                  htmlFor="rate"
+                  className="flex items-center gap-2 text-sm font-medium"
+                >
+                  <DollarSign className="h-4 w-4 text-muted-foreground" />
+                  Hourly Rate (USD)
+                </Label>
+                <Input
+                  id="rate"
+                  type="number"
+                  step="0.50"
+                  min="5"
+                  max="100"
+                  value={hourlyRate}
+                  onChange={(e) => setHourlyRate(Number(e.target.value))}
+                  className="h-11"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Recommended: $15-30 per hour based on subject complexity
+                </p>
+              </div>
+            </SectionCard>
 
-                {selectedSubjects?.length > 0 ? (
-                  <div className="flex flex-wrap gap-2 p-4 rounded-lg bg-gradient-to-r from-purple-50 to-blue-50 border-2 border-purple-100">
-                    {selectedSubjects.map((subject) => (
-                      <Badge
-                        key={subject._id}
-                        className="bg-white text-gray-700 hover:bg-gray-50 px-3 py-1.5"
-                      >
-                        {subject.name}
-                        <button
-                          onClick={() =>
-                            setSelectedSubjects(
-                              selectedSubjects.filter(
-                                (s) => s._id !== subject._id,
-                              ),
-                            )
-                          }
-                          className="ml-2 hover:text-destructive"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </Badge>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground p-4 bg-muted/30 rounded-lg text-center">
-                    No subjects selected yet
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </motion.div>
-
-          {/* Location & Session Type */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.3 }}
-          >
-            <Card className="border-none shadow-lg hover:shadow-xl transition-shadow duration-300">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-green-500/10 flex items-center justify-center">
-                    <MapPin className="h-5 w-5 text-green-600" />
-                  </div>
-                  <CardTitle className="text-xl">Location</CardTitle>
-                </div>
-                <CardDescription>
-                  Specify where you prefer to teach
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="space-y-3">
-                  {/* <Label className="text-sm font-semibold">Session Type</Label> */}
-                  {/* <RadioGroup value={locationType} onValueChange={(value: any) => setLocationType(value)}>
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="flex items-center space-x-2 p-3 rounded-lg border-2 hover:border-green-300 transition-colors cursor-pointer">
-                        <RadioGroupItem value="campus" id="campus-edit" />
-                        <Label htmlFor="campus-edit" className="cursor-pointer text-sm font-medium">
-                          On-Campus
-                        </Label>
-                      </div>
-                      <div className="flex items-center space-x-2 p-3 rounded-lg border-2 hover:border-green-300 transition-colors cursor-pointer">
-                        <RadioGroupItem value="online" id="online-edit" />
-                        <Label htmlFor="online-edit" className="cursor-pointer text-sm font-medium">
-                          Online Only
-                        </Label>
-                      </div>
-                      <div className="flex items-center space-x-2 p-3 rounded-lg border-2 hover:border-green-300 transition-colors cursor-pointer">
-                        <RadioGroupItem value="both" id="both-edit" />
-                        <Label htmlFor="both-edit" className="cursor-pointer text-sm font-medium">
-                          Both
-                        </Label>
-                      </div>
-                    </div>
-                  </RadioGroup> */}
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="location" className="text-sm font-semibold">
-                    Preferred Teaching Location
-                  </Label>
-                  <Input
-                    id="location"
-                    value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    placeholder="e.g., AUB Campus Library, Online via Zoom, or Both"
-                    className="h-11 border-2 focus:border-green-500"
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-
-          {/* Teaching Style & Approach */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.4 }}
-          >
-            <Card className="border-none shadow-lg hover:shadow-xl transition-shadow duration-300">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-orange-500/10 flex items-center justify-center">
-                    <Target className="h-5 w-5 text-orange-600" />
-                  </div>
-                  <CardTitle className="text-xl">
-                    Teaching Style & Approach
-                  </CardTitle>
-                </div>
-                <CardDescription>
-                  Define your teaching methodology
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="space-y-3">
-                  <Label className="text-sm font-semibold">
-                    Teaching Style
-                  </Label>
-                  <RadioGroup
-                    value={teachingStyle}
-                    onValueChange={setTeachingStyle}
-                  >
-                    <div className="space-y-3">
-                      {TEACHING_STYLES.map((style) => (
-                        <div
-                          key={style.value}
-                          className="flex items-start space-x-3 p-4 rounded-lg border-2 hover:border-orange-300 transition-colors cursor-pointer"
-                        >
-                          <RadioGroupItem
-                            value={style.value}
-                            id={`${style.value}-edit`}
-                            className="mt-1"
-                          />
-                          <Label
-                            htmlFor={`${style.value}-edit`}
-                            className="cursor-pointer flex-1"
-                          >
-                            <div className="font-semibold text-gray-900">
-                              {style.label}
-                            </div>
-                            <div className="text-sm text-muted-foreground mt-1">
-                              {style.description}
-                            </div>
-                          </Label>
-                        </div>
-                      ))}
-                    </div>
-                  </RadioGroup>
-                </div>
-
-                <div className="space-y-2">
-                  <Label
-                    htmlFor="teachingApproach"
-                    className="text-sm font-semibold"
-                  >
-                    Teaching Approach Description
-                  </Label>
-                  <Textarea
-                    id="teachingApproach"
-                    value={teachingApproach}
-                    onChange={(e) => setTeachingApproach(e.target.value)}
-                    placeholder="Explain your methodology, how you adapt to different learning styles, and what makes your approach effective..."
-                    rows={4}
-                    className="border-2 focus:border-orange-500 resize-none"
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-
-          {/* Student Benefits */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.5 }}
-          >
-            <Card className="border-none shadow-lg hover:shadow-xl transition-shadow duration-300">
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                    <Sparkles className="h-5 w-5 text-amber-600" />
-                  </div>
-                  <CardTitle className="text-xl">
-                    What Students Will Get
-                  </CardTitle>
-                </div>
-                <CardDescription>
-                  List the benefits students receive from your sessions
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="p-4 rounded-lg bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-100 space-y-2">
-                  {studentBenefits.map((benefit, index) => (
-                    <div
-                      key={index}
-                      className="flex items-start gap-3 p-2 rounded bg-white/60"
-                    >
-                      <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
-                      <span className="text-sm flex-1">{benefit}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeBenefit(index)}
-                        className="text-gray-400 hover:text-red-600 transition-colors"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-
+            {/* Subjects */}
+            <SectionCard
+              id="subjects"
+              icon={GraduationCap}
+              title="Subjects"
+              description="Select the subjects you can tutor"
+              delay={0.1}
+            >
+              <div className="space-y-2">
+                <Label htmlFor="subject" className="text-sm font-medium">
+                  Add Subject
+                </Label>
                 <div className="flex gap-2">
                   <Input
-                    value={customBenefit}
-                    onChange={(e) => setCustomBenefit(e.target.value)}
-                    placeholder="Add a custom benefit..."
-                    className="h-11 border-2 focus:border-amber-500"
-                    onKeyPress={(e) => {
+                    id="subject"
+                    value={subjectInput}
+                    onChange={(e) => setSubjectInput(e.target.value)}
+                    placeholder="Type or select a subject..."
+                    list="subjects-list"
+                    className="h-11"
+                    onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        addCustomBenefit();
+                        handleAddSubject(subjectInput);
                       }
                     }}
                   />
+                  <datalist id="subjects-list">
+                    {ALL_SUBJECTS.map((subject) => (
+                      <option key={subject} value={subject} />
+                    ))}
+                  </datalist>
                   <Button
-                    type="button"
-                    onClick={addCustomBenefit}
-                    className="h-11 bg-gradient-to-r from-amber-500 to-orange-500"
+                    onClick={() => handleAddSubject(subjectInput)}
+                    className="h-11 shrink-0"
                   >
                     <Plus className="h-5 w-5" />
                   </Button>
                 </div>
-              </CardContent>
-            </Card>
-          </motion.div>
+              </div>
 
-          {/* Action Buttons */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.6 }}
-            className="flex flex-col sm:flex-row gap-4 pt-4"
-          >
-            <Button
-              onClick={handleSave}
-              disabled={loading}
-              className="flex-1 h-12 text-base font-semibold bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all"
-            >
-              {loading ? (
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Saving Changes...</span>
+              {selectedSubjects?.length > 0 ? (
+                <div className="flex flex-wrap gap-2 rounded-lg border border-border/60 bg-muted/40 p-4">
+                  {selectedSubjects.map((subject) => (
+                    <Badge
+                      key={subject._id}
+                      variant="secondary"
+                      className="gap-1.5 px-3 py-1.5 text-sm"
+                    >
+                      {subject.name}
+                      <button
+                        onClick={() =>
+                          setSelectedSubjects(
+                            selectedSubjects.filter(
+                              (s) => s._id !== subject._id,
+                            ),
+                          )
+                        }
+                        className="ml-0.5 text-muted-foreground transition-colors hover:text-destructive"
+                        aria-label={`Remove ${subject.name}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </Badge>
+                  ))}
                 </div>
               ) : (
-                <>
-                  <Save className="mr-2 h-5 w-5" />
-                  Save Changes
-                </>
+                <p className="rounded-lg bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+                  No subjects selected yet
+                </p>
               )}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => navigate("/tutor/dashboard")}
-              className="h-12 border-2 hover:bg-muted"
+            </SectionCard>
+
+            {/* Location */}
+            <SectionCard
+              id="location"
+              icon={MapPin}
+              title="Location"
+              description="Specify where you prefer to teach"
+              delay={0.15}
             >
-              Cancel
-            </Button>
-          </motion.div>
+              <div className="space-y-2">
+                <Label htmlFor="location" className="text-sm font-medium">
+                  Preferred Teaching Location
+                </Label>
+                <Input
+                  id="location"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="e.g., AUB Campus Library, Online via Zoom, or Both"
+                  className="h-11"
+                />
+              </div>
+            </SectionCard>
+
+            {/* Teaching Style & Approach */}
+            <SectionCard
+              id="style"
+              icon={Target}
+              title="Teaching Style & Approach"
+              description="Define your teaching methodology"
+              delay={0.2}
+            >
+              <div className="space-y-3">
+                <Label className="text-sm font-medium">Teaching Style</Label>
+                <RadioGroup
+                  value={teachingStyle}
+                  onValueChange={setTeachingStyle}
+                  className="space-y-2.5"
+                >
+                  {TEACHING_STYLES.map((style) => {
+                    const active = teachingStyle === style.value;
+                    return (
+                      <Label
+                        key={style.value}
+                        htmlFor={`${style.value}-edit`}
+                        className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition-colors ${
+                          active
+                            ? "border-primary bg-primary/5"
+                            : "border-border/60 hover:border-primary/40 hover:bg-muted/40"
+                        }`}
+                      >
+                        <RadioGroupItem
+                          value={style.value}
+                          id={`${style.value}-edit`}
+                          className="mt-0.5"
+                        />
+                        <div className="flex-1">
+                          <div className="font-medium text-foreground">
+                            {style.label}
+                          </div>
+                          <div className="mt-1 text-sm text-muted-foreground">
+                            {style.description}
+                          </div>
+                        </div>
+                      </Label>
+                    );
+                  })}
+                </RadioGroup>
+              </div>
+
+              <div className="space-y-2">
+                <Label
+                  htmlFor="teachingApproach"
+                  className="text-sm font-medium"
+                >
+                  Teaching Approach Description
+                </Label>
+                <Textarea
+                  id="teachingApproach"
+                  value={teachingApproach}
+                  onChange={(e) => setTeachingApproach(e.target.value)}
+                  placeholder="Explain your methodology, how you adapt to different learning styles, and what makes your approach effective..."
+                  rows={4}
+                  className="resize-none"
+                />
+              </div>
+            </SectionCard>
+
+            {/* Student Benefits */}
+            <SectionCard
+              id="benefits"
+              icon={Sparkles}
+              title="What Students Will Get"
+              description="List the benefits students receive from your sessions"
+              delay={0.25}
+            >
+              <div className="space-y-2 rounded-lg border border-border/60 bg-muted/40 p-4">
+                {studentBenefits.map((benefit, index) => (
+                  <div
+                    key={index}
+                    className="flex items-start gap-3 rounded-md bg-background p-2.5"
+                  >
+                    <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+                    <span className="flex-1 text-sm">{benefit}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeBenefit(index)}
+                      className="text-muted-foreground transition-colors hover:text-destructive"
+                      aria-label="Remove benefit"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2">
+                <Input
+                  value={customBenefit}
+                  onChange={(e) => setCustomBenefit(e.target.value)}
+                  placeholder="Add a custom benefit..."
+                  className="h-11"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addCustomBenefit();
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  onClick={addCustomBenefit}
+                  variant="secondary"
+                  className="h-11 shrink-0"
+                >
+                  <Plus className="h-5 w-5" />
+                </Button>
+              </div>
+            </SectionCard>
+
+            {/* Action Buttons */}
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, delay: 0.3 }}
+              className="flex flex-col gap-3 pt-2 sm:flex-row"
+            >
+              <Button
+                onClick={handleSave}
+                disabled={loading}
+                size="lg"
+                className="h-12 flex-1 text-base font-semibold"
+              >
+                {loading ? (
+                  <div className="flex items-center gap-2">
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    <span>Saving Changes...</span>
+                  </div>
+                ) : (
+                  <>
+                    <Save className="mr-2 h-5 w-5" />
+                    Save Changes
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => navigate("/tutor/dashboard")}
+                className="h-12"
+              >
+                Cancel
+              </Button>
+            </motion.div>
+          </div>
         </div>
       </div>
     </div>

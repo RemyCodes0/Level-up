@@ -7,6 +7,7 @@ const authRoutes = require('./routes/auth');
 const tutorRoutes = require('./routes/tutor');
 const bookRoutes = require("./routes/book");
 const reviewRoutes = require("./routes/review");
+const aiRoutes = require("./routes/ai")
 
 const Tutor = require('./models/Tutor');
 
@@ -19,13 +20,33 @@ app.use('/api/auth', authRoutes);
 app.use('/api/tutor', tutorRoutes);
 app.use('/api/book/', bookRoutes);
 app.use('/api/reviews', reviewRoutes);
+// app.use("/api/ai", aiRoutes);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 app.get('/sitemap.xml', async (req, res) => {
   try {
     const smStream = new SitemapStream({
       hostname: 'https://levelup-snowy.vercel.app'
     });
-
 
     smStream.write({ url: '/', changefreq: 'daily', priority: 1.0 });
     smStream.write({ url: '/tutors', changefreq: 'daily', priority: 0.9 });
