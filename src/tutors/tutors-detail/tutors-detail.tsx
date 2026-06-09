@@ -166,7 +166,7 @@ export default function TutorProfilePage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
-      return (
+    
   <>
     <Helmet>
       <title>
@@ -201,11 +201,8 @@ export default function TutorProfilePage() {
       />
     </Helmet>
 
-    <div className="min-h-screen ...">
-      ...
-    </div>
+    
   </>
-);
       <Navbar />
       <div className="container mx-auto px-4 py-8 max-w-7xl">
         <Button

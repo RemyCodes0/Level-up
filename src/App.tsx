@@ -24,6 +24,7 @@ import MessagesPage from './messages/Messages'
 import BookSessionPage from './book/Book'
 import ApplyTutorPage from './Tutor-Application/TutorApplication'
 import Analytics from "./Analytics";
+import AILearningPage from './ai/AiTutor'
 function App() {
 
 
@@ -40,6 +41,7 @@ function App() {
       <Route path="/signup" element={<SignupPage/>}/>
       <Route path="/tutors/:id" element={<TutorProfilePage/>}/>
       <Route path="/tutors" element={<TutorsPage/>}/>
+      <Route path="/ai_tutor" element={<AILearningPage/>}/>
       <Route path="/bookings" element={<BookingsPage/>}/>
       <Route path="/tutor/dashboard" element={<TutorDashboardPage/>}/>
       <Route path="/tutor/earnings" element={<TutorEarningsPage/>}/>

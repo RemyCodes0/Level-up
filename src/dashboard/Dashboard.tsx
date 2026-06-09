@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth-context";
 import { Navbar } from "@/components/navbar/Navbar";
@@ -14,12 +14,26 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   BookOpen,
-  Calendar,
-  Star,
-  TrendingUp,
-  ArrowRight,
+  CalendarClock,
+  CheckCircle2,
+  Clock,
+  Sparkles,
+  ArrowUpRight,
+  Bot,
+  CalendarDays,
+  UserRound,
+  Target,
 } from "lucide-react";
 import axios from "axios";
+
+type Stat = {
+  key: string;
+  label: string;
+  value: number | undefined;
+  suffix?: string;
+  icon: React.ElementType;
+  hint: string;
+};
 
 export default function DashboardPage() {
   const { loading } = useAuth();
@@ -29,10 +43,10 @@ export default function DashboardPage() {
   const user = storedUser ? JSON.parse(storedUser) : null;
   const token = localStorage.getItem("token");
 
-  const [totalSessions, setTotalSessions] = useState();
-  const [upcomingSessions, setUpcomingSessions] = useState();
-  const [sessionCompleted, setSessionCompleted] = useState();
-  const [duration, setDuration] = useState();
+  const [totalSessions, setTotalSessions] = useState<number>();
+  const [upcomingSessions, setUpcomingSessions] = useState<number>();
+  const [sessionCompleted, setSessionCompleted] = useState<number>();
+  const [duration, setDuration] = useState<number>();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -43,20 +57,29 @@ export default function DashboardPage() {
   useEffect(() => {
     const fetchBookings = async () => {
       try {
-        const res = await axios.get(`${import.meta.env.VITE_API_URL}/api/book/student`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await axios.get(
+          `${import.meta.env.VITE_API_URL}/api/book/student`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
 
         const data = res.data.length;
-        const upcoming = res.data.filter(b => b.status === "confirmed").length;
-        const completed = res.data.filter(b => b.status === "completed").length;
-        const totalHours = res.data.reduce((acc, b) => acc + Number(b.duration) / 60, 0);
+        const upcoming = res.data.filter(
+          (b: any) => b.status === "confirmed"
+        ).length;
+        const completed = res.data.filter(
+          (b: any) => b.status === "completed"
+        ).length;
+        const totalHours = res.data.reduce(
+          (acc: number, b: any) => acc + Number(b.duration) / 60,
+          0
+        );
 
         setTotalSessions(data);
         setUpcomingSessions(upcoming);
         setSessionCompleted(completed);
-        setDuration(totalHours);
-
+        setDuration(Math.round(totalHours * 10) / 10);
       } catch (error) {
         console.error(error);
       }
@@ -64,10 +87,69 @@ export default function DashboardPage() {
     fetchBookings();
   }, [token, user?._id]);
 
+  // Completion rate derived from real data — no mock numbers.
+  const completionRate = useMemo(() => {
+    if (totalSessions === undefined || sessionCompleted === undefined) return undefined;
+    if (totalSessions === 0) return 0;
+    return Math.round((sessionCompleted / totalSessions) * 100);
+  }, [totalSessions, sessionCompleted]);
+
+  const greeting = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 12) return "Good morning";
+    if (h < 18) return "Good afternoon";
+    return "Good evening";
+  }, []);
+
+  const today = useMemo(
+    () =>
+      new Date().toLocaleDateString(undefined, {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      }),
+    []
+  );
+
+  const stats: Stat[] = [
+    {
+      key: "upcoming",
+      label: "Upcoming",
+      value: upcomingSessions,
+      icon: CalendarClock,
+      hint: "Confirmed & scheduled",
+    },
+    {
+      key: "total",
+      label: "Total Sessions",
+      value: totalSessions,
+      icon: BookOpen,
+      hint: "Booked all-time",
+    },
+    {
+      key: "completed",
+      label: "Completed",
+      value: sessionCompleted,
+      icon: CheckCircle2,
+      hint: "Finished lessons",
+    },
+    {
+      key: "hours",
+      label: "Learning Hours",
+      value: duration,
+      suffix: "h",
+      icon: Clock,
+      hint: "Time invested",
+    },
+  ];
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="animate-pulse text-lg">Loading...</div>
+        <div className="flex items-center gap-3 text-muted-foreground">
+          <span className="h-2.5 w-2.5 rounded-full bg-primary animate-ping" />
+          <span className="text-sm font-medium">Loading your dashboard…</span>
+        </div>
       </div>
     );
   }
@@ -75,223 +157,314 @@ export default function DashboardPage() {
   if (!user) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20">
+    <div className="min-h-screen bg-muted/30">
       <Navbar />
 
-      <div className="container mx-auto px-4 py-8 max-w-7xl">
-        {/* Centralized Welcome Section */}
-        <div className="mb-10 flex flex-col items-center justify-center text-center">
-          <div className="h-16 w-16 rounded-full bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center text-white font-bold text-2xl mb-4">
-            {user.name.charAt(0).toUpperCase()}
+      <main className="container mx-auto px-4 py-8 max-w-6xl">
+        {/* Hero */}
+        <section className="relative overflow-hidden rounded-3xl border bg-card shadow-sm">
+          <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-primary/10" />
+          <div className="pointer-events-none absolute right-24 top-24 h-24 w-24 rounded-full bg-primary/5" />
+
+          <div className="relative flex flex-col gap-6 p-6 sm:p-8 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-4">
+              <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-primary text-primary-foreground text-2xl font-bold shadow-sm">
+                {user.name.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  {today}
+                </p>
+                <h1 className="mt-1 text-2xl font-bold tracking-tight text-balance sm:text-3xl">
+                  {greeting}, {user.name.split(" ")[0]}
+                </h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {upcomingSessions
+                    ? `You have ${upcomingSessions} session${upcomingSessions > 1 ? "s" : ""} coming up.`
+                    : "No upcoming sessions — let's book your next one."}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row md:flex-col lg:flex-row">
+              <a href="/tutors">
+                <Button size="lg" className="w-full gap-2 sm:w-auto">
+                  <BookOpen className="h-4 w-4" />
+                  Find a Tutor
+                </Button>
+              </a>
+              <a href="/ai_tutor">
+                <Button size="lg" variant="outline" className="w-full gap-2 sm:w-auto">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  AI Tutor
+                </Button>
+              </a>
+            </div>
           </div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
-            Welcome back, {user.name}!
-          </h1>
-          <p className="text-muted-foreground mt-2">
-            Ready to continue your learning journey?
-          </p>
-        </div>
+        </section>
 
-        {/* Stats Grid */}
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-          <Card className="border-none shadow-lg hover:shadow-xl transition-all duration-300 bg-gradient-to-br from-blue-500/10 to-blue-600/5 hover:scale-[1.02]">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-blue-700 dark:text-blue-400">
-                Upcoming Sessions
-              </CardTitle>
-              <div className="h-10 w-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-                <Calendar className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {upcomingSessions === undefined ? (
-                <div className="h-9 w-16 bg-blue-200/50 dark:bg-blue-800/30 rounded animate-pulse" />
-              ) : (
-                <div className="text-3xl font-bold text-blue-900 dark:text-blue-100">
-                  {upcomingSessions}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+        {/* Stats */}
+        <section className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {stats.map((s) => {
+            const Icon = s.icon;
+            return (
+              <Card
+                key={s.key}
+                className="group relative overflow-hidden border shadow-sm transition-all hover:shadow-md"
+              >
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between">
+                    <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary/10 text-primary">
+                      <Icon className="h-5 w-5" />
+                    </span>
+                    <ArrowUpRight className="h-4 w-4 text-muted-foreground/40 transition-colors group-hover:text-primary" />
+                  </div>
 
-          <Card className="border-none shadow-lg hover:shadow-xl transition-all duration-300 bg-gradient-to-br from-green-500/10 to-green-600/5 hover:scale-[1.02]">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-green-700 dark:text-green-400">
-                Total Sessions
-              </CardTitle>
-              <div className="h-10 w-10 rounded-full bg-green-500/20 flex items-center justify-center">
-                <BookOpen className="h-5 w-5 text-green-600 dark:text-green-400" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {totalSessions === undefined ? (
-                <div className="h-9 w-16 bg-green-200/50 dark:bg-green-800/30 rounded animate-pulse" />
-              ) : (
-                <div className="text-3xl font-bold text-green-900 dark:text-green-100">
-                  {totalSessions}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                  {s.value === undefined ? (
+                    <div className="mt-4 h-8 w-16 animate-pulse rounded-md bg-muted" />
+                  ) : (
+                    <div className="mt-4 text-3xl font-bold tracking-tight tabular-nums">
+                      {s.value}
+                      {s.suffix && (
+                        <span className="ml-0.5 text-lg font-semibold text-muted-foreground">
+                          {s.suffix}
+                        </span>
+                      )}
+                    </div>
+                  )}
 
-          <Card className="border-none shadow-lg hover:shadow-xl transition-all duration-300 bg-gradient-to-br from-amber-500/10 to-amber-600/5 hover:scale-[1.02]">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                Session Completed
-              </CardTitle>
-              <div className="h-10 w-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                <Star className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {sessionCompleted === undefined ? (
-                <div className="h-9 w-16 bg-amber-200/50 dark:bg-amber-800/30 rounded animate-pulse" />
-              ) : (
-                <div className="text-3xl font-bold text-amber-900 dark:text-amber-100">
-                  {sessionCompleted}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                  <p className="mt-1 text-sm font-medium">{s.label}</p>
+                  <p className="text-xs text-muted-foreground">{s.hint}</p>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </section>
 
-          <Card className="border-none shadow-lg hover:shadow-xl transition-all duration-300 bg-gradient-to-br from-purple-500/10 to-purple-600/5 hover:scale-[1.02]">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium text-purple-700 dark:text-purple-400">
-                Hours studying
-              </CardTitle>
-              <div className="h-10 w-10 rounded-full bg-purple-500/20 flex items-center justify-center">
-                <TrendingUp className="h-5 w-5 text-purple-600 dark:text-purple-400" />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {duration === undefined ? (
-                <div className="h-9 w-16 bg-purple-200/50 dark:bg-purple-800/30 rounded animate-pulse" />
-              ) : (
-                <div className="text-3xl font-bold text-purple-900 dark:text-purple-100">
-                  {duration}H
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Quick Actions and How It Works Cards */}
-        <div className="grid md:grid-cols-2 gap-6">
-          {/* Quick Actions Card */}
-          <Card className="border-none shadow-lg hover:shadow-xl transition-shadow duration-300">
+        {/* Progress + Quick Actions */}
+        <section className="mt-6 grid gap-6 lg:grid-cols-5">
+          {/* Progress */}
+          <Card className="border shadow-sm lg:col-span-2">
             <CardHeader>
-              <CardTitle className="text-xl">Quick Actions</CardTitle>
-              <CardDescription>
-                What would you like to do today?
-              </CardDescription>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <Target className="h-5 w-5 text-primary" />
+                Your Progress
+              </CardTitle>
+              <CardDescription>Completion across all booked sessions</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <a href="/tutors" className="block">
-                <Button
-                  className="w-full justify-between h-auto py-4 px-5 bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 transition-all group"
-                  size="lg"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-lg bg-white/20 flex items-center justify-center">
-                      <BookOpen className="h-5 w-5" />
-                    </div>
-                    <div className="text-left">
-                      <div className="font-semibold">Find a Tutor</div>
-                      <div className="text-xs opacity-90">
-                        Browse available experts
-                      </div>
-                    </div>
-                  </div>
-                  <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
-                </Button>
-              </a>
-
-              <a href="/bookings" className="block">
-                <Button
-                  className="w-full justify-between h-auto py-4 px-5 group"
-                  variant="outline"
-                  size="lg"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                      <Calendar className="h-5 w-5 text-primary" />
-                    </div>
-                    <div className="text-left">
-                      <div className="font-semibold">View My Bookings</div>
-                      <div className="text-xs text-muted-foreground">
-                        Manage your sessions
-                      </div>
-                    </div>
-                  </div>
-                  <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:translate-x-1 transition-transform" />
-                </Button>
-              </a>
-
-              <a href="/profile" className="block">
-                <Button
-                  className="w-full justify-between h-auto py-4 px-5 group"
-                  variant="outline"
-                  size="lg"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                      <Star className="h-5 w-5 text-amber-600" />
-                    </div>
-                    <div className="text-left">
-                      <div className="font-semibold">Update Profile</div>
-                      <div className="text-xs text-muted-foreground">
-                        Personalize your account
-                      </div>
-                    </div>
-                  </div>
-                  <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:translate-x-1 transition-transform" />
-                </Button>
-              </a>
+            <CardContent>
+              <div className="flex items-center gap-6">
+                <ProgressRing value={completionRate} />
+                <div className="space-y-3">
+                  <Legend
+                    color="bg-primary"
+                    label="Completed"
+                    value={sessionCompleted}
+                  />
+                  <Legend
+                    color="bg-primary/30"
+                    label="Upcoming"
+                    value={upcomingSessions}
+                  />
+                  <Legend
+                    color="bg-muted-foreground/20"
+                    label="Total booked"
+                    value={totalSessions}
+                  />
+                </div>
+              </div>
             </CardContent>
           </Card>
 
-          {/* Getting Started Guide */}
-          <Card className="border-none shadow-lg hover:shadow-xl transition-shadow duration-300">
+          {/* Quick Actions */}
+          <Card className="border shadow-sm lg:col-span-3">
             <CardHeader>
-              <CardTitle className="text-xl flex items-center gap-2">
-                <BookOpen className="h-5 w-5 text-primary" />
-                How It Works
-              </CardTitle>
-              <CardDescription>
-                Follow these simple steps to get started
-              </CardDescription>
+              <CardTitle className="text-lg">Quick Actions</CardTitle>
+              <CardDescription>Jump back into your learning</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 sm:grid-cols-2">
+              <ActionTile
+                href="/tutors"
+                icon={BookOpen}
+                title="Find a Tutor"
+                subtitle="Browse available experts"
+                primary
+              />
+              <ActionTile
+                href="/ai_tutor"
+                icon={Bot}
+                title="Your AI Tutor"
+                subtitle="Turn slides into video"
+                primary
+              />
+              <ActionTile
+                href="/bookings"
+                icon={CalendarDays}
+                title="My Bookings"
+                subtitle="Manage your sessions"
+              />
+              <ActionTile
+                href="/profile"
+                icon={UserRound}
+                title="Update Profile"
+                subtitle="Personalize your account"
+              />
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* How it works */}
+        <section className="mt-6">
+          <Card className="border shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-lg">How It Works</CardTitle>
+              <CardDescription>From discovery to mastery in four steps</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                {["Find Your Tutor","Book a Session","Attend & Learn","Pay & Review"].map((step, idx) => (
-                  <div key={idx} className={`flex items-start gap-4 p-4 rounded-xl border
-                    ${idx===0 ? "bg-blue-500/10 border-blue-500/20" :
-                     idx===1 ? "bg-green-500/10 border-green-500/20" :
-                     idx===2 ? "bg-purple-500/10 border-purple-500/20" :
-                               "bg-amber-500/10 border-amber-500/20"}`}>
-                    <div className={`h-10 w-10 rounded-full flex items-center justify-center text-white flex-shrink-0 font-bold
-                      ${idx===0?"bg-blue-500":idx===1?"bg-green-500":idx===2?"bg-purple-500":"bg-amber-500"}`}>
-                      {idx+1}
+              <ol className="grid gap-6 md:grid-cols-4">
+                {[
+                  {
+                    t: "Find Your Tutor",
+                    d: "Filter by subject and review profiles, ratings, and availability.",
+                  },
+                  {
+                    t: "Book a Session",
+                    d: "Pick a time slot, choose duration, and confirm instantly.",
+                  },
+                  {
+                    t: "Attend & Learn",
+                    d: "Join at the scheduled time for personalized support.",
+                  },
+                  {
+                    t: "Pay & Review",
+                    d: "Settle up afterward and rate your tutor to help others.",
+                  },
+                ].map((step, i) => (
+                  <li key={i} className="relative">
+                    <div className="flex items-center gap-3">
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
+                        {i + 1}
+                      </span>
+                      {i < 3 && (
+                        <span className="hidden h-px flex-1 bg-border md:block" />
+                      )}
                     </div>
-                    <div className="flex-1">
-                      <p className="font-semibold text-sm mb-1">{step}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {idx===0
-                          ? "Browse through our qualified tutors, filter by subject, and check their profiles, ratings, and availability"
-                          : idx===1
-                          ? "Select a convenient time slot, choose session duration, and confirm your booking"
-                          : idx===2
-                          ? "Join your session at the scheduled time and get personalized learning support"
-                          : "Complete payment after your session and rate your tutor to help other students"}
-                      </p>
-                    </div>
-                  </div>
+                    <p className="mt-3 text-sm font-semibold">{step.t}</p>
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                      {step.d}
+                    </p>
+                  </li>
                 ))}
-              </div>
+              </ol>
             </CardContent>
           </Card>
-        </div>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function ProgressRing({ value }: { value: number | undefined }) {
+  const pct = value ?? 0;
+  const radius = 52;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (pct / 100) * circumference;
+
+  return (
+    <div className="relative h-32 w-32 shrink-0">
+      <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90">
+        <circle
+          cx="60"
+          cy="60"
+          r={radius}
+          fill="none"
+          strokeWidth="12"
+          className="stroke-muted"
+        />
+        <circle
+          cx="60"
+          cy="60"
+          r={radius}
+          fill="none"
+          strokeWidth="12"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={value === undefined ? circumference : offset}
+          className="stroke-primary transition-all duration-700 ease-out"
+        />
+      </svg>
+      <div className="absolute inset-0 grid place-items-center">
+        {value === undefined ? (
+          <span className="h-6 w-10 animate-pulse rounded bg-muted" />
+        ) : (
+          <div className="text-center">
+            <div className="text-2xl font-bold tabular-nums">{pct}%</div>
+            <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Done
+            </div>
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+function Legend({
+  color,
+  label,
+  value,
+}: {
+  color: string;
+  label: string;
+  value: number | undefined;
+}) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span className={`h-2.5 w-2.5 rounded-full ${color}`} />
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <span className="ml-auto text-sm font-semibold tabular-nums">
+        {value === undefined ? "—" : value}
+      </span>
+    </div>
+  );
+}
+
+function ActionTile({
+  href,
+  icon: Icon,
+  title,
+  subtitle,
+  primary,
+}: {
+  href: string;
+  icon: React.ElementType;
+  title: string;
+  subtitle: string;
+  primary?: boolean;
+}) {
+  return (
+    <a
+      href={href}
+      className={`group flex items-center gap-3 rounded-xl border p-4 transition-all hover:shadow-sm ${
+        primary
+          ? "border-primary/20 bg-primary/5 hover:border-primary/40"
+          : "bg-card hover:bg-accent"
+      }`}
+    >
+      <span
+        className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${
+          primary
+            ? "bg-primary text-primary-foreground"
+            : "bg-muted text-foreground"
+        }`}
+      >
+        <Icon className="h-5 w-5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-semibold">{title}</div>
+        <div className="truncate text-xs text-muted-foreground">{subtitle}</div>
+      </div>
+      <ArrowUpRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+    </a>
   );
 }
