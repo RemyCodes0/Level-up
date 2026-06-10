@@ -1,6 +1,5 @@
 "use client";
 
-import { useAuth } from "@/lib/auth-context";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Navbar } from "@/components/navbar/Navbar";
@@ -18,7 +17,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ALL_SUBJECTS } from "@/lib/mock-data";
 import {
   X,
   Plus,
@@ -80,6 +78,13 @@ const SECTIONS = [
   { id: "benefits", label: "Benefits", icon: Sparkles },
 ];
 
+// _id is optional — existing subjects from the DB have it, new ones don't
+interface Subject {
+  code: string;
+  name: string;
+  _id?: string;
+}
+
 function SectionCard({
   icon: Icon,
   title,
@@ -126,9 +131,7 @@ export default function TutorProfileEditPage() {
 
   const [bio, setBio] = useState("");
   const [hourlyRate, setHourlyRate] = useState<number | "">("");
-  const [selectedSubjects, setSelectedSubjects] = useState<
-    { code: string; name: string; _id: string }[]
-  >([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [subjectInput, setSubjectInput] = useState("");
 
   const [location, setLocation] = useState("");
@@ -143,7 +146,6 @@ export default function TutorProfileEditPage() {
 
   const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
-
   const token = localStorage.getItem("token");
 
   useEffect(() => {
@@ -158,11 +160,10 @@ export default function TutorProfileEditPage() {
           `${import.meta.env.VITE_API_URL}/api/tutor/${user._id}/getTutorWithUserId`,
         );
         const data = res.data.tutor;
-
         if (data) {
           setBio(data.bio || "");
           setHourlyRate(data.hourlyRate || "");
-          setSelectedSubjects(data.subjects || []);
+          setSubjects(data.subjects || []);
           setLocation(data.location || "");
           setTeachingApproach(data.teachingApproach || "");
           setTeachingStyle(data.teachingStyle || "");
@@ -172,6 +173,7 @@ export default function TutorProfileEditPage() {
         console.error("Failed to load tutor data:", error);
       }
     };
+
     fetchTutorData();
   }, []);
 
@@ -179,16 +181,18 @@ export default function TutorProfileEditPage() {
     return null;
   }
 
-  const handleAddSubject = (subject: string) => {
-    if (subject && !selectedSubjects.find((s) => s.name === subject)) {
-      const newSubject = {
-        code: subject,
-        name: subject,
-        _id: `temp-${Date.now()}`,
-      };
-      setSelectedSubjects([...selectedSubjects, newSubject]);
-      setSubjectInput("");
-    }
+  const handleAddSubject = () => {
+    const trimmed = subjectInput.trim();
+    if (!trimmed) return;
+    if (subjects.find((s) => s.name.toLowerCase() === trimmed.toLowerCase()))
+      return;
+    // No _id for new subjects — backend assigns one
+    setSubjects([...subjects, { code: trimmed, name: trimmed }]);
+    setSubjectInput("");
+  };
+
+  const handleRemoveSubject = (index: number) => {
+    setSubjects(subjects.filter((_, i) => i !== index));
   };
 
   const addCustomBenefit = () => {
@@ -208,11 +212,15 @@ export default function TutorProfileEditPage() {
       const updatedData = new FormData();
       updatedData.append("bio", bio);
       updatedData.append("hourlyRate", hourlyRate.toString());
-      updatedData.append("subjects", JSON.stringify(selectedSubjects));
       updatedData.append("location", location);
       updatedData.append("teachingApproach", teachingApproach);
       updatedData.append("teachingStyle", teachingStyle);
       updatedData.append("studentBenefits", JSON.stringify(studentBenefits));
+
+      // Always strip _id before sending — avoids BSONError on fake temp IDs
+      // and lets MongoDB manage ID assignment cleanly on every save.
+      const subjectsPayload = subjects.map(({ code, name }) => ({ code, name }));
+      updatedData.append("subjects", JSON.stringify(subjectsPayload));
 
       await axios.put(
         `${import.meta.env.VITE_API_URL}/api/tutor/updateProfile`,
@@ -241,7 +249,7 @@ export default function TutorProfileEditPage() {
   const profileFields = [
     bio,
     hourlyRate !== "" ? "rate" : "",
-    selectedSubjects.length ? "subjects" : "",
+    subjects.length ? "subjects" : "",
     location,
     teachingStyle,
     teachingApproach,
@@ -288,9 +296,7 @@ export default function TutorProfileEditPage() {
             <div className="w-full max-w-xs rounded-xl border border-border/60 bg-background p-4">
               <div className="mb-2 flex items-center justify-between text-sm">
                 <span className="font-medium">Profile completion</span>
-                <span className="font-semibold text-primary">
-                  {completion}%
-                </span>
+                <span className="font-semibold text-primary">{completion}%</span>
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-muted">
                 <div
@@ -404,35 +410,37 @@ export default function TutorProfileEditPage() {
               id="subjects"
               icon={GraduationCap}
               title="Subjects"
-              description="Select the subjects you can tutor"
+              description="Type in the subjects you can tutor — add as many as you like"
               delay={0.1}
             >
               <div className="space-y-2">
                 <Label htmlFor="subject" className="text-sm font-medium">
                   Add Subject
                 </Label>
+                <p className="text-xs text-muted-foreground">
+                  Type a subject name and press{" "}
+                  <kbd className="rounded border border-border px-1 py-0.5 font-mono text-xs">
+                    Enter
+                  </kbd>{" "}
+                  or click <strong>+</strong>.
+                </p>
                 <div className="flex gap-2">
                   <Input
                     id="subject"
                     value={subjectInput}
                     onChange={(e) => setSubjectInput(e.target.value)}
-                    placeholder="Type or select a subject..."
-                    list="subjects-list"
+                    placeholder="e.g. Linear Algebra, French, Web Development…"
                     className="h-11"
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        handleAddSubject(subjectInput);
+                        handleAddSubject();
                       }
                     }}
                   />
-                  <datalist id="subjects-list">
-                    {ALL_SUBJECTS.map((subject) => (
-                      <option key={subject} value={subject} />
-                    ))}
-                  </datalist>
                   <Button
-                    onClick={() => handleAddSubject(subjectInput)}
+                    type="button"
+                    onClick={handleAddSubject}
                     className="h-11 shrink-0"
                   >
                     <Plus className="h-5 w-5" />
@@ -440,23 +448,18 @@ export default function TutorProfileEditPage() {
                 </div>
               </div>
 
-              {selectedSubjects?.length > 0 ? (
+              {subjects.length > 0 ? (
                 <div className="flex flex-wrap gap-2 rounded-lg border border-border/60 bg-muted/40 p-4">
-                  {selectedSubjects.map((subject) => (
+                  {subjects.map((subject, index) => (
                     <Badge
-                      key={subject._id}
+                      key={index}
                       variant="secondary"
                       className="gap-1.5 px-3 py-1.5 text-sm"
                     >
                       {subject.name}
                       <button
-                        onClick={() =>
-                          setSelectedSubjects(
-                            selectedSubjects.filter(
-                              (s) => s._id !== subject._id,
-                            ),
-                          )
-                        }
+                        type="button"
+                        onClick={() => handleRemoveSubject(index)}
                         className="ml-0.5 text-muted-foreground transition-colors hover:text-destructive"
                         aria-label={`Remove ${subject.name}`}
                       >
@@ -467,7 +470,7 @@ export default function TutorProfileEditPage() {
                 </div>
               ) : (
                 <p className="rounded-lg bg-muted/40 p-4 text-center text-sm text-muted-foreground">
-                  No subjects selected yet
+                  No subjects added yet
                 </p>
               )}
             </SectionCard>
@@ -541,10 +544,7 @@ export default function TutorProfileEditPage() {
               </div>
 
               <div className="space-y-2">
-                <Label
-                  htmlFor="teachingApproach"
-                  className="text-sm font-medium"
-                >
+                <Label htmlFor="teachingApproach" className="text-sm font-medium">
                   Teaching Approach Description
                 </Label>
                 <Textarea

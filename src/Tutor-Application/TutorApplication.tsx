@@ -31,6 +31,8 @@ import {
   Clock,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -38,24 +40,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { motion } from "framer-motion";
-import type { TutorApplication } from "@/lib/types";
 import axios from "axios";
-
-const AVAILABLE_SUBJECTS = [
-  { code: "MATH201", name: "Calculus I" },
-  { code: "MATH202", name: "Calculus II" },
-  { code: "PHYS201", name: "Physics I" },
-  { code: "PHYS202", name: "Physics II" },
-  { code: "CHEM201", name: "Chemistry I" },
-  { code: "CMPS200", name: "Introduction to Computer Science" },
-  { code: "ECON201", name: "Microeconomics" },
-  { code: "ECON202", name: "Macroeconomics" },
-  { code: "BIOL201", name: "Biology I" },
-  { code: "ENGL201", name: "Academic Writing" },
-];
 
 const DAYS_OF_WEEK = [
   "Monday",
@@ -114,7 +100,7 @@ export default function ApplyTutorPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const idInputRef = useRef<HTMLInputElement>(null);
   const [user, setUser] = useState<User | null>(null);
-const [loadingUser, setLoadingUser] = useState(true);
+  const [loadingUser, setLoadingUser] = useState(true);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
@@ -125,20 +111,19 @@ const [loadingUser, setLoadingUser] = useState(true);
     if (storedUser) {
       setUser(JSON.parse(storedUser));
     }
-      setLoadingUser(false)
+    setLoadingUser(false);
   }, []);
 
-useEffect(() => {
-  if (!loadingUser && user === null) {
-    router("/login");
-  }
-}, [user, loadingUser, router]);
+  useEffect(() => {
+    if (!loadingUser && user === null) {
+      router("/login");
+    }
+  }, [user, loadingUser, router]);
 
   // Form fields
   const [bio, setBio] = useState("");
-  const [subjects, setSubjects] = useState<{ code: string; name: string }[]>(
-    [],
-  );
+  const [subjects, setSubjects] = useState<string[]>([]);
+  const [subjectInput, setSubjectInput] = useState("");
   const [experiences, setExperiences] = useState("");
   const [certificates, setCertificates] = useState<File[]>([]);
   const [idCard, setIdCard] = useState<File | null>(null);
@@ -147,31 +132,31 @@ useEffect(() => {
   const [availability, setAvailability] = useState<
     { day: string; from: string; to: string }[]
   >([]);
-
-  // New fields
   const [location, setLocation] = useState("");
-  // const [locationType, setLocationType] = useState<"campus" | "online" | "both">("both")
   const [teachingApproach, setTeachingApproach] = useState("");
   const [teachingStyle, setTeachingStyle] = useState("");
   const [studentBenefits, setStudentBenefits] =
     useState<string[]>(DEFAULT_BENEFITS);
   const [customBenefit, setCustomBenefit] = useState("");
 
-  // Subject selection
-  const [selectedSubjectCode, setSelectedSubjectCode] = useState("");
-
+  // Subject handlers
   const addSubject = () => {
-    const subject = AVAILABLE_SUBJECTS.find(
-      (s) => s.code === selectedSubjectCode,
-    );
-    if (subject && !subjects.find((s) => s.code === subject.code)) {
-      setSubjects([...subjects, subject]);
-      setSelectedSubjectCode("");
+    const trimmed = subjectInput.trim();
+    if (trimmed && !subjects.includes(trimmed)) {
+      setSubjects([...subjects, trimmed]);
+      setSubjectInput("");
     }
   };
 
-  const removeSubject = (code: string) => {
-    setSubjects(subjects.filter((s) => s.code !== code));
+  const handleSubjectKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addSubject();
+    }
+  };
+
+  const removeSubject = (subject: string) => {
+    setSubjects(subjects.filter((s) => s !== subject));
   };
 
   // Availability
@@ -219,7 +204,6 @@ useEffect(() => {
     formData.append("hourlyRate", hourlyRate);
     formData.append("gpa", gpa);
     formData.append("location", location);
-    // formData.append("locationType", locationType)
     formData.append("teachingApproach", teachingApproach);
     formData.append("teachingStyle", teachingStyle);
     formData.append("subjects", JSON.stringify(subjects));
@@ -230,9 +214,8 @@ useEffect(() => {
     if (idCard) formData.append("idCard", idCard);
 
     try {
-      // Validation
       if (subjects.length === 0) {
-        throw new Error("Please select at least one subject");
+        throw new Error("Please add at least one subject");
       }
       if (availability.length === 0) {
         throw new Error("Please add at least one availability slot");
@@ -385,7 +368,7 @@ useEffect(() => {
                   </Alert>
                 )}
 
-                {/* Personal Information */}
+                {/* Academic Information */}
                 <div className="space-y-4">
                   <div className="flex items-center gap-2 mb-4">
                     <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
@@ -432,48 +415,46 @@ useEffect(() => {
                   />
                 </div>
 
-                {/* Subjects */}
+                {/* Subjects — free text entry */}
                 <div className="space-y-3">
                   <Label className="text-sm font-semibold">
                     Subjects You Can Teach *
                   </Label>
+                  <p className="text-xs text-muted-foreground -mt-1">
+                    Type a subject name and press Enter or click{" "}
+                    <strong>Add</strong>. You can add as many as you like.
+                  </p>
                   <div className="flex gap-2">
-                    <Select
-                      value={selectedSubjectCode}
-                      onValueChange={setSelectedSubjectCode}
-                    >
-                      <SelectTrigger className="h-11 border-2">
-                        <SelectValue placeholder="Select a subject" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {AVAILABLE_SUBJECTS.map((subject) => (
-                          <SelectItem key={subject.code} value={subject.code}>
-                            {subject.code} - {subject.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Input
+                      value={subjectInput}
+                      onChange={(e) => setSubjectInput(e.target.value)}
+                      onKeyDown={handleSubjectKeyDown}
+                      placeholder="e.g. Linear Algebra, French, Web Development…"
+                      className="h-11 border-2 focus:border-blue-500"
+                    />
                     <Button
                       type="button"
                       onClick={addSubject}
                       size="icon"
-                      className="h-11 w-11 bg-gradient-to-r from-blue-600 to-purple-600"
+                      className="h-11 w-11 shrink-0 bg-gradient-to-r from-blue-600 to-purple-600"
                     >
                       <Plus className="h-5 w-5" />
                     </Button>
                   </div>
+
                   {subjects.length > 0 && (
                     <div className="flex flex-wrap gap-2 p-4 rounded-lg bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-100">
                       {subjects.map((subject) => (
                         <Badge
-                          key={subject.code}
-                          className="bg-white text-gray-700 hover:bg-gray-50 px-3 py-1.5"
+                          key={subject}
+                          className="bg-white text-gray-700 hover:bg-gray-50 px-3 py-1.5 text-sm"
                         >
-                          {subject.code}
+                          {subject}
                           <button
                             type="button"
-                            onClick={() => removeSubject(subject.code)}
-                            className="ml-2 hover:text-red-600"
+                            onClick={() => removeSubject(subject)}
+                            className="ml-2 hover:text-red-600 transition-colors"
+                            aria-label={`Remove ${subject}`}
                           >
                             <X className="h-3.5 w-3.5" />
                           </button>
@@ -565,7 +546,7 @@ useEffect(() => {
                   />
                 </div>
 
-                {/* Location & Session Type */}
+                {/* Location & Availability */}
                 <div className="space-y-4">
                   <div className="flex items-center gap-2">
                     <div className="h-8 w-8 rounded-lg bg-green-500/10 flex items-center justify-center">
@@ -574,32 +555,6 @@ useEffect(() => {
                     <h3 className="text-xl font-bold">
                       Location & Availability
                     </h3>
-                  </div>
-
-                  <div className="space-y-3">
-                    {/* <Label className="text-sm font-semibold">Session Type *</Label> */}
-                    {/* <RadioGroup value={locationType} onValueChange={(value: any) => setLocationType(value)}>
-                      <div className="grid grid-cols-3 gap-3">
-                        <div className="flex items-center space-x-2 p-3 rounded-lg border-2 hover:border-green-300 transition-colors cursor-pointer">
-                          <RadioGroupItem value="campus" id="campus" />
-                          <Label htmlFor="campus" className="cursor-pointer text-sm font-medium">
-                            On-Campus
-                          </Label>
-                        </div>
-                        <div className="flex items-center space-x-2 p-3 rounded-lg border-2 hover:border-green-300 transition-colors cursor-pointer">
-                          <RadioGroupItem value="online" id="online" />
-                          <Label htmlFor="online" className="cursor-pointer text-sm font-medium">
-                            Online Only
-                          </Label>
-                        </div>
-                        <div className="flex items-center space-x-2 p-3 rounded-lg border-2 hover:border-green-300 transition-colors cursor-pointer">
-                          <RadioGroupItem value="both" id="both" />
-                          <Label htmlFor="both" className="cursor-pointer text-sm font-medium">
-                            Both
-                          </Label>
-                        </div>
-                      </div>
-                    </RadioGroup> */}
                   </div>
 
                   <div className="space-y-2">
@@ -653,7 +608,7 @@ useEffect(() => {
                       onChange={(e) => setCustomBenefit(e.target.value)}
                       placeholder="Add a custom benefit..."
                       className="h-11 border-2 focus:border-amber-500"
-                      onKeyPress={(e) => {
+                      onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
                           addCustomBenefit();
@@ -871,7 +826,7 @@ useEffect(() => {
                   )}
                 </div>
 
-                {/* Submit Button */}
+                {/* Submit */}
                 <div className="pt-6 space-y-4">
                   <Button
                     type="submit"
@@ -909,3 +864,4 @@ useEffect(() => {
     </div>
   );
 }
+

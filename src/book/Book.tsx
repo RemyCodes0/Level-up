@@ -62,6 +62,7 @@ export default function BookSessionPage() {
         );
         setTutor(res.data.tutor);
         setSelectedSlot(res.data.tutor.availability[0] || null);
+        setLocation(res.data.tutor.location)
       } catch (error) {
         console.error(error);
         alert("A problem occurred while fetching tutor.");
@@ -108,11 +109,13 @@ export default function BookSessionPage() {
     setLoading(true);
     console.log(selectedSlot);
     try {
+      
       const res = await axios.post(
         `${import.meta.env.VITE_API_URL}/api/book/${id}`,
         {
           slot: selectedSlot,
           subject,
+          location,
           duration,
           totalAmount,
           notes,

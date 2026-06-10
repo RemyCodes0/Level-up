@@ -80,12 +80,12 @@ exports.getBookingByStudent = async (req, res) => {
 
 exports.book = async (req, res) => {
   try {
-    const { slot, subject, duration, notes, totalAmount } = req.body;
+    const { slot, subject, location, duration, notes, totalAmount } = req.body;
     const existing = await Booking.findOne({
       tutor: req.params.id,
       "slot.day": slot.day,
       "slot.from": slot.from,
-      status: { $in: ["pending", "confirmed"] },
+      status: { $in: ["pending"] },
     });
     if (existing)
       return res.status(400).json({ message: "slot already booked" });
@@ -93,6 +93,7 @@ exports.book = async (req, res) => {
       tutor: req.params.id,
       student: req.user._id,
       slot,
+      location,
       subject,
       duration,
       totalAmount,

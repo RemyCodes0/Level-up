@@ -122,7 +122,7 @@ export default function BookingsPage() {
   }
 
   const upcomingSessions = mockSessions?.filter(
-    (s) => s.status === "confirmed" || s.status === "pending",
+    (s) => s.status === "confirmed" || s.status === "pending" || s.status === "canceled",
   );
   const pastSessions = mockSessions?.filter((s) => s.status === "completed");
 
@@ -190,7 +190,7 @@ export default function BookingsPage() {
 
     if (!tutor) return null;
 
-    const isPast = session.status === "completed";
+    const isPast = session.status === "completed" ;
 
     const getStatusConfig = (status: string) => {
       switch (status) {
@@ -218,7 +218,7 @@ export default function BookingsPage() {
             bgColor: "bg-blue-500/10",
             label: "Completed",
           };
-        case "cancelled":
+        case "canceled":
           return {
             variant: "secondary" as const,
             icon: XCircle,

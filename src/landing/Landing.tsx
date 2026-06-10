@@ -117,7 +117,7 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-background via-blue-50/30 to-purple-50/30">
          <Helmet>
-        <title>Level Up | Peer Tutoring Platform for AUB Students</title>
+        <title>Level Up: AUB Peer Tutoring App</title>
         <meta name="description" content="Connect with verified AUB peer tutors for affordable one-on-one tutoring sessions. Find tutors for calculus, physics, biology, computer science and more at the American University of Beirut." />
         <meta name="keywords" content="AUB tutoring, peer tutoring AUB, American University Beirut tutor, AUB student tutor, calculus tutor AUB, physics tutor AUB, affordable tutoring Beirut" />
         <meta property="og:title" content="Level Up | Peer Tutoring for AUB Students" />
