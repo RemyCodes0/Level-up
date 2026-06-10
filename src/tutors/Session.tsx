@@ -1,6 +1,5 @@
 "use client";
 
-import { useAuth } from "@/lib/auth-context";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Navbar } from "@/components/navbar/Navbar";
@@ -17,12 +16,11 @@ import {
   Check,
   X,
   DollarSign,
-  Filter,
-  Search,
   CalendarDays,
   CheckCircle2,
   XCircle,
   AlertCircle,
+  MessageSquare,
 } from "lucide-react";
 import axios from "axios";
 
@@ -40,11 +38,10 @@ export default function TutorSessionsPage() {
   const fetchBookings = async () => {
     setIsLoading(true);
     try {
-      const res = await axios.get(`${import.meta.env.VITE_API_URL}/api/book/tutor`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const res = await axios.get(
+        `${import.meta.env.VITE_API_URL}/api/book/tutor`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
       const bookings = res.data;
       divideBookings(bookings);
       setSessions(res.data);
@@ -56,9 +53,7 @@ export default function TutorSessionsPage() {
   };
 
   useEffect(() => {
-    if (token) {
-      fetchBookings();
-    }
+    if (token) fetchBookings();
   }, [token]);
 
   const acceptBooking = async (id) => {
@@ -104,9 +99,10 @@ export default function TutorSessionsPage() {
         subject: b.subject,
         date: b.slot.day,
         time: `${b.slot.from} - ${b.slot.to}`,
-        location: b.slot.location || "Online",
+        location: b.location || "Online",
         status: b.status,
         amount: b.totalAmount,
+        notes: b.notes || "",
       };
 
       if (b.status === "pending") {
@@ -123,31 +119,23 @@ export default function TutorSessionsPage() {
   const getStatusConfig = (status) => {
     const configs = {
       confirmed: {
-        variant: "default",
         className:
           "bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-200",
         icon: CheckCircle2,
-        iconColor: "text-emerald-600",
       },
       pending: {
-        variant: "secondary",
         className:
           "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-200",
         icon: AlertCircle,
-        iconColor: "text-amber-600",
       },
       completed: {
-        variant: "outline",
         className:
           "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-200",
         icon: CheckCircle2,
-        iconColor: "text-blue-600",
       },
       canceled: {
-        variant: "outline",
         className: "bg-red-100 text-red-700 border-red-200 hover:bg-red-200",
         icon: XCircle,
-        iconColor: "text-red-600",
       },
     };
     return configs[status] || configs.pending;
@@ -159,27 +147,24 @@ export default function TutorSessionsPage() {
     const isActionPending = actionLoading === session.id;
 
     return (
-      <Card className="border-0 shadow-md hover:shadow-lg transition-all duration-300 overflow-hidden group">
+      <Card className="relative border-0 shadow-md hover:shadow-lg transition-all duration-300 overflow-hidden group">
         <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-blue-500 to-purple-600" />
 
         <CardContent className="p-6">
+          {/* Header row */}
           <div className="flex items-start justify-between mb-4">
-            <div className="flex-1">
-              <div className="flex items-start gap-3">
-                {/* Student Avatar */}
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
-                  {session.studentName.charAt(0)}
-                </div>
-
-                <div className="flex-1">
-                  <h3 className="font-bold text-lg text-gray-900 mb-1">
-                    {session.subject}
-                  </h3>
-                  <p className="text-sm text-gray-600 flex items-center gap-1.5">
-                    <User className="h-4 w-4" />
-                    {session.studentName}
-                  </p>
-                </div>
+            <div className="flex items-center gap-3 flex-1">
+              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
+                {session.studentName.charAt(0)}
+              </div>
+              <div className="flex-1">
+                <h3 className="font-bold text-lg text-gray-900 leading-tight">
+                  {session.subject}
+                </h3>
+                <p className="text-sm font-bold text-gray-800 flex items-center gap-1.5 mt-0.5">
+                  <User className="h-4 w-4 shrink-0" />
+                  <span>{session.studentName}</span>
+                </p>
               </div>
             </div>
 
@@ -191,7 +176,7 @@ export default function TutorSessionsPage() {
             </Badge>
           </div>
 
-          {/* Session Details */}
+          {/* Session details */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4 bg-gray-50 rounded-lg p-4">
             <div className="flex items-center gap-2 text-sm">
               <div className="p-2 bg-blue-100 rounded-lg">
@@ -199,9 +184,7 @@ export default function TutorSessionsPage() {
               </div>
               <div>
                 <div className="text-xs text-gray-500 font-medium">Date</div>
-                <div className="text-gray-900 font-semibold">
-                  {session.date}
-                </div>
+                <div className="text-gray-900 font-semibold">{session.date}</div>
               </div>
             </div>
 
@@ -211,9 +194,7 @@ export default function TutorSessionsPage() {
               </div>
               <div>
                 <div className="text-xs text-gray-500 font-medium">Time</div>
-                <div className="text-gray-900 font-semibold">
-                  {session.time}
-                </div>
+                <div className="text-gray-900 font-semibold">{session.time}</div>
               </div>
             </div>
 
@@ -222,15 +203,35 @@ export default function TutorSessionsPage() {
                 <MapPin className="h-4 w-4 text-emerald-600" />
               </div>
               <div>
-                <div className="text-xs text-gray-500 font-medium">
-                  Location
-                </div>
+                <div className="text-xs text-gray-500 font-medium">Location</div>
                 <div className="text-gray-900 font-semibold">
                   {session.location}
                 </div>
               </div>
             </div>
           </div>
+
+          {/* Student notes */}
+          {session.notes ? (
+            <div className="mb-4 flex gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <div className="p-1.5 bg-amber-100 rounded-lg self-start">
+                <MessageSquare className="h-4 w-4 text-amber-600 flex-shrink-0" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-amber-700 mb-1">
+                  Student Notes
+                </p>
+                <p className="text-sm text-amber-900 leading-relaxed">
+                  {session.notes}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="mb-4 flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
+              <MessageSquare className="h-4 w-4 text-gray-300 flex-shrink-0" />
+              <p className="text-xs text-gray-400 italic">No notes from student</p>
+            </div>
+          )}
 
           {/* Footer */}
           <div className="flex items-center justify-between pt-4 border-t border-gray-200">
@@ -311,12 +312,10 @@ export default function TutorSessionsPage() {
             </div>
             <div className="grid grid-cols-3 gap-3 mb-4">
               {[1, 2, 3].map((j) => (
-                <div
-                  key={j}
-                  className="h-16 bg-gray-100 rounded-lg animate-pulse"
-                />
+                <div key={j} className="h-16 bg-gray-100 rounded-lg animate-pulse" />
               ))}
             </div>
+            <div className="h-14 bg-amber-50 rounded-lg animate-pulse mb-4" />
             <div className="flex items-center justify-between pt-4 border-t">
               <div className="h-8 w-24 bg-gray-200 rounded animate-pulse" />
               <div className="h-8 w-32 bg-gray-200 rounded animate-pulse" />
@@ -369,7 +368,6 @@ export default function TutorSessionsPage() {
               </p>
             </div>
 
-            {/* Stats Summary */}
             <div className="hidden md:flex gap-4">
               <div className="bg-white rounded-lg shadow-md px-6 py-3 border border-gray-100">
                 <div className="text-sm text-gray-600">Pending</div>
