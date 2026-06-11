@@ -23,7 +23,7 @@ import { useNavigate } from "react-router-dom"
 import { motion } from "framer-motion"
 
 export default function HomePage() {
-  const user = JSON.parse(localStorage.getItem("user") || "")
+  const user = JSON.parse(localStorage.getItem("user") || "null") 
   const router = useNavigate()
   
   useEffect(() => {
