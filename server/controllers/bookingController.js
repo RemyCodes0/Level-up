@@ -113,6 +113,7 @@ exports.book = async (req, res) => {
       html: `<p>Hi <b>${tutor.user.name}</b>,</p>
              <p>You have a new booking for <b>${subject}</b> on <b>${slot.day}</b> from <b>${slot.from}</b> to <b>${slot.to}</b>.</p>
              <p><b>Notes:</b> ${notes || "None"}</p>
+              <p><b>In:</b> ${booking.location || "To be determined"}</p>
              <p><b>Total Amount:</b> $${totalAmount}</p>
              <p>Time to Level Up!!!✨</p>`,
     });

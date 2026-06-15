@@ -194,7 +194,7 @@ export default function DashboardPage() {
                 </Button>
               </a>
               <a href="/ai_tutor">
-                <Button size="lg" variant="outline" className="w-full gap-2 sm:w-auto">
+                <Button size="lg" variant="outline" className="w-full gap-2 sm:w-auto ">
                   <Sparkles className="h-4 w-4 text-primary" />
                   AI Tutor
                 </Button>
@@ -293,7 +293,7 @@ export default function DashboardPage() {
               <ActionTile
                 href="/ai_tutor"
                 icon={Bot}
-                title="Your AI Tutor"
+                title="Your AI Tutor(Coming soon)"
                 subtitle="Turn slides into video"
                 primary
               />

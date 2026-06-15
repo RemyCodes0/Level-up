@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require("path");
 
 const { SitemapStream, streamToPromise } = require('sitemap');
 
@@ -8,6 +9,7 @@ const tutorRoutes = require('./routes/tutor');
 const bookRoutes = require("./routes/book");
 const reviewRoutes = require("./routes/review");
 const aiRoutes = require("./routes/ai")
+const courseRoutes = require('./routes/course');
 
 const Tutor = require('./models/Tutor');
 
@@ -21,7 +23,13 @@ app.use('/api/tutor', tutorRoutes);
 app.use('/api/book/', bookRoutes);
 app.use('/api/reviews', reviewRoutes);
 // app.use("/api/ai", aiRoutes);
+app.use('/api/course', courseRoutes);
 
+// Serve rendered videos statically at /videos/*
+app.use(
+  "/videos",
+  express.static(path.resolve(__dirname, "../rendered-videos"))
+);
 
 
 
