@@ -23,20 +23,19 @@ async function renderLessonVideo(serveUrl, componentName, renderId) {
 
   console.log(`[${renderId}] Rendering to ${outputPath}...`);
   await renderMedia({
-    composition,
-    serveUrl,
-    codec: "h264",
-    outputLocation: outputPath,
-    // Use multiple CPU cores for speed (Remotion picks a sensible default,
-    // but you can tune this on a bigger machine)
-    concurrency: null, // null = auto-detect based on CPU cores
-    onProgress: ({ progress }) => {
-      const pct = Math.round(progress * 100);
-      if (pct % 10 === 0) {
-        console.log(`[${renderId}] Render: ${pct}%`);
-      }
-    },
-  });
+  composition,
+  serveUrl,
+  codec: "h264",
+  outputLocation: outputPath,
+  concurrency: null,
+  timeoutInMilliseconds: 90000, // 90s per frame (default is 30s)
+  onProgress: ({ progress }) => {
+    const pct = Math.round(progress * 100);
+    if (pct % 10 === 0) {
+      console.log(`[${renderId}] Render: ${pct}%`);
+    }
+  },
+});
 
   console.log(`[${renderId}] Render complete: ${outputPath}`);
   return outputPath;

@@ -4,7 +4,6 @@ const { validateGeneratedCode } = require("./validateCode");
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Generates the full course structure (lesson metadata + quiz) as JSON.
-// This drives your UI sidebar and quiz.
 async function generateCoursePlan(topic, pdfText) {
   const context = pdfText
     ? `The student uploaded course material:\n\n${pdfText.slice(0, 12000)}`
@@ -65,7 +64,6 @@ Rules:
 }
 
 function buildCodePrompt(lesson, componentName, scenes, totalFrames) {
-  // Build a clear table of scenes with their exact frame durations
   const sceneTable = scenes
     .map(
       (s, i) =>
@@ -90,25 +88,25 @@ ${sceneTable}
 STRICT REQUIREMENTS — follow exactly or the render will fail:
 1. The component MUST be named exactly "${componentName}" and exported as a named export: export const ${componentName} = () => { ... }
 2. Import ONLY from "remotion" and "react".
-   Allowed remotion imports: AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio.
+   Allowed remotion imports: AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, staticFile.
 3. The component takes NO props — all scene data is hardcoded from the SCENES list above.
 4. Structure: a single <Series> containing one <Series.Sequence> per scene, IN ORDER.
 5. Each <Series.Sequence> MUST use durationInFrames set to EXACTLY the number given for that scene above. Never change, compute, or round these numbers — copy them exactly.
-6. Inside each <Series.Sequence>, include <Audio src="<that scene's audioUrl>" /> so the correct narration plays during that scene.
-7. Inside each scene, build animations that visually match that scene's visualDescription and display its onScreenText. Use spring entrances, interpolated fades, moving shapes, staggered reveals, SVG graphics — make it dynamic and educational, and make sure the visual matches what the narration is describing.
+6. Inside each <Series.Sequence>, include <Audio src={staticFile("<that scene's audioUrl>")} /> so the correct narration plays. The audioUrl values are paths relative to the Remotion public folder — always wrap them in staticFile().
+7. Inside each scene, build animations that visually match that scene's visualDescription and display its onScreenText. Use spring entrances, interpolated fades, moving shapes, staggered reveals, SVG graphics — make it dynamic and educational.
 8. The sum of all durationInFrames MUST equal exactly ${totalFrames}.
 9. Use only inline styles. No external CSS, no Tailwind.
 10. Do NOT include registerRoot or Composition — only the component itself plus any helper components.
 11. Keep total code under 800 lines. Use reusable helper components and loops to stay concise.
 12. Every <Series.Sequence> MUST have a positive integer durationInFrames (at least 1). Never produce a zero or negative duration.
-13. Return ONLY the raw .tsx code. No markdown fences, no explanation.
+13. PERFORMANCE: Keep each frame cheap to render. Do NOT put more than ~50 elements on screen at once. Avoid heavy per-frame computation, deeply nested loops, or generating large arrays inside the render function. Precompute static values outside the component. Every frame must render in well under one second.
+14. Return ONLY the raw .tsx code. No markdown fences, no explanation.
 
 Begin with imports, then any helper components, then the main "${componentName}" component. Make sure the final line closes the component cleanly.
   `;
 }
 
 // Generates the synced Remotion TSX code for ONE lesson using measured scenes.
-// Uses streaming to avoid request timeouts on long generations, with retry.
 async function generateLessonCode(
   lesson,
   componentName,

@@ -1,17 +1,17 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const pdf = require("pdf-parse");
 const {
   generateCoursePlan,
   generateLessonCode,
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
-const { generateAllSceneAudio } = require("../services/ttsService");
+const { generateAllSceneAudio, cleanupAudio } = require("../services/ttsService");
 const { bundleLessonCode } = require("../services/bundleService");
-const { renderLessonVideo } = require("../services/renderService");
+const { renderLessonVideo, OUTPUT_DIR } = require("../services/renderService");
 const Course = require("../models/Course");
 
-// Base URL the frontend uses to reach this backend (and its served videos).
-// Set SERVER_BASE_URL in .env. Defaults to localhost for dev.
 const BASE_URL = process.env.SERVER_BASE_URL || "http://localhost:5000";
 
 // ── Entry point: client calls this to start course generation ────────────────
@@ -31,16 +31,14 @@ async function generateCourseHandler(req, res) {
     }
 
     const course = await Course.create({
+      userId: req.user._id,
       topic: topic || req.file?.originalname,
       status: "generating",
       lessons: [],
       questions: [],
     });
 
-    // Respond immediately so the frontend can start polling
     res.json({ courseId: course._id, status: "generating" });
-
-    // Process in the background (don't await)
     processCourse(course._id.toString(), topic, pdfText);
   } catch (err) {
     console.error(err);
@@ -48,61 +46,91 @@ async function generateCourseHandler(req, res) {
   }
 }
 
-// ── Builds one lesson fully: scenes → audio → code → bundle → render ──────────
+// ── Builds one lesson fully: scenes → audio → code → bundle → render ─────────
+// Generates scenes + audio ONCE, then retries code + bundle + render up to
+// MAX_ATTEMPTS times if the render crashes (e.g. bad AI-generated code).
 async function buildLesson(courseId, lesson) {
-  const renderId = crypto.randomBytes(4).toString("hex");
-  const componentName = `Lesson${renderId}`;
-  let cleanup = null;
+  const MAX_ATTEMPTS = 2;
+  let measuredScenes = null;
+  let totalFrames = 0;
 
-  try {
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
-    const scenes = await generateScenePlan(lesson);
+  // Step 1 — Scene plan (once, not retried)
+  console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
+  const scenes = await generateScenePlan(lesson);
 
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio...`);
-    const { scenes: measuredScenes, totalFrames } =
-      await generateAllSceneAudio(scenes);
+  // Step 2 — Audio (once — reused across retries to save time + cost)
+  console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio...`);
+  ({ scenes: measuredScenes, totalFrames } = await generateAllSceneAudio(scenes));
 
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: code...`);
-    const tsxCode = await generateLessonCode(
-      lesson,
-      componentName,
-      measuredScenes,
-      totalFrames
-    );
+  let lastError = null;
 
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: bundle...`);
-    const bundle = await bundleLessonCode(
-      componentName,
-      tsxCode,
-      renderId,
-      totalFrames
-    );
-    cleanup = bundle.cleanup;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    // Each attempt gets a fresh renderId + componentName so there are no
+    // file collisions between the original attempt and any retry.
+    const renderId = crypto.randomBytes(4).toString("hex");
+    const componentName = `Lesson${renderId}`;
+    let cleanup = null;
 
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: render...`);
-    await renderLessonVideo(bundle.serveUrl, componentName, renderId);
+    try {
+      if (attempt > 1) {
+        console.log(
+          `[${courseId}] Lesson ${lesson.lessonNumber}: render failed — regenerating code (attempt ${attempt}/${MAX_ATTEMPTS})...`
+        );
+      }
 
-    // The video is served statically from /videos/<renderId>.mp4
-    const videoUrl = `${BASE_URL}/videos/${renderId}.mp4`;
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready: ${videoUrl}`);
+      // Step 3 — Generate code
+      console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: code...`);
+      const tsxCode = await generateLessonCode(
+        lesson,
+        componentName,
+        measuredScenes,
+        totalFrames
+      );
 
-    await Course.findByIdAndUpdate(courseId, {
-      $set: {
-        [`lessons.${lesson.lessonNumber - 1}.videoUrl`]: videoUrl,
-        [`lessons.${lesson.lessonNumber - 1}.status`]: "ready",
-      },
-    });
-  } catch (err) {
-    console.error(
-      `[${courseId}] Lesson ${lesson.lessonNumber} failed:`,
-      err.message
-    );
-    await Course.findByIdAndUpdate(courseId, {
-      $set: { [`lessons.${lesson.lessonNumber - 1}.status`]: "failed" },
-    });
-  } finally {
-    if (cleanup) cleanup();
+      // Step 4 — Bundle
+      console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: bundle...`);
+      const bundle = await bundleLessonCode(
+        componentName,
+        tsxCode,
+        renderId,
+        totalFrames
+      );
+      cleanup = bundle.cleanup;
+
+      // Step 5 — Render
+      console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: render...`);
+      await renderLessonVideo(bundle.serveUrl, componentName, renderId);
+
+      const videoUrl = `${BASE_URL}/videos/${renderId}.mp4`;
+      console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready: ${videoUrl}`);
+
+      await Course.findByIdAndUpdate(courseId, {
+        $set: {
+          [`lessons.${lesson.lessonNumber - 1}.videoUrl`]: videoUrl,
+          [`lessons.${lesson.lessonNumber - 1}.status`]: "ready",
+        },
+      });
+
+      cleanupAudio(measuredScenes);
+      return; // success — exit retry loop
+
+    } catch (err) {
+      lastError = err;
+      console.error(
+        `[${courseId}] Lesson ${lesson.lessonNumber} attempt ${attempt}/${MAX_ATTEMPTS} failed: ${err.message}`
+      );
+      if (cleanup) cleanup(); // clean up bundle files before retrying
+    }
   }
+
+  // All attempts exhausted — mark lesson as failed
+  console.error(
+    `[${courseId}] Lesson ${lesson.lessonNumber} permanently failed after ${MAX_ATTEMPTS} attempts`
+  );
+  cleanupAudio(measuredScenes);
+  await Course.findByIdAndUpdate(courseId, {
+    $set: { [`lessons.${lesson.lessonNumber - 1}.status`]: "failed" },
+  });
 }
 
 // ── Orchestrates the whole course ────────────────────────────────────────────
@@ -111,7 +139,6 @@ async function processCourse(courseId, topic, pdfText) {
     console.log(`[${courseId}] Generating course plan...`);
     const { lessons, questions } = await generateCoursePlan(topic, pdfText);
 
-    // Save lesson metadata immediately so the UI can render the shell + quiz
     await Course.findByIdAndUpdate(courseId, {
       lessons: lessons.map((l) => ({
         ...l,
@@ -121,13 +148,10 @@ async function processCourse(courseId, topic, pdfText) {
       questions,
     });
 
-    // Build lesson 1 (the intro) FIRST so the user can start watching ASAP
+    // Build lesson 1 first so the user can start watching immediately
     await buildLesson(courseId, lessons[0]);
 
-    // Build the remaining lessons SEQUENTIALLY in the background.
-    // Local rendering is CPU-bound on one machine — running them one at a
-    // time keeps each render fast and avoids overloading the server.
-    // The user watches lesson 1 while lesson 2 renders, and so on.
+    // Build the rest sequentially in the background
     for (let i = 1; i < lessons.length; i++) {
       await buildLesson(courseId, lessons[i]);
     }
@@ -140,10 +164,13 @@ async function processCourse(courseId, topic, pdfText) {
   }
 }
 
-// ── Status endpoint the frontend polls ───────────────────────────────────────
+// ── Status endpoint the frontend polls (scoped to the owner) ─────────────────
 async function getCourseStatusHandler(req, res) {
   try {
-    const course = await Course.findById(req.params.courseId);
+    const course = await Course.findOne({
+      _id: req.params.courseId,
+      userId: req.user._id,
+    });
     if (!course) {
       res.status(404).json({ error: "Course not found" });
       return;
@@ -155,4 +182,57 @@ async function getCourseStatusHandler(req, res) {
   }
 }
 
-module.exports = { generateCourseHandler, getCourseStatusHandler };
+// ── List the logged-in user's courses (newest first) for the sidebar ─────────
+async function listCoursesHandler(req, res) {
+  try {
+    const courses = await Course.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.json(courses);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to list courses" });
+  }
+}
+
+// ── Delete a course (scoped to the owner) + remove its video files ───────────
+async function deleteCourseHandler(req, res) {
+  try {
+    const course = await Course.findOne({
+      _id: req.params.courseId,
+      userId: req.user._id,
+    });
+
+    if (!course) {
+      res.status(404).json({ error: "Course not found" });
+      return;
+    }
+
+    for (const lesson of course.lessons || []) {
+      if (lesson.videoUrl) {
+        try {
+          const fileName = lesson.videoUrl.split("/videos/")[1];
+          if (fileName) {
+            const filePath = path.join(OUTPUT_DIR, fileName);
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          }
+        } catch (e) {
+          console.error("Failed to delete video file (non-fatal):", e.message);
+        }
+      }
+    }
+
+    await Course.deleteOne({ _id: course._id });
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete course" });
+  }
+}
+
+module.exports = {
+  generateCourseHandler,
+  getCourseStatusHandler,
+  listCoursesHandler,
+  deleteCourseHandler,
+};

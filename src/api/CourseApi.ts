@@ -1,5 +1,14 @@
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
+// ── Auth helper ──────────────────────────────────────────────────────────────
+// Reads your JWT from localStorage and builds the Authorization header.
+// IMPORTANT: change "token" below to whatever key your login code uses to
+// store the JWT (e.g. "accessToken", "authToken", etc.).
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // ── Shapes returned by the backend ───────────────────────────────────────────
 
 export interface LessonFromAPI {
@@ -25,6 +34,7 @@ export interface CourseFromAPI {
   status: "generating" | "ready" | "failed";
   lessons: LessonFromAPI[];
   questions: QuestionFromAPI[];
+  createdAt?: string;
 }
 
 // ── Start course generation — returns courseId immediately ───────────────────
@@ -39,6 +49,7 @@ export async function startCourseGeneration(
 
   const res = await fetch(`${BASE_URL}/api/course/generate`, {
     method: "POST",
+    headers: { ...authHeaders() }, // don't set Content-Type; FormData sets it
     body: formData,
   });
 
@@ -49,9 +60,30 @@ export async function startCourseGeneration(
 // ── Poll a course's status once ──────────────────────────────────────────────
 
 export async function getCourseStatus(courseId: string): Promise<CourseFromAPI> {
-  const res = await fetch(`${BASE_URL}/api/course/status/${courseId}`);
+  const res = await fetch(`${BASE_URL}/api/course/status/${courseId}`, {
+    headers: { ...authHeaders() },
+  });
   if (!res.ok) throw new Error("Failed to get course status");
   return res.json();
+}
+
+// ── List the logged-in user's saved courses (for the sidebar on page load) ───
+
+export async function listCourses(): Promise<CourseFromAPI[]> {
+  const res = await fetch(`${BASE_URL}/api/course/list`, {
+    headers: { ...authHeaders() },
+  });
+  if (!res.ok) throw new Error("Failed to list courses");
+  return res.json();
+}
+
+
+export async function deleteCourse(courseId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/course/${courseId}`, {
+    method: "DELETE",
+    headers: { ...authHeaders() },
+  });
+  if (!res.ok) throw new Error("Failed to delete course");
 }
 
 // ── Poll repeatedly until the whole course is done ───────────────────────────

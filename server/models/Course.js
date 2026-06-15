@@ -25,6 +25,13 @@ const questionSchema = new mongoose.Schema({
 
 const courseSchema = new mongoose.Schema(
   {
+    // Owner of the course — used to scope courses per logged-in user
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      index: true,
+    },
     topic: String,
     status: {
       type: String,
@@ -38,5 +45,3 @@ const courseSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model("Course", courseSchema);
-
-
