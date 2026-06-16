@@ -34,6 +34,14 @@ app.get("/test-audio", (req, res) => {
   res.json({ dir, files, NODE_ENV: process.env.NODE_ENV });
 });
 
+
+app.get("/test-audio-route", (req, res) => {
+  res.json({ 
+    audioPath: process.env.NODE_ENV === "production" 
+      ? "/data/audio" 
+      : "local path"
+  });
+});
 // Serve audio files for browser playback at /audio/*
 // The browser fetches these directly during Remotion Player playback.
 app.use(
