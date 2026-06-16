@@ -6,7 +6,9 @@ const { parseBuffer } = require("music-metadata");
 
 const FPS = 30;
 
-const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
+const AUDIO_DIR = process.env.NODE_ENV === "production"
+  ? "/data/audio"
+  : path.resolve(__dirname, "../../remotion-render/public/audio");
 if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
 
 const SERVER_BASE_URL = process.env.SERVER_BASE_URL || "http://localhost:5000";

@@ -27,7 +27,11 @@ app.use('/api/course', courseRoutes);
 // The browser fetches these directly during Remotion Player playback.
 app.use(
   "/audio",
-  express.static(path.resolve(__dirname, "../remotion-render/public/audio"))
+  express.static(
+    process.env.NODE_ENV === "production"
+      ? "/data/audio"
+      : path.resolve(__dirname, "../remotion-render/public/audio")
+  )
 );
 
 app.get('/sitemap.xml', async (req, res) => {

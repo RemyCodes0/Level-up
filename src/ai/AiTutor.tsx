@@ -42,13 +42,14 @@ import {
   GraduationCap,
   Loader2,
   Trash2,
+  XCircle,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type AppPhase = "upload" | "generating" | "course";
 type CourseSection = "video" | "quiz" | "results";
-type LessonStatus = "ready" | "generating";
+type LessonStatus = "ready" | "generating" | "failed";
 
 interface HistoryEntry {
   id: string;
@@ -71,7 +72,6 @@ interface Lesson {
   description: string;
   keyPoints: string[];
   videoUrl?: string | null;
-  // Browser-compiled player fields
   code?: string | null;
   totalFrames?: number | null;
 }
@@ -101,6 +101,46 @@ const MOCK_LESSONS: Lesson[] = [
 ];
 
 const MOCK_QUESTIONS: MCQQuestion[] = [];
+
+// ─── Lesson generation progress ───────────────────────────────────────────────
+// Simulates per-lesson progress while the backend generates.
+// The real signal is when status flips to "ready" or "failed".
+
+function useLessonProgress(statuses: LessonStatus[]) {
+  const [progresses, setProgresses] = useState<number[]>(statuses.map(() => 0));
+  const intervalsRef = useRef<ReturnType<typeof setInterval>[]>([]);
+
+  useEffect(() => {
+    // Clear all existing intervals
+    intervalsRef.current.forEach(clearInterval);
+    intervalsRef.current = [];
+
+    const newProgresses = [...progresses];
+
+    statuses.forEach((status, i) => {
+      if (status === "generating") {
+        // Auto-increment up to 90% while generating — snaps to 100 on ready
+        intervalsRef.current[i] = setInterval(() => {
+          setProgresses((prev) => {
+            const next = [...prev];
+            if (next[i] < 90) next[i] = Math.min(next[i] + 1.2, 90);
+            return next;
+          });
+        }, 800);
+      } else if (status === "ready") {
+        newProgresses[i] = 100;
+      } else if (status === "failed") {
+        newProgresses[i] = 0;
+      }
+    });
+
+    setProgresses(newProgresses);
+
+    return () => intervalsRef.current.forEach(clearInterval);
+  }, [statuses.join(",")]);
+
+  return progresses;
+}
 
 // ─── Upload Phase ─────────────────────────────────────────────────────────────
 
@@ -146,11 +186,7 @@ function UploadPhase({ onGenerate }: { onGenerate: (fileName: string, file?: Fil
         <div className="text-center mb-10">
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mx-auto mb-5 shadow-lg">
             <div className="bg-gradient-to-br from-blue-600 to-purple-600 p-2 rounded-xl shadow-lg group-hover:shadow-xl transition-all duration-300 group-hover:scale-105">
-              <img 
-                src="/logo.png" 
-                alt="Level Up Logo" 
-                className="h-8 w-8 object-cover rounded-lg"
-              />
+              <img src="/logo.png" alt="Level Up Logo" className="h-8 w-8 object-cover rounded-lg" />
             </div>
           </div>
           <h1 className="text-3xl font-bold text-slate-900 mb-2">What would you like to learn?</h1>
@@ -258,11 +294,8 @@ function GeneratingPhase({ fileName, onDone }: { fileName: string; onDone: () =>
 }
 
 // ─── Video Player ─────────────────────────────────────────────────────────────
-// Uses DynamicPlayer (Babel + Remotion Player) instead of <video>.
-// Audio is fetched live from the Express /audio/* route during playback.
 
 function VideoPlayer({ lesson, onComplete }: { lesson: Lesson; onComplete: () => void }) {
-  // Lesson not ready yet — show a waiting state with key points
   if (!lesson.code) {
     return (
       <div className="space-y-4">
@@ -603,6 +636,7 @@ function HistorySidebar({
 
 function LessonStatusIcon({ status, completed, isActive, isLocked }: { status: LessonStatus; completed: boolean; isActive: boolean; isLocked: boolean }) {
   if (completed) return <CheckCircle className="h-4 w-4 text-emerald-500" />;
+  if (status === "failed") return <XCircle className="h-4 w-4 text-red-400" />;
   if (status === "generating") return <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />;
   if (isLocked) return <Lock className="h-4 w-4 text-slate-300" />;
   if (isActive) return <Play className="h-4 w-4 text-blue-600 fill-blue-600" />;
@@ -629,6 +663,9 @@ export default function AILearningPage() {
   const bgTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const pollCancelRef = useRef<(() => void) | null>(null);
 
+  // Per-lesson animated progress percentages
+  const lessonProgresses = useLessonProgress(lessonStatuses);
+
   useEffect(() => {
     return () => { if (pollCancelRef.current) pollCancelRef.current(); };
   }, []);
@@ -653,7 +690,9 @@ export default function AILearningPage() {
             code: l.code ?? null,
             totalFrames: l.totalFrames ?? null,
           }));
-          const mappedStatuses: LessonStatus[] = (c.lessons || []).map((l) => l.status === "ready" ? "ready" : "generating");
+          const mappedStatuses: LessonStatus[] = (c.lessons || []).map((l) =>
+            l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : "generating"
+          );
           return {
             id: c._id,
             fileName: c.topic,
@@ -688,7 +727,9 @@ export default function AILearningPage() {
                   totalFrames: apiLesson.totalFrames ?? l.totalFrames,
                 };
               }),
-              lessonStatuses: course.lessons.map((l) => l.status === "ready" ? "ready" : "generating"),
+              lessonStatuses: course.lessons.map((l) =>
+                l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : "generating"
+              ),
               questions: course.questions && course.questions.length ? course.questions : e.questions,
             } : e));
           });
@@ -765,7 +806,8 @@ export default function AILearningPage() {
         if (course.lessons.length > 0) {
           setLessonStatuses(MOCK_LESSONS.map((_, i) => {
             const apiLesson = course.lessons[i];
-            return apiLesson && apiLesson.status === "ready" ? "ready" : "generating";
+            if (!apiLesson) return "generating";
+            return apiLesson.status === "ready" ? "ready" : apiLesson.status === "failed" ? "failed" : "generating";
           }));
         }
         if (course.questions && course.questions.length > 0) setQuizQuestions(course.questions);
@@ -808,14 +850,15 @@ export default function AILearningPage() {
         }));
         setLessonStatuses(MOCK_LESSONS.map((_, i) => {
           const apiLesson = course.lessons[i];
-          return apiLesson && apiLesson.status === "ready" ? "ready" : "generating";
+          if (!apiLesson) return "generating";
+          return apiLesson.status === "ready" ? "ready" : apiLesson.status === "failed" ? "failed" : "generating";
         }));
         if (course.questions && course.questions.length > 0) setQuizQuestions(course.questions);
       });
     }
   };
 
-  const allLessonsReady = lessonStatuses.every((s) => s === "ready");
+  const allLessonsReady = lessonStatuses.every((s) => s === "ready" || s === "failed");
   const allComplete = lessons.every((l) => l.completed);
   const completedCount = lessons.filter((l) => l.completed).length;
 
@@ -870,7 +913,9 @@ export default function AILearningPage() {
             {!allLessonsReady && (
               <div className="mt-3 flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
                 <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin shrink-0" />
-                <p className="text-xs text-blue-700">{lessonStatuses.filter((s) => s === "generating").length} lesson{lessonStatuses.filter((s) => s === "generating").length !== 1 ? "s" : ""} generating…</p>
+                <p className="text-xs text-blue-700">
+                  {lessonStatuses.filter((s) => s === "generating").length} lesson{lessonStatuses.filter((s) => s === "generating").length !== 1 ? "s" : ""} generating…
+                </p>
               </div>
             )}
           </div>
@@ -883,18 +928,58 @@ export default function AILearningPage() {
             {lessons.map((lesson, i) => {
               const status = lessonStatuses[i];
               const isStillGenerating = status === "generating";
-              const isLocked = isStillGenerating || (i > 0 && !lessons[i - 1].completed);
+              const isFailed = status === "failed";
+              const isLocked = isStillGenerating || (i > 0 && !lessons[i - 1].completed && !isFailed);
               const isActive = activeSection === "video" && activeLesson === i;
+              const progress = lessonProgresses[i] ?? 0;
+
               return (
-                <button key={lesson.id} disabled={isLocked} onClick={() => { if (!isLocked) { setActiveLesson(i); setActiveSection("video"); } }}
-                  className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all group ${isActive ? "bg-blue-50 border-r-2 border-blue-600" : isLocked ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50"}`}>
-                  <div className="mt-0.5 shrink-0"><LessonStatusIcon status={status} completed={lesson.completed} isActive={isActive} isLocked={isLocked} /></div>
+                <button
+                  key={lesson.id}
+                  disabled={isLocked}
+                  onClick={() => { if (!isLocked) { setActiveLesson(i); setActiveSection("video"); } }}
+                  className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all group ${
+                    isActive ? "bg-blue-50 border-r-2 border-blue-600"
+                    : isFailed ? "opacity-70 hover:bg-red-50/50"
+                    : isLocked ? "opacity-50 cursor-not-allowed"
+                    : "hover:bg-slate-50"
+                  }`}
+                >
+                  <div className="mt-0.5 shrink-0">
+                    <LessonStatusIcon status={status} completed={lesson.completed} isActive={isActive} isLocked={isLocked} />
+                  </div>
                   <div className="min-w-0 flex-1">
-                    <p className={`text-xs font-semibold truncate ${isActive ? "text-blue-700" : "text-slate-700"}`}>{i + 1}. {lesson.title}</p>
-                    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                      <Clock className="h-3 w-3" /> {lesson.duration}
-                      {isStillGenerating && <span className="text-blue-400 ml-1">· generating…</span>}
+                    <p className={`text-xs font-semibold truncate ${
+                      isActive ? "text-blue-700"
+                      : isFailed ? "text-red-500"
+                      : "text-slate-700"
+                    }`}>
+                      {i + 1}. {lesson.title}
                     </p>
+
+                    {/* Progress bar + percentage while generating */}
+                    {isStillGenerating ? (
+                      <div className="mt-1.5">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs text-blue-400">generating…</span>
+                          <span className="text-xs font-semibold text-blue-500">{Math.round(progress)}%</span>
+                        </div>
+                        <div className="w-full bg-slate-100 rounded-full h-1">
+                          <div
+                            className="h-1 rounded-full bg-gradient-to-r from-blue-400 to-indigo-400 transition-all duration-700"
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                      </div>
+                    ) : isFailed ? (
+                      <p className="text-xs text-red-400 mt-0.5 flex items-center gap-1">
+                        <AlertCircle className="h-3 w-3" /> Generation failed
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                        <Clock className="h-3 w-3" /> {lesson.duration}
+                      </p>
+                    )}
                   </div>
                 </button>
               );
