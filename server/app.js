@@ -25,6 +25,14 @@ app.use('/api/tutor', tutorRoutes);
 app.use('/api/book/', bookRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/course', courseRoutes);
+app.get("/test-audio", (req, res) => {
+  const fs = require("fs");
+  const dir = process.env.NODE_ENV === "production" 
+    ? "/data/audio" 
+    : path.resolve(__dirname, "../remotion-render/public/audio");
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).slice(0, 5) : ["DIR NOT FOUND"];
+  res.json({ dir, files, NODE_ENV: process.env.NODE_ENV });
+});
 
 // Serve audio files for browser playback at /audio/*
 // The browser fetches these directly during Remotion Player playback.
