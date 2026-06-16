@@ -15,7 +15,9 @@ const Tutor = require('./models/Tutor');
 const app = express();
 
 app.use(cors({
-  origin: ["https://levelup-snowy.vercel.app", "http://localhost:5173"],
+  origin: process.env.NODE_ENV === "production"
+    ? ["https://levelup-snowy.vercel.app"]
+    : true, // allow any origin in dev
   credentials: true,
 }));
 app.use(express.json());
@@ -25,23 +27,7 @@ app.use('/api/tutor', tutorRoutes);
 app.use('/api/book/', bookRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/course', courseRoutes);
-app.get("/test-audio", (req, res) => {
-  const fs = require("fs");
-  const dir = process.env.NODE_ENV === "production" 
-    ? "/data/audio" 
-    : path.resolve(__dirname, "../remotion-render/public/audio");
-  const files = fs.existsSync(dir) ? fs.readdirSync(dir).slice(0, 5) : ["DIR NOT FOUND"];
-  res.json({ dir, files, NODE_ENV: process.env.NODE_ENV });
-});
 
-
-app.get("/test-audio-route", (req, res) => {
-  res.json({ 
-    audioPath: process.env.NODE_ENV === "production" 
-      ? "/data/audio" 
-      : "local path"
-  });
-});
 // Serve audio files for browser playback at /audio/*
 // The browser fetches these directly during Remotion Player playback.
 app.use(

@@ -7,22 +7,23 @@ const {protect} = require('../middleware/authMiddleware');
 const upload = multer({ storage });
 
 
-router.get('/:id/getTutor',  getProfile);
-router.get('/:id/getTutorWithUserId',  getProfileWithUserId);
-router.put('/me',  updateProfile);
-router.put("/updateProfile", protect,upload.fields([
-    { name: "certificates", maxCount: 5 },
-    { name: "idCard", maxCount: 1 }
-  ]), updateTutorProfile)
-router.post('/apply', protect, upload.fields([
-    {name:"certificates", maxCount: 5},
-    {name:"idCard", maxCount:1}
-]), apply)
-router.patch('/:id/approve', adminApprove);
+router.get("/allTutors", getTutors);
 router.get("/applications", getApplications);
+router.get("/:id/getTutor", getProfile);
+router.get("/:id/getTutorWithUserId", getProfileWithUserId);
+router.put("/me", updateProfile);
+router.put("/updateProfile", protect, upload.fields([
+  { name: "certificates", maxCount: 5 },
+  { name: "idCard", maxCount: 1 }
+]), updateTutorProfile);
+router.post("/apply", protect, upload.fields([
+  { name: "certificates", maxCount: 5 },
+  { name: "idCard", maxCount: 1 }
+]), apply);
+router.patch("/:id/approve", adminApprove);
 router.delete("/:id/delete", adminDelete);
-router.get("/allTutors", getTutors)
-router.put("/:id/updateAvailability", protect, updateAvailability)
-router.patch('/:id/reject', protect, rejectApplications);
+router.put("/:id/updateAvailability", protect, updateAvailability);
+router.patch("/:id/reject", protect, rejectApplications);
 
+module.exports = router;
 module.exports = router;
