@@ -8,7 +8,6 @@ const authRoutes = require('./routes/auth');
 const tutorRoutes = require('./routes/tutor');
 const bookRoutes = require("./routes/book");
 const reviewRoutes = require("./routes/review");
-const aiRoutes = require("./routes/ai")
 const courseRoutes = require('./routes/course');
 
 const Tutor = require('./models/Tutor');
@@ -22,33 +21,14 @@ app.use('/api/auth', authRoutes);
 app.use('/api/tutor', tutorRoutes);
 app.use('/api/book/', bookRoutes);
 app.use('/api/reviews', reviewRoutes);
-// app.use("/api/ai", aiRoutes);
 app.use('/api/course', courseRoutes);
 
-// Serve rendered videos statically at /videos/*
+// Serve audio files for browser playback at /audio/*
+// The browser fetches these directly during Remotion Player playback.
 app.use(
-  "/videos",
-  express.static(path.resolve(__dirname, "../rendered-videos"))
+  "/audio",
+  express.static(path.resolve(__dirname, "../remotion-render/public/audio"))
 );
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 app.get('/sitemap.xml', async (req, res) => {
   try {
@@ -61,22 +41,18 @@ app.get('/sitemap.xml', async (req, res) => {
     smStream.write({ url: '/apply', changefreq: 'monthly', priority: 0.6 });
 
     const tutors = await Tutor.find({}, '_id');
-
     tutors.forEach(t => {
-    smStream.write({
+      smStream.write({
         url: `/tutors/${t._id}`,
         changefreq: 'weekly',
         priority: 0.7
-    });
+      });
     });
 
     smStream.end();
-
     const data = await streamToPromise(smStream);
-
     res.header('Content-Type', 'application/xml');
     res.send(data.toString());
-
   } catch (error) {
     console.error('Error generating sitemap:', error);
     res.status(500).send('Error generating sitemap');
@@ -88,9 +64,8 @@ app.get('/robots.txt', (req, res) => {
   res.send(
 `User-agent: *
 Allow: /
-// Robots.txt
 Sitemap: https://level-up-nnee.onrender.com/sitemap.xml`
   );
-}); 
+});
 
 module.exports = app;

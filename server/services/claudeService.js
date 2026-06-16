@@ -10,7 +10,7 @@ async function generateCoursePlan(topic, pdfText) {
     : `The student wants to learn about: ${topic}`;
 
   const message = await client.messages.create({
-    model: "claude-opus-4-8",
+    model: "claude-opus-4-6",
     max_tokens: 6000,
     messages: [
       {
@@ -85,14 +85,15 @@ SCENES (in order) — build one <Series.Sequence> per scene, in this exact order
 
 ${sceneTable}
 
-STRICT REQUIREMENTS — follow exactly or the render will fail:
+STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 1. The component MUST be named exactly "${componentName}" and exported as a named export: export const ${componentName} = () => { ... }
 2. Import ONLY from "remotion" and "react".
-   Allowed remotion imports: AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, staticFile.
+   Allowed remotion imports: AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio.
+   Do NOT import staticFile — it is not available in this environment.
 3. The component takes NO props — all scene data is hardcoded from the SCENES list above.
 4. Structure: a single <Series> containing one <Series.Sequence> per scene, IN ORDER.
 5. Each <Series.Sequence> MUST use durationInFrames set to EXACTLY the number given for that scene above. Never change, compute, or round these numbers — copy them exactly.
-6. Inside each <Series.Sequence>, include <Audio src={staticFile("<that scene's audioUrl>")} /> so the correct narration plays. The audioUrl values are paths relative to the Remotion public folder — always wrap them in staticFile().
+6. Inside each <Series.Sequence>, include <Audio src={"<that scene's audioUrl>"} /> using the exact URL string directly. The audioUrl values are full HTTP URLs — use them directly as the src, with NO staticFile() wrapper.
 7. Inside each scene, build animations that visually match that scene's visualDescription and display its onScreenText. Use spring entrances, interpolated fades, moving shapes, staggered reveals, SVG graphics — make it dynamic and educational.
 8. The sum of all durationInFrames MUST equal exactly ${totalFrames}.
 9. Use only inline styles. No external CSS, no Tailwind.
@@ -123,7 +124,7 @@ async function generateLessonCode(
       );
 
       const stream = await client.messages.create({
-        model: "claude-opus-4-8",
+        model: "claude-opus-4-6",
         max_tokens: 25000,
         stream: true,
         messages: [
@@ -174,4 +175,4 @@ async function generateLessonCode(
   );
 }
 
-module.exports = { generateCoursePlan, generateLessonCode };
+module.exports = { generateCoursePlan, generateLessonCode }; 

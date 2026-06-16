@@ -8,11 +8,10 @@ const {
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
 const { generateAllSceneAudio, cleanupAudio } = require("../services/ttsService");
-const { bundleLessonCode } = require("../services/bundleService");
-const { renderLessonVideo, OUTPUT_DIR } = require("../services/renderService");
 const Course = require("../models/Course");
 
-const BASE_URL = process.env.SERVER_BASE_URL || "http://localhost:5000";
+// Audio dir — for cleanup when a course is deleted
+const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
 
 // ── Entry point: client calls this to start course generation ────────────────
 async function generateCourseHandler(req, res) {
@@ -46,35 +45,31 @@ async function generateCourseHandler(req, res) {
   }
 }
 
-// ── Builds one lesson fully: scenes → audio → code → bundle → render ─────────
-// Generates scenes + audio ONCE, then retries code + bundle + render up to
-// MAX_ATTEMPTS times if the render crashes (e.g. bad AI-generated code).
+// ── Builds one lesson: scenes → audio → code → save to DB ───────────────────
+// No bundling, no rendering. The browser compiles and plays the code directly.
+// Audio files stay on disk until the course is deleted.
 async function buildLesson(courseId, lesson) {
   const MAX_ATTEMPTS = 2;
   let measuredScenes = null;
   let totalFrames = 0;
 
-  // Step 1 — Scene plan (once, not retried)
+  // Step 1 — Scene plan
   console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
   const scenes = await generateScenePlan(lesson);
 
-  // Step 2 — Audio (once — reused across retries to save time + cost)
+  // Step 2 — Audio (parallel, generated once, reused across retries)
   console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio...`);
   ({ scenes: measuredScenes, totalFrames } = await generateAllSceneAudio(scenes));
 
   let lastError = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    // Each attempt gets a fresh renderId + componentName so there are no
-    // file collisions between the original attempt and any retry.
-    const renderId = crypto.randomBytes(4).toString("hex");
-    const componentName = `Lesson${renderId}`;
-    let cleanup = null;
+    const componentName = `Lesson${crypto.randomBytes(4).toString("hex")}`;
 
     try {
       if (attempt > 1) {
         console.log(
-          `[${courseId}] Lesson ${lesson.lessonNumber}: render failed — regenerating code (attempt ${attempt}/${MAX_ATTEMPTS})...`
+          `[${courseId}] Lesson ${lesson.lessonNumber}: code failed — retrying (attempt ${attempt}/${MAX_ATTEMPTS})...`
         );
       }
 
@@ -87,47 +82,30 @@ async function buildLesson(courseId, lesson) {
         totalFrames
       );
 
-      // Step 4 — Bundle
-      console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: bundle...`);
-      const bundle = await bundleLessonCode(
-        componentName,
-        tsxCode,
-        renderId,
-        totalFrames
-      );
-      cleanup = bundle.cleanup;
-
-      // Step 5 — Render
-      console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: render...`);
-      await renderLessonVideo(bundle.serveUrl, componentName, renderId);
-
-      const videoUrl = `${BASE_URL}/videos/${renderId}.mp4`;
-      console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready: ${videoUrl}`);
-
+      // Step 4 — Save code + audio metadata to DB. No bundle, no render.
       await Course.findByIdAndUpdate(courseId, {
         $set: {
-          [`lessons.${lesson.lessonNumber - 1}.videoUrl`]: videoUrl,
+          [`lessons.${lesson.lessonNumber - 1}.code`]: tsxCode,
+          [`lessons.${lesson.lessonNumber - 1}.totalFrames`]: totalFrames,
           [`lessons.${lesson.lessonNumber - 1}.status`]: "ready",
         },
       });
 
-      cleanupAudio(measuredScenes);
-      return; // success — exit retry loop
+      console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready.`);
+      return; // success
 
     } catch (err) {
       lastError = err;
       console.error(
         `[${courseId}] Lesson ${lesson.lessonNumber} attempt ${attempt}/${MAX_ATTEMPTS} failed: ${err.message}`
       );
-      if (cleanup) cleanup(); // clean up bundle files before retrying
     }
   }
 
-  // All attempts exhausted — mark lesson as failed
+  // All attempts exhausted
   console.error(
     `[${courseId}] Lesson ${lesson.lessonNumber} permanently failed after ${MAX_ATTEMPTS} attempts`
   );
-  cleanupAudio(measuredScenes);
   await Course.findByIdAndUpdate(courseId, {
     $set: { [`lessons.${lesson.lessonNumber - 1}.status`]: "failed" },
   });
@@ -143,7 +121,8 @@ async function processCourse(courseId, topic, pdfText) {
       lessons: lessons.map((l) => ({
         ...l,
         status: "rendering",
-        videoUrl: null,
+        code: null,
+        totalFrames: null,
       })),
       questions,
     });
@@ -151,7 +130,7 @@ async function processCourse(courseId, topic, pdfText) {
     // Build lesson 1 first so the user can start watching immediately
     await buildLesson(courseId, lessons[0]);
 
-    // Build the rest sequentially in the background
+    // Build the rest in the background sequentially
     for (let i = 1; i < lessons.length; i++) {
       await buildLesson(courseId, lessons[i]);
     }
@@ -195,7 +174,7 @@ async function listCoursesHandler(req, res) {
   }
 }
 
-// ── Delete a course (scoped to the owner) + remove its video files ───────────
+// ── Delete a course + clean up its audio files ───────────────────────────────
 async function deleteCourseHandler(req, res) {
   try {
     const course = await Course.findOne({
@@ -208,16 +187,24 @@ async function deleteCourseHandler(req, res) {
       return;
     }
 
+    // Delete each lesson's audio files from disk
     for (const lesson of course.lessons || []) {
-      if (lesson.videoUrl) {
-        try {
-          const fileName = lesson.videoUrl.split("/videos/")[1];
-          if (fileName) {
-            const filePath = path.join(OUTPUT_DIR, fileName);
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      // audioFilePath is stored per scene inside the lesson's code metadata.
+      // Since we save audioUrl (HTTP URL) not audioFilePath in the DB,
+      // we derive the filename from the URL and delete from AUDIO_DIR.
+      if (lesson.scenes) {
+        for (const scene of lesson.scenes) {
+          try {
+            if (scene.audioUrl) {
+              const fileName = scene.audioUrl.split("/audio/")[1];
+              if (fileName) {
+                const filePath = path.join(AUDIO_DIR, fileName);
+                if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+              }
+            }
+          } catch (e) {
+            console.error("Failed to delete audio file (non-fatal):", e.message);
           }
-        } catch (e) {
-          console.error("Failed to delete video file (non-fatal):", e.message);
         }
       }
     }

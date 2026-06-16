@@ -1,5 +1,5 @@
 import { Composition } from "remotion";
-import { DynamicLesson } from "./DynamicLesson";
+import { DynamicLesson } from "./DynamicPlayer";
 
 export const RemotionRoot: React.FC = () => {
   return (

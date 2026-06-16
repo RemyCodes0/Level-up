@@ -13,6 +13,7 @@ import {
   deleteCourse,
 } from "../api/CourseApi";
 import type { CourseFromAPI } from "../api/CourseApi";
+import { DynamicPlayer } from "../remotion/DynamicPlayer";
 import {
   FileText,
   Play,
@@ -70,6 +71,9 @@ interface Lesson {
   description: string;
   keyPoints: string[];
   videoUrl?: string | null;
+  // Browser-compiled player fields
+  code?: string | null;
+  totalFrames?: number | null;
 }
 
 interface MCQQuestion {
@@ -88,12 +92,12 @@ interface QuizAnswer {
 // ─── Placeholder data ─────────────────────────────────────────────────────────
 
 const MOCK_LESSONS: Lesson[] = [
-  { id: 1, title: "Lesson 1", duration: "~2:00", completed: false, description: "Generating your first lesson…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null },
-  { id: 2, title: "Lesson 2", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null },
-  { id: 3, title: "Lesson 3", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null },
-  { id: 4, title: "Lesson 4", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null },
-  { id: 5, title: "Lesson 5", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null },
-  { id: 6, title: "Lesson 6", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null },
+  { id: 1, title: "Lesson 1", duration: "~2:00", completed: false, description: "Generating your first lesson…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null, code: null, totalFrames: null },
+  { id: 2, title: "Lesson 2", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null, code: null, totalFrames: null },
+  { id: 3, title: "Lesson 3", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null, code: null, totalFrames: null },
+  { id: 4, title: "Lesson 4", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null, code: null, totalFrames: null },
+  { id: 5, title: "Lesson 5", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null, code: null, totalFrames: null },
+  { id: 6, title: "Lesson 6", duration: "~2:00", completed: false, description: "Generating…", keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"], videoUrl: null, code: null, totalFrames: null },
 ];
 
 const MOCK_QUESTIONS: MCQQuestion[] = [];
@@ -141,7 +145,13 @@ function UploadPhase({ onGenerate }: { onGenerate: (fileName: string, file?: Fil
       <div className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)] px-4 pb-8">
         <div className="text-center mb-10">
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mx-auto mb-5 shadow-lg">
-            <Sparkles className="h-6 w-6 text-white" />
+            <div className="bg-gradient-to-br from-blue-600 to-purple-600 p-2 rounded-xl shadow-lg group-hover:shadow-xl transition-all duration-300 group-hover:scale-105">
+              <img 
+                src="/logo.png" 
+                alt="Level Up Logo" 
+                className="h-8 w-8 object-cover rounded-lg"
+              />
+            </div>
           </div>
           <h1 className="text-3xl font-bold text-slate-900 mb-2">What would you like to learn?</h1>
           <p className="text-muted-foreground text-base">Describe your topic or upload your course materials — AI generates your full course.</p>
@@ -196,7 +206,7 @@ function UploadPhase({ onGenerate }: { onGenerate: (fileName: string, file?: Fil
               <button key={s} onClick={() => setInputValue(s)} className="text-xs text-slate-500 bg-white border border-slate-200 rounded-full px-3 py-1.5 hover:border-slate-400 hover:text-slate-700 transition-all shadow-sm">{s}</button>
             ))}
           </div>
-          <p className="text-center text-xs text-slate-400 mt-5">Lesson 1 ready in minutes · remaining lessons load while you watch</p>
+          <p className="text-center text-xs text-slate-400 mt-5">Lesson 1 ready in ~2 minutes · remaining lessons load while you watch</p>
         </div>
       </div>
     </div>
@@ -214,7 +224,7 @@ function GeneratingPhase({ fileName, onDone }: { fileName: string; onDone: () =>
     "Structuring your learning path…",
     "Generating lesson content with AI…",
     "Creating voiceovers…",
-    "Rendering your first video…",
+    "Preparing your first lesson…",
   ];
 
   useEffect(() => {
@@ -241,22 +251,25 @@ function GeneratingPhase({ fileName, onDone }: { fileName: string; onDone: () =>
           <div className="bg-gradient-to-r from-blue-500 to-indigo-500 h-2 rounded-full transition-all duration-300" style={{ width: `${Math.min(progress, 100)}%` }} />
         </div>
         <p className="text-xs text-muted-foreground mb-3">{Math.min(Math.round(progress), 100)}% complete</p>
-        <p className="text-xs text-slate-400">This can take a few minutes. Remaining lessons render in the background while you watch.</p>
+        <p className="text-xs text-slate-400">Lesson 1 plays in your browser — no download or rendering needed.</p>
       </div>
     </div>
   );
 }
 
 // ─── Video Player ─────────────────────────────────────────────────────────────
+// Uses DynamicPlayer (Babel + Remotion Player) instead of <video>.
+// Audio is fetched live from the Express /audio/* route during playback.
 
 function VideoPlayer({ lesson, onComplete }: { lesson: Lesson; onComplete: () => void }) {
-  if (!lesson.videoUrl) {
+  // Lesson not ready yet — show a waiting state with key points
+  if (!lesson.code) {
     return (
       <div className="space-y-4">
         <div className="rounded-xl overflow-hidden shadow-xl border border-slate-200 bg-slate-900 aspect-video flex flex-col items-center justify-center text-center px-6">
           <Loader2 className="h-10 w-10 text-blue-400 animate-spin mb-4" />
-          <p className="text-white font-semibold text-lg">Rendering this lesson…</p>
-          <p className="text-white/60 text-sm mt-1">Your video is being generated. This usually takes a few minutes.</p>
+          <p className="text-white font-semibold text-lg">Preparing this lesson…</p>
+          <p className="text-white/60 text-sm mt-1">Your lesson is being generated. This usually takes about 2 minutes.</p>
         </div>
         <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-5">
           <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-blue-600" />Key points in this lesson</h3>
@@ -274,9 +287,11 @@ function VideoPlayer({ lesson, onComplete }: { lesson: Lesson; onComplete: () =>
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl overflow-hidden shadow-xl border border-slate-200">
-        <video key={lesson.videoUrl} src={lesson.videoUrl} controls onEnded={onComplete} style={{ width: "100%", aspectRatio: "16/9" }} />
-      </div>
+      <DynamicPlayer
+        code={lesson.code}
+        durationInFrames={lesson.totalFrames ?? 3600}
+        onEnded={onComplete}
+      />
       <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-5">
         <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-blue-600" />Key points in this lesson</h3>
         <ul className="space-y-2">
@@ -552,17 +567,9 @@ function HistorySidebar({
                 const isActive = entry.id === activeId;
                 const pct = Math.round((entry.completedLessons / MOCK_LESSONS.length) * 100);
                 return (
-                  <div
-                    key={entry.id}
-                    className={`group/item relative flex items-center mx-1 rounded-lg transition-all ${isActive ? "bg-slate-100" : "hover:bg-slate-50"}`}
-                  >
-                    <button
-                      onClick={() => onSelect(entry)}
-                      className={`flex-1 text-left px-3 py-2.5 min-w-0 ${isActive ? "text-slate-900" : "text-slate-700"}`}
-                    >
-                      <p className="text-xs font-medium leading-snug line-clamp-1 pr-6">
-                        {entry.fileName.replace(/\.(pdf|pptx)$/i, "")}
-                      </p>
+                  <div key={entry.id} className={`group/item relative flex items-center mx-1 rounded-lg transition-all ${isActive ? "bg-slate-100" : "hover:bg-slate-50"}`}>
+                    <button onClick={() => onSelect(entry)} className={`flex-1 text-left px-3 py-2.5 min-w-0 ${isActive ? "text-slate-900" : "text-slate-700"}`}>
+                      <p className="text-xs font-medium leading-snug line-clamp-1 pr-6">{entry.fileName.replace(/\.(pdf|pptx)$/i, "")}</p>
                       <div className="flex items-center gap-2 mt-1.5">
                         <div className="flex-1 bg-slate-200 rounded-full h-1">
                           <div className={`h-1 rounded-full ${pct === 100 ? "bg-emerald-500" : "bg-blue-400"}`} style={{ width: `${pct}%` }} />
@@ -574,15 +581,8 @@ function HistorySidebar({
                         )}
                       </div>
                     </button>
-
-                    {/* Trash button — appears on hover */}
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm(`Delete "${entry.fileName.replace(/\.(pdf|pptx)$/i, "")}"? This cannot be undone.`)) {
-                          onDelete(entry.id);
-                        }
-                      }}
+                      onClick={(e) => { e.stopPropagation(); if (window.confirm(`Delete "${entry.fileName.replace(/\.(pdf|pptx)$/i, "")}"? This cannot be undone.`)) { onDelete(entry.id); } }}
                       className="absolute right-2 top-2 w-6 h-6 flex items-center justify-center rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover/item:opacity-100 transition-all"
                       title="Delete course"
                     >
@@ -629,12 +629,11 @@ export default function AILearningPage() {
   const bgTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const pollCancelRef = useRef<(() => void) | null>(null);
 
-  // Stop polling on unmount
   useEffect(() => {
     return () => { if (pollCancelRef.current) pollCancelRef.current(); };
   }, []);
 
-  // ── Load saved courses on mount so they survive a page refresh ─────────────
+  // ── Load saved courses on mount ────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -651,6 +650,8 @@ export default function AILearningPage() {
             description: l.description || "",
             keyPoints: l.keyPoints && l.keyPoints.length ? l.keyPoints : ["", "", "", ""],
             videoUrl: l.videoUrl,
+            code: l.code ?? null,
+            totalFrames: l.totalFrames ?? null,
           }));
           const mappedStatuses: LessonStatus[] = (c.lessons || []).map((l) => l.status === "ready" ? "ready" : "generating");
           return {
@@ -677,7 +678,15 @@ export default function AILearningPage() {
               lessons: e.lessons.map((l, i) => {
                 const apiLesson = course.lessons[i];
                 if (!apiLesson) return l;
-                return { ...l, title: apiLesson.title ?? l.title, description: apiLesson.description ?? l.description, keyPoints: apiLesson.keyPoints && apiLesson.keyPoints.length ? apiLesson.keyPoints : l.keyPoints, videoUrl: apiLesson.videoUrl };
+                return {
+                  ...l,
+                  title: apiLesson.title ?? l.title,
+                  description: apiLesson.description ?? l.description,
+                  keyPoints: apiLesson.keyPoints && apiLesson.keyPoints.length ? apiLesson.keyPoints : l.keyPoints,
+                  videoUrl: apiLesson.videoUrl,
+                  code: apiLesson.code ?? l.code,
+                  totalFrames: apiLesson.totalFrames ?? l.totalFrames,
+                };
               }),
               lessonStatuses: course.lessons.map((l) => l.status === "ready" ? "ready" : "generating"),
               questions: course.questions && course.questions.length ? course.questions : e.questions,
@@ -695,7 +704,6 @@ export default function AILearningPage() {
     setLessons((prev) => prev.map((l) => l.id === lessonId ? { ...l, completed: true } : l));
   };
 
-  // Keep history entry in sync
   useEffect(() => {
     if (!activeHistoryId) return;
     setHistory((prev) => prev.map((e) => e.id === activeHistoryId ? {
@@ -706,21 +714,14 @@ export default function AILearningPage() {
     } : e));
   }, [lessons, lessonStatuses, quizAnswers, quizDone, quizQuestions]);
 
-  // ── Delete a course ────────────────────────────────────────────────────────
   const handleDeleteCourse = async (id: string) => {
-    // Optimistically remove from sidebar immediately
     setHistory((prev) => prev.filter((e) => e.id !== id));
-    // If the deleted course was active, go back to upload screen
     if (activeHistoryId === id) {
       if (pollCancelRef.current) pollCancelRef.current();
       setActiveHistoryId(null);
       setPhase("upload");
     }
-    try {
-      await deleteCourse(id);
-    } catch (err) {
-      console.error("Failed to delete course:", err);
-    }
+    try { await deleteCourse(id); } catch (err) { console.error("Failed to delete course:", err); }
   };
 
   const startNewCourse = async (name: string, file?: File | null) => {
@@ -732,7 +733,7 @@ export default function AILearningPage() {
 
     try {
       const { courseId } = await startCourseGeneration(name, file);
-      const freshLessons = MOCK_LESSONS.map((l) => ({ ...l, completed: false, videoUrl: null }));
+      const freshLessons = MOCK_LESSONS.map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null }));
       const freshStatuses: LessonStatus[] = freshLessons.map(() => "generating" as LessonStatus);
       const entry: HistoryEntry = { id: courseId, fileName: name, createdAt: new Date(), completedLessons: 0, quizScore: null, lessons: freshLessons, lessonStatuses: freshStatuses, quizAnswers: [], quizDone: false, questions: [] };
 
@@ -751,10 +752,21 @@ export default function AILearningPage() {
         setLessons((prev) => prev.map((l, i) => {
           const apiLesson = course.lessons[i];
           if (!apiLesson) return l;
-          return { ...l, title: apiLesson.title ?? l.title, description: apiLesson.description ?? l.description, keyPoints: apiLesson.keyPoints && apiLesson.keyPoints.length > 0 ? apiLesson.keyPoints : l.keyPoints, videoUrl: apiLesson.videoUrl };
+          return {
+            ...l,
+            title: apiLesson.title ?? l.title,
+            description: apiLesson.description ?? l.description,
+            keyPoints: apiLesson.keyPoints && apiLesson.keyPoints.length > 0 ? apiLesson.keyPoints : l.keyPoints,
+            videoUrl: apiLesson.videoUrl,
+            code: apiLesson.code ?? l.code,
+            totalFrames: apiLesson.totalFrames ?? l.totalFrames,
+          };
         }));
         if (course.lessons.length > 0) {
-          setLessonStatuses(MOCK_LESSONS.map((_, i) => { const apiLesson = course.lessons[i]; return apiLesson && apiLesson.status === "ready" ? "ready" : "generating"; }));
+          setLessonStatuses(MOCK_LESSONS.map((_, i) => {
+            const apiLesson = course.lessons[i];
+            return apiLesson && apiLesson.status === "ready" ? "ready" : "generating";
+          }));
         }
         if (course.questions && course.questions.length > 0) setQuizQuestions(course.questions);
       });
@@ -784,9 +796,20 @@ export default function AILearningPage() {
         setLessons((prev) => prev.map((l, i) => {
           const apiLesson = course.lessons[i];
           if (!apiLesson) return l;
-          return { ...l, title: apiLesson.title ?? l.title, description: apiLesson.description ?? l.description, keyPoints: apiLesson.keyPoints && apiLesson.keyPoints.length > 0 ? apiLesson.keyPoints : l.keyPoints, videoUrl: apiLesson.videoUrl };
+          return {
+            ...l,
+            title: apiLesson.title ?? l.title,
+            description: apiLesson.description ?? l.description,
+            keyPoints: apiLesson.keyPoints && apiLesson.keyPoints.length > 0 ? apiLesson.keyPoints : l.keyPoints,
+            videoUrl: apiLesson.videoUrl,
+            code: apiLesson.code ?? l.code,
+            totalFrames: apiLesson.totalFrames ?? l.totalFrames,
+          };
         }));
-        setLessonStatuses(MOCK_LESSONS.map((_, i) => { const apiLesson = course.lessons[i]; return apiLesson && apiLesson.status === "ready" ? "ready" : "generating"; }));
+        setLessonStatuses(MOCK_LESSONS.map((_, i) => {
+          const apiLesson = course.lessons[i];
+          return apiLesson && apiLesson.status === "ready" ? "ready" : "generating";
+        }));
         if (course.questions && course.questions.length > 0) setQuizQuestions(course.questions);
       });
     }
@@ -817,7 +840,6 @@ export default function AILearningPage() {
     );
   }
 
-  // ── Course view ────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
       <Helmet><title>AI Learning Course | Level Up</title></Helmet>
@@ -848,7 +870,7 @@ export default function AILearningPage() {
             {!allLessonsReady && (
               <div className="mt-3 flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
                 <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin shrink-0" />
-                <p className="text-xs text-blue-700">{lessonStatuses.filter((s) => s === "generating").length} lesson{lessonStatuses.filter((s) => s === "generating").length !== 1 ? "s" : ""} rendering…</p>
+                <p className="text-xs text-blue-700">{lessonStatuses.filter((s) => s === "generating").length} lesson{lessonStatuses.filter((s) => s === "generating").length !== 1 ? "s" : ""} generating…</p>
               </div>
             )}
           </div>
@@ -871,7 +893,7 @@ export default function AILearningPage() {
                     <p className={`text-xs font-semibold truncate ${isActive ? "text-blue-700" : "text-slate-700"}`}>{i + 1}. {lesson.title}</p>
                     <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
                       <Clock className="h-3 w-3" /> {lesson.duration}
-                      {isStillGenerating && <span className="text-blue-400 ml-1">· rendering…</span>}
+                      {isStillGenerating && <span className="text-blue-400 ml-1">· generating…</span>}
                     </p>
                   </div>
                 </button>
@@ -921,7 +943,7 @@ export default function AILearningPage() {
                       <Button className="bg-blue-600 hover:bg-blue-700 text-white"
                         disabled={!lessons[activeLesson].completed || lessonStatuses[activeLesson + 1] === "generating"}
                         onClick={() => { markComplete(lessons[activeLesson].id); setActiveLesson((i) => i + 1); }}>
-                        {lessonStatuses[activeLesson + 1] === "generating" ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Next lesson rendering…</>) : (<>Next Lesson <ChevronRight className="h-4 w-4 ml-1" /></>)}
+                        {lessonStatuses[activeLesson + 1] === "generating" ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Next lesson generating…</>) : (<>Next Lesson <ChevronRight className="h-4 w-4 ml-1" /></>)}
                       </Button>
                       {lessonStatuses[activeLesson + 1] === "generating" && lessons[activeLesson].completed && (
                         <p className="text-xs text-blue-500">Next lesson will be ready shortly</p>
@@ -933,7 +955,7 @@ export default function AILearningPage() {
                     </Button>
                   )}
                 </div>
-                {!lessons[activeLesson].completed && lessons[activeLesson].videoUrl && (
+                {!lessons[activeLesson].completed && lessons[activeLesson].code && (
                   <p className="text-center text-xs text-muted-foreground">Watch the video to completion to unlock the next lesson</p>
                 )}
               </div>

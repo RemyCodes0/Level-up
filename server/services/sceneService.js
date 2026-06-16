@@ -28,7 +28,7 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const message = await client.messages.create({
-        model: "claude-opus-4-8",
+        model: "claude-opus-4-6",
         max_tokens: 8000,
         messages: [
           {

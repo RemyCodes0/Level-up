@@ -8,6 +8,9 @@ const lessonSchema = new mongoose.Schema({
   narrationScript: String,
   audioUrl: String,
   videoUrl: String,
+  // Browser-compiled player fields (new architecture)
+  code: String,        // AI-generated Remotion TSX code string
+  totalFrames: Number, // total duration in frames (sum of all scene durations)
   status: {
     type: String,
     enum: ["rendering", "ready", "failed"],
@@ -25,7 +28,6 @@ const questionSchema = new mongoose.Schema({
 
 const courseSchema = new mongoose.Schema(
   {
-    // Owner of the course — used to scope courses per logged-in user
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

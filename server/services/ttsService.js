@@ -6,61 +6,54 @@ const { parseBuffer } = require("music-metadata");
 
 const FPS = 30;
 
-// Remotion serves files from the `public/` folder inside the remotion project.
-// Audio saved here is accessible via staticFile() in the composition code.
 const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
 if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
 
+const SERVER_BASE_URL = process.env.SERVER_BASE_URL || "http://localhost:5000";
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  timeout: 40000,  // 40s — fail fast and retry instead of hanging 2 min
+  timeout: 40000,
   maxRetries: 4,
 });
 
-// Generates one audio clip, saves it to remotion-render/public/audio/,
-// and measures its duration. Remotion can serve it via staticFile().
-async function generateSceneAudio(text) {
-  // 1. Generate speech
+async function generateSceneAudio(scene) {
+  console.log(`  [tts] Scene ${scene.id}: generating audio...`);
+
   const response = await openai.audio.speech.create({
     model: "tts-1",
     voice: "nova",
-    input: text,
+    input: scene.narration,
     speed: 1.0,
   });
   const buffer = Buffer.from(await response.arrayBuffer());
 
-  // 2. Measure exact duration
   const metadata = await parseBuffer(buffer, "audio/mpeg");
   const durationSeconds = metadata.format.duration;
   const durationInFrames = Math.ceil(durationSeconds * FPS);
 
-  // 3. Save to remotion public folder
   const fileName = `${uuidv4()}.mp3`;
-  const filePath = path.join(AUDIO_DIR, fileName);
-  fs.writeFileSync(filePath, buffer);
+  const audioFilePath = path.join(AUDIO_DIR, fileName); // ← was named filePath before, fixed
+  fs.writeFileSync(audioFilePath, buffer);
 
-  // The staticFile path is relative to the public folder root
-  const staticPath = `audio/${fileName}`;
+  const audioUrl = `${SERVER_BASE_URL}/audio/${fileName}`;
+
+  console.log(`  [tts] Scene ${scene.id}: ${durationSeconds.toFixed(1)}s = ${durationInFrames} frames`);
 
   return {
-    audioUrl: staticPath,      // used in <Audio src={staticFile(audioUrl)} />
-    audioFilePath: filePath,   // absolute path for cleanup after render
+    ...scene,
+    audioUrl,
+    audioFilePath, // absolute path for cleanup when course is deleted
     durationSeconds,
     durationInFrames,
   };
 }
 
-// Generates audio for every scene sequentially.
+// All scenes generate in parallel
 async function generateAllSceneAudio(scenes) {
-  const enriched = [];
+  console.log(`  [tts] Generating ${scenes.length} audio clips in parallel...`);
 
-  for (const scene of scenes) {
-    console.log(`  [tts] Scene ${scene.id}: generating audio...`);
-    const { audioUrl, audioFilePath, durationSeconds, durationInFrames } =
-      await generateSceneAudio(scene.narration);
-    enriched.push({ ...scene, audioUrl, audioFilePath, durationSeconds, durationInFrames });
-    console.log(`  [tts] Scene ${scene.id}: ${durationSeconds.toFixed(1)}s = ${durationInFrames} frames`);
-  }
+  const enriched = await Promise.all(scenes.map((scene) => generateSceneAudio(scene)));
 
   const totalFrames = enriched.reduce((sum, s) => sum + s.durationInFrames, 0);
   console.log(`  [tts] Total: ${totalFrames} frames (${(totalFrames / FPS).toFixed(1)}s)`);
@@ -68,7 +61,8 @@ async function generateAllSceneAudio(scenes) {
   return { scenes: enriched, totalFrames };
 }
 
-// Deletes local audio files after rendering is complete.
+// Call this from deleteCourseHandler only — NOT after code generation,
+// since the browser needs the audio files during playback.
 function cleanupAudio(scenes) {
   for (const scene of scenes || []) {
     try {

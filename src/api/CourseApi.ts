@@ -1,9 +1,6 @@
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
 // ── Auth helper ──────────────────────────────────────────────────────────────
-// Reads your JWT from localStorage and builds the Authorization header.
-// IMPORTANT: change "token" below to whatever key your login code uses to
-// store the JWT (e.g. "accessToken", "authToken", etc.).
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("token");
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -17,6 +14,9 @@ export interface LessonFromAPI {
   description: string;
   keyPoints: string[];
   videoUrl: string | null;
+  // Browser-compiled player fields
+  code: string | null;
+  totalFrames: number | null;
   status: "rendering" | "ready" | "failed";
 }
 
@@ -38,7 +38,6 @@ export interface CourseFromAPI {
 }
 
 // ── Start course generation — returns courseId immediately ───────────────────
-
 export async function startCourseGeneration(
   topic: string,
   file?: File | null
@@ -49,16 +48,14 @@ export async function startCourseGeneration(
 
   const res = await fetch(`${BASE_URL}/api/course/generate`, {
     method: "POST",
-    headers: { ...authHeaders() }, // don't set Content-Type; FormData sets it
+    headers: { ...authHeaders() },
     body: formData,
   });
-
   if (!res.ok) throw new Error("Failed to start course generation");
   return res.json();
 }
 
 // ── Poll a course's status once ──────────────────────────────────────────────
-
 export async function getCourseStatus(courseId: string): Promise<CourseFromAPI> {
   const res = await fetch(`${BASE_URL}/api/course/status/${courseId}`, {
     headers: { ...authHeaders() },
@@ -68,7 +65,6 @@ export async function getCourseStatus(courseId: string): Promise<CourseFromAPI> 
 }
 
 // ── List the logged-in user's saved courses (for the sidebar on page load) ───
-
 export async function listCourses(): Promise<CourseFromAPI[]> {
   const res = await fetch(`${BASE_URL}/api/course/list`, {
     headers: { ...authHeaders() },
@@ -77,7 +73,7 @@ export async function listCourses(): Promise<CourseFromAPI[]> {
   return res.json();
 }
 
-
+// ── Delete a course ──────────────────────────────────────────────────────────
 export async function deleteCourse(courseId: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/course/${courseId}`, {
     method: "DELETE",
@@ -87,9 +83,6 @@ export async function deleteCourse(courseId: string): Promise<void> {
 }
 
 // ── Poll repeatedly until the whole course is done ───────────────────────────
-// Fires onUpdate every poll with the latest course state, so the UI can
-// reflect lessons becoming ready one by one. Stops when status is ready/failed.
-
 export function pollCourse(
   courseId: string,
   onUpdate: (course: CourseFromAPI) => void,
@@ -113,9 +106,5 @@ export function pollCourse(
   };
 
   tick();
-
-  // Return a cancel function so the component can stop polling on unmount
-  return () => {
-    stopped = true;
-  };
+  return () => { stopped = true; };
 }
