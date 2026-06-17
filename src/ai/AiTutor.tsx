@@ -136,8 +136,11 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(false);
 
-  const PRICE_PER_COURSE = 6.99;
+  const ORIGINAL_PRICE_PER_COURSE = 7;
+  const PRICE_PER_COURSE = 4.99;
+  const DISCOUNT_PCT = Math.round((1 - PRICE_PER_COURSE / ORIGINAL_PRICE_PER_COURSE) * 100);
   const total = (quantity * PRICE_PER_COURSE).toFixed(2);
+  const totalSavings = (quantity * (ORIGINAL_PRICE_PER_COURSE - PRICE_PER_COURSE)).toFixed(2);
 
   const decrement = () => setQuantity((q) => Math.max(1, q - 1));
   const increment = () => setQuantity((q) => Math.min(99, q + 1));
@@ -185,9 +188,23 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
           <Zap className="h-7 w-7 text-white" />
         </div>
 
-        <h2 className="text-2xl font-bold text-slate-900 text-center mb-2">
+        <h2 className="text-2xl font-bold text-slate-900 text-center mb-1">
           Get more courses
         </h2>
+
+        <div className="flex items-center justify-center gap-2 mb-2">
+          <span className="text-slate-400 line-through text-sm">
+            ${ORIGINAL_PRICE_PER_COURSE.toFixed(2)}
+          </span>
+          <span className="text-lg font-extrabold text-slate-900">
+            ${PRICE_PER_COURSE.toFixed(2)}
+          </span>
+          <span className="text-sm text-slate-500">/ course</span>
+          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">
+            {DISCOUNT_PCT}% off
+          </Badge>
+        </div>
+
         <p className="text-slate-500 text-center text-sm mb-6">
           Each course includes 6 animated lessons, voiceover narration, and a 20-question quiz.
         </p>
@@ -239,12 +256,17 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Price summary */}
-        <div className="flex items-center justify-between mb-4 px-1">
+        <div className="flex items-center justify-between mb-1 px-1">
           <span className="text-sm text-slate-500">
-            {quantity} course{quantity !== 1 ? "s" : ""} × $6.99
+            {quantity} course{quantity !== 1 ? "s" : ""} ×{" "}
+            <span className="line-through text-slate-400">${ORIGINAL_PRICE_PER_COURSE.toFixed(2)}</span>{" "}
+            <span className="font-medium text-slate-700">${PRICE_PER_COURSE.toFixed(2)}</span>
           </span>
           <span className="text-xl font-bold text-slate-900">${total}</span>
         </div>
+        <p className="text-xs text-emerald-600 text-right mb-4 px-1">
+          You save ${totalSavings} ({DISCOUNT_PCT}% off)
+        </p>
 
         {/* CTA */}
         <Button
@@ -657,12 +679,12 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
               {Math.max(credits.courseCredits, 0)} remaining
             </span>
           </div>
-          {!credits.canGenerate && (
+          {/* {!credits.canGenerate && (
             <button onClick={onBuy}
               className="w-full mt-1 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-sm font-bold transition-all shadow-md flex items-center justify-center gap-1.5">
               <CreditCard className="h-4 w-4" /> Buy more courses
             </button>
-          )}
+          )} */}
           {credits.canGenerate && credits.courseCredits <= 2 && credits.freeTrialUsed && (
             <button onClick={onBuy}
               className="w-full mt-1 py-2.5 rounded-xl border-2 border-blue-300 bg-white text-blue-700 hover:bg-blue-50 text-sm font-bold transition-all flex items-center justify-center gap-1.5">
