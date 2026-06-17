@@ -128,7 +128,7 @@ function CatalogView({
           6 real courses.<br />36 real lessons.
         </h1>
         <p style={{ fontSize: 17, color: "#5B5648", maxWidth: 480, margin: "0 auto", lineHeight: 1.6 }}>
-          Every video below was generated end to end by AI — narrated, animated, and quizzed.
+          Every video below was generated end to end by Level Up AI — narrated, animated, and quizzed.
           Pick a subject and press play.
         </p>
       </header>
@@ -202,7 +202,7 @@ function CatalogView({
                 </h3>
                 <p style={{ fontSize: 13.5, color: "#7A7464", margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
                   <BookOpen size={13} />
-                  {readyLessons}/{course.lessons.length} lessons ready · {course.questions.length}-question quiz
+                  {readyLessons}/{course.lessons.length} lessons ready
                 </p>
               </button>
             );
