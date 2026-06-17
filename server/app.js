@@ -9,6 +9,7 @@ const tutorRoutes = require('./routes/tutor');
 const bookRoutes = require("./routes/book");
 const reviewRoutes = require("./routes/review");
 const courseRoutes = require('./routes/course');
+const paymentRoutes = require('./routes/payment');
 
 const Tutor = require('./models/Tutor');
 
@@ -17,7 +18,7 @@ const app = express();
 app.use(cors({
   origin: process.env.NODE_ENV === "production"
     ? ["https://levelup-snowy.vercel.app"]
-    : true, // allow any origin in dev
+    : true,
   credentials: true,
 }));
 app.use(express.json());
@@ -27,6 +28,7 @@ app.use('/api/tutor', tutorRoutes);
 app.use('/api/book/', bookRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/course', courseRoutes);
+app.use('/api/payment', paymentRoutes);
 
 // Serve audio files for browser playback at /audio/*
 // The browser fetches these directly during Remotion Player playback.

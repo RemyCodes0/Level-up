@@ -4,17 +4,26 @@ const {
   generateCourseHandler,
   getCourseStatusHandler,
   listCoursesHandler,
-  deleteCourseHandler,
+  getShowcaseCoursesHandler,
 } = require("../controllers/courseController");
+
+// TODO: import YOUR existing auth middleware here.
+// It's the same one you use to protect your tutoring/login-only routes.
+// Common names: authMiddleware, protect, requireAuth, verifyToken.
+// Example (adjust path + name to match your project):
+// const { protect } = require("../middleware/auth");
 const { protect } = require("../middleware/authMiddleware");
+const { checkCredits } = require("../middleware/checkCredits");
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-// All course routes require a logged-in user (so req.user exists)
-router.post("/generate", protect, upload.single("file"), generateCourseHandler);
+// Public — no auth required, used by the marketing showcase page
+router.get("/showcase", getShowcaseCoursesHandler);
+
+// All other course routes require a logged-in user (so req.user exists)
+router.post("/generate", protect, checkCredits, upload.single("file"), generateCourseHandler);
 router.get("/status/:courseId", protect, getCourseStatusHandler);
 router.get("/list", protect, listCoursesHandler);
-router.delete("/:courseId", protect, deleteCourseHandler);
 
 module.exports = router;

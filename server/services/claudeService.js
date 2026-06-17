@@ -4,25 +4,11 @@ const { validateGeneratedCode } = require("./validateCode");
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Generates the full course structure (lesson metadata + quiz) as JSON.
-async function generateCoursePlan(topic, pdfText) {
-  const context = pdfText
-    ? `The student uploaded course material:\n\n${pdfText.slice(0, 12000)}`
-    : `The student wants to learn about: ${topic}`;
-
-  const message = await client.messages.create({
-    model: "claude-opus-4-6",
-    max_tokens: 6000,
-    messages: [
-      {
-        role: "user",
-        content: `
-You are an expert educational content designer.
-
-${context}
-
-Generate a 6-lesson course plan and a 20-question assessment.
-
-Return ONLY valid JSON, no markdown, exactly this structure:
+// Accepts either a text topic, extracted pdfText, or a raw pdfBuffer.
+// When pdfBuffer is provided, the PDF is sent directly to Claude so it can
+// see images, equations, and diagrams — not just extracted text.
+async function generateCoursePlan(topic, pdfText, pdfBuffer) {
+  const jsonSchema = `
 {
   "lessons": [
     {
@@ -41,17 +27,73 @@ Return ONLY valid JSON, no markdown, exactly this structure:
       "topic": "string"
     }
   ]
-}
+}`;
 
+  const rules = `
 Rules:
 - All content specific to the topic, never generic
 - Exactly 4 keyPoints per lesson
 - 20 questions distributed across the 6 lessons
 - "correct" is the 0-based index
-- Pure JSON only, no backticks
+- Pure JSON only, no backticks`;
+
+  let messages;
+
+  if (pdfBuffer) {
+    // Send the PDF directly to Claude — handles images, equations, and diagrams
+    messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "document",
+            source: {
+              type: "base64",
+              media_type: "application/pdf",
+              data: pdfBuffer.toString("base64"),
+            },
+          },
+          {
+            type: "text",
+            text: `You are an expert educational content designer.
+
+The student uploaded the course material above. Generate a 6-lesson course plan and a 20-question assessment based on its content.
+
+Return ONLY valid JSON, no markdown, exactly this structure:
+${jsonSchema}
+${rules}`,
+          },
+        ],
+      },
+    ];
+  } else {
+    // Text topic or pre-extracted PDF text
+    const context = pdfText
+      ? `The student uploaded course material:\n\n${pdfText.slice(0, 6000)}`
+      : `The student wants to learn about: ${topic}`;
+
+    messages = [
+      {
+        role: "user",
+        content: `
+You are an expert educational content designer.
+
+${context}
+
+Generate a 6-lesson course plan and a 20-question assessment.
+
+Return ONLY valid JSON, no markdown, exactly this structure:
+${jsonSchema}
+${rules}
         `,
       },
-    ],
+    ];
+  }
+
+  const message = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 6000,
+    messages,
   });
 
   const text = message.content
@@ -102,6 +144,7 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 12. Every <Series.Sequence> MUST have a positive integer durationInFrames (at least 1). Never produce a zero or negative duration.
 13. PERFORMANCE: Keep each frame cheap to render. Do NOT put more than ~50 elements on screen at once. Avoid heavy per-frame computation, deeply nested loops, or generating large arrays inside the render function. Precompute static values outside the component. Every frame must render in well under one second.
 14. Return ONLY the raw .tsx code. No markdown fences, no explanation.
+15. Create animations that fills the screen at least 3/4 of the space provided
 
 Begin with imports, then any helper components, then the main "${componentName}" component. Make sure the final line closes the component cleanly.
   `;
@@ -124,7 +167,7 @@ async function generateLessonCode(
       );
 
       const stream = await client.messages.create({
-        model: "claude-opus-4-6",
+        model: "claude-sonnet-4-6",
         max_tokens: 25000,
         stream: true,
         messages: [
@@ -175,4 +218,4 @@ async function generateLessonCode(
   );
 }
 
-module.exports = { generateCoursePlan, generateLessonCode }; 
+module.exports = { generateCoursePlan, generateLessonCode };

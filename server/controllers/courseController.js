@@ -1,14 +1,14 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const pdf = require("pdf-parse");
 const {
   generateCoursePlan,
   generateLessonCode,
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
-const { generateAllSceneAudio, cleanupAudio } = require("../services/ttsService");
+const { generateAllSceneAudio } = require("../services/ttsService");
 const Course = require("../models/Course");
+const User = require("../models/User");
 
 // Audio dir — for cleanup when a course is deleted
 const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
@@ -17,14 +17,9 @@ const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
 async function generateCourseHandler(req, res) {
   try {
     const topic = req.body.topic || "";
-    let pdfText;
+    const pdfBuffer = req.file?.buffer ?? null;
 
-    if (req.file) {
-      const parsed = await pdf(req.file.buffer);
-      pdfText = parsed.text;
-    }
-
-    if (!topic && !pdfText) {
+    if (!topic && !pdfBuffer) {
       res.status(400).json({ error: "Topic or file required" });
       return;
     }
@@ -37,8 +32,15 @@ async function generateCourseHandler(req, res) {
       questions: [],
     });
 
+    // Deduct credit or mark free trial as used
+    if (req.usingFreeTrial) {
+      await User.findByIdAndUpdate(req.user._id, { freeTrialUsed: true });
+    } else {
+      await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
+    }
+
     res.json({ courseId: course._id, status: "generating" });
-    processCourse(course._id.toString(), topic, pdfText);
+    processCourse(course._id.toString(), topic, pdfBuffer);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to start course generation" });
@@ -46,18 +48,14 @@ async function generateCourseHandler(req, res) {
 }
 
 // ── Builds one lesson: scenes → audio → code → save to DB ───────────────────
-// No bundling, no rendering. The browser compiles and plays the code directly.
-// Audio files stay on disk until the course is deleted.
 async function buildLesson(courseId, lesson) {
   const MAX_ATTEMPTS = 2;
   let measuredScenes = null;
   let totalFrames = 0;
 
-  // Step 1 — Scene plan
   console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
   const scenes = await generateScenePlan(lesson);
 
-  // Step 2 — Audio (parallel, generated once, reused across retries)
   console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio...`);
   ({ scenes: measuredScenes, totalFrames } = await generateAllSceneAudio(scenes));
 
@@ -73,7 +71,6 @@ async function buildLesson(courseId, lesson) {
         );
       }
 
-      // Step 3 — Generate code
       console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: code...`);
       const tsxCode = await generateLessonCode(
         lesson,
@@ -82,7 +79,6 @@ async function buildLesson(courseId, lesson) {
         totalFrames
       );
 
-      // Step 4 — Save code + audio metadata to DB. No bundle, no render.
       await Course.findByIdAndUpdate(courseId, {
         $set: {
           [`lessons.${lesson.lessonNumber - 1}.code`]: tsxCode,
@@ -92,7 +88,7 @@ async function buildLesson(courseId, lesson) {
       });
 
       console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready.`);
-      return; // success
+      return;
 
     } catch (err) {
       lastError = err;
@@ -102,7 +98,6 @@ async function buildLesson(courseId, lesson) {
     }
   }
 
-  // All attempts exhausted
   console.error(
     `[${courseId}] Lesson ${lesson.lessonNumber} permanently failed after ${MAX_ATTEMPTS} attempts`
   );
@@ -112,10 +107,10 @@ async function buildLesson(courseId, lesson) {
 }
 
 // ── Orchestrates the whole course ────────────────────────────────────────────
-async function processCourse(courseId, topic, pdfText) {
+async function processCourse(courseId, topic, pdfBuffer) {
   try {
     console.log(`[${courseId}] Generating course plan...`);
-    const { lessons, questions } = await generateCoursePlan(topic, pdfText);
+    const { lessons, questions } = await generateCoursePlan(topic, null, pdfBuffer);
 
     await Course.findByIdAndUpdate(courseId, {
       lessons: lessons.map((l) => ({
@@ -127,10 +122,8 @@ async function processCourse(courseId, topic, pdfText) {
       questions,
     });
 
-    // Build lesson 1 first so the user can start watching immediately
     await buildLesson(courseId, lessons[0]);
 
-    // Build the rest in the background sequentially
     for (let i = 1; i < lessons.length; i++) {
       await buildLesson(courseId, lessons[i]);
     }
@@ -143,7 +136,7 @@ async function processCourse(courseId, topic, pdfText) {
   }
 }
 
-// ── Status endpoint the frontend polls (scoped to the owner) ─────────────────
+// ── Status endpoint ───────────────────────────────────────────────────────────
 async function getCourseStatusHandler(req, res) {
   try {
     const course = await Course.findOne({
@@ -161,7 +154,7 @@ async function getCourseStatusHandler(req, res) {
   }
 }
 
-// ── List the logged-in user's courses (newest first) for the sidebar ─────────
+// ── List the logged-in user's courses ────────────────────────────────────────
 async function listCoursesHandler(req, res) {
   try {
     const courses = await Course.find({ userId: req.user._id })
@@ -187,11 +180,7 @@ async function deleteCourseHandler(req, res) {
       return;
     }
 
-    // Delete each lesson's audio files from disk
     for (const lesson of course.lessons || []) {
-      // audioFilePath is stored per scene inside the lesson's code metadata.
-      // Since we save audioUrl (HTTP URL) not audioFilePath in the DB,
-      // we derive the filename from the URL and delete from AUDIO_DIR.
       if (lesson.scenes) {
         for (const scene of lesson.scenes) {
           try {
@@ -217,9 +206,38 @@ async function deleteCourseHandler(req, res) {
   }
 }
 
+// ── Public showcase: fetch a curated set of example courses, no auth ───────
+// Course IDs come from SHOWCASE_COURSE_IDS env var (comma-separated Mongo
+// ObjectIds) so you can swap which courses are featured without redeploying.
+async function getShowcaseCoursesHandler(req, res) {
+  try {
+    const idsEnv = process.env.SHOWCASE_COURSE_IDS || "";
+    const ids = idsEnv.split(",").map((s) => s.trim()).filter(Boolean);
+
+    if (ids.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    const courses = await Course.find({ _id: { $in: ids }, status: "ready" })
+      .select("topic lessons.title lessons.description lessons.keyPoints lessons.code lessons.totalFrames lessons.status questions createdAt")
+      .lean();
+
+    // Preserve the order given in SHOWCASE_COURSE_IDS rather than Mongo's default order
+    const byId = new Map(courses.map((c) => [c._id.toString(), c]));
+    const ordered = ids.map((id) => byId.get(id)).filter(Boolean);
+
+    res.json(ordered);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load showcase courses" });
+  }
+}
+
 module.exports = {
   generateCourseHandler,
   getCourseStatusHandler,
   listCoursesHandler,
   deleteCourseHandler,
+  getShowcaseCoursesHandler,
 };

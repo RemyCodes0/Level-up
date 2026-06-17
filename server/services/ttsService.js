@@ -15,40 +15,54 @@ const SERVER_BASE_URL = process.env.SERVER_BASE_URL || "http://localhost:5000";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  timeout: 40000,
-  maxRetries: 4,
+  timeout: 90 * 1000,  // 90 seconds per request — long enough for any scene
+  maxRetries: 3,        // auto-retry on transient timeouts
 });
 
-async function generateSceneAudio(scene) {
-  console.log(`  [tts] Scene ${scene.id}: generating audio...`);
+// Generates audio for a single scene with manual retry + exponential backoff
+async function generateSceneAudio(scene, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`  [tts] Scene ${scene.id}: generating audio (attempt ${attempt}/${retries})...`);
 
-  const response = await openai.audio.speech.create({
-    model: "tts-1",
-    voice: "nova",
-    input: scene.narration,
-    speed: 1.0,
-  });
-  const buffer = Buffer.from(await response.arrayBuffer());
+      const response = await openai.audio.speech.create({
+        model: "tts-1",
+        voice: "nova",
+        input: scene.narration,
+        speed: 1.0,
+      });
 
-  const metadata = await parseBuffer(buffer, "audio/mpeg");
-  const durationSeconds = metadata.format.duration;
-  const durationInFrames = Math.ceil(durationSeconds * FPS);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const metadata = await parseBuffer(buffer, "audio/mpeg");
+      const durationSeconds = metadata.format.duration;
+      const durationInFrames = Math.ceil(durationSeconds * FPS);
 
-  const fileName = `${uuidv4()}.mp3`;
-  const audioFilePath = path.join(AUDIO_DIR, fileName); // ← was named filePath before, fixed
-  fs.writeFileSync(audioFilePath, buffer);
+      const fileName = `${uuidv4()}.mp3`;
+      const audioFilePath = path.join(AUDIO_DIR, fileName);
+      fs.writeFileSync(audioFilePath, buffer);
 
-  const audioUrl = `${SERVER_BASE_URL}/audio/${fileName}`;
+      const audioUrl = `${SERVER_BASE_URL}/audio/${fileName}`;
 
-  console.log(`  [tts] Scene ${scene.id}: ${durationSeconds.toFixed(1)}s = ${durationInFrames} frames`);
+      console.log(`  [tts] Scene ${scene.id}: ${durationSeconds.toFixed(1)}s = ${durationInFrames} frames`);
 
-  return {
-    ...scene,
-    audioUrl,
-    audioFilePath, // absolute path for cleanup when course is deleted
-    durationSeconds,
-    durationInFrames,
-  };
+      return {
+        ...scene,
+        audioUrl,
+        audioFilePath,
+        durationSeconds,
+        durationInFrames,
+      };
+    } catch (err) {
+      const isLastAttempt = attempt === retries;
+      if (isLastAttempt) {
+        console.error(`  [tts] Scene ${scene.id}: all ${retries} attempts failed — ${err.message}`);
+        throw err;
+      }
+      const backoffMs = 1000 * attempt; // 1s, 2s, 3s
+      console.warn(`  [tts] Scene ${scene.id}: attempt ${attempt} failed (${err.message}), retrying in ${backoffMs}ms...`);
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
 }
 
 // All scenes generate in parallel

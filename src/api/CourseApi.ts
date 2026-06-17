@@ -82,6 +82,13 @@ export async function deleteCourse(courseId: string): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete course");
 }
 
+// ── Fetch the curated public showcase courses (no auth required) ────────────
+export async function getShowcaseCourses(): Promise<CourseFromAPI[]> {
+  const res = await fetch(`${BASE_URL}/api/course/showcase`);
+  if (!res.ok) throw new Error("Failed to load showcase courses");
+  return res.json();
+}
+
 // ── Poll repeatedly until the whole course is done ───────────────────────────
 export function pollCourse(
   courseId: string,

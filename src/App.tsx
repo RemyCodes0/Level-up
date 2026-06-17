@@ -25,6 +25,7 @@ import BookSessionPage from './book/Book'
 import ApplyTutorPage from './Tutor-Application/TutorApplication'
 import Analytics from "./Analytics";
 import AILearningPage from './ai/AiTutor'
+import ShowcasePage from './showcase/ShowCase'
 function App() {
 
 
@@ -42,6 +43,7 @@ function App() {
       <Route path="/tutors/:id" element={<TutorProfilePage/>}/>
       <Route path="/tutors" element={<TutorsPage/>}/>
       <Route path="/ai_tutor" element={<AILearningPage/>}/>
+      <Route path="/ai_showcase" element={<ShowcasePage/>}/>
       <Route path="/bookings" element={<BookingsPage/>}/>
       <Route path="/tutor/dashboard" element={<TutorDashboardPage/>}/>
       <Route path="/tutor/earnings" element={<TutorEarningsPage/>}/>

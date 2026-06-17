@@ -2,9 +2,8 @@
 
 import type React from "react";
 import axios from "axios";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,8 +26,6 @@ import {
   Eye,
   EyeOff,
   User,
-  CheckCircle2,
-  GraduationCap,
 } from "lucide-react";
 
 export default function SignupPage() {
@@ -39,14 +36,24 @@ export default function SignupPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const { signUp } = useAuth();
   const router = useNavigate();
+
+  // Set gradient directly on body so it fills the whole screen,
+  // overriding the global bg-background from index.css
+  useEffect(() => {
+    document.body.style.background =
+      "linear-gradient(135deg, #eff6ff 0%, #f5f3ff 50%, #fdf2f8 100%)";
+    document.body.style.minHeight = "100dvh";
+    return () => {
+      document.body.style.background = "";
+      document.body.style.minHeight = "";
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
-
     try {
       const res = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/register`, {
         name: fullName,
@@ -54,12 +61,10 @@ export default function SignupPage() {
         password,
         role,
       });
-      console.log("Registration Successful", res.data);
-
       const { token, ...user } = res.data;
       localStorage.setItem("token", token);
       localStorage.setItem("user", JSON.stringify(user));
-      router("/dashboard");
+      router("/ai_tutor");
     } catch (error) {
       console.error(error);
       setError("Registration failed. Please try again.");
@@ -69,18 +74,18 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 p-4 relative overflow-hidden">
-      {/* Animated Background Elements */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-20 left-10 w-72 h-72 bg-blue-400/20 rounded-full blur-3xl animate-pulse"></div>
+    <div className="min-h-screen w-full flex items-center justify-center p-4 relative overflow-hidden">
+      {/* Animated background blobs */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-0 left-0 w-1/2 h-1/2 bg-blue-400/20 rounded-full blur-3xl animate-pulse" />
         <div
-          className="absolute bottom-20 right-10 w-96 h-96 bg-purple-400/20 rounded-full blur-3xl animate-pulse"
+          className="absolute bottom-0 right-0 w-2/3 h-2/3 bg-purple-400/20 rounded-full blur-3xl animate-pulse"
           style={{ animationDelay: "1s" }}
-        ></div>
+        />
         <div
-          className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-pink-400/20 rounded-full blur-3xl animate-pulse"
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1/2 h-1/2 bg-pink-400/15 rounded-full blur-3xl animate-pulse"
           style={{ animationDelay: "2s" }}
-        ></div>
+        />
       </div>
 
       <motion.div
@@ -98,7 +103,7 @@ export default function SignupPage() {
               className="flex justify-center mb-2"
             >
               <div className="relative">
-                <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full blur-lg opacity-50 animate-pulse"></div>
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full blur-lg opacity-50 animate-pulse" />
                 <div className="relative bg-gradient-to-r from-blue-600 to-purple-600 overflow-hidden p-3 rounded-full shadow-lg">
                   <img
                     src="/logo.png"
@@ -131,14 +136,9 @@ export default function SignupPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3 }}
                 >
-                  <Alert
-                    variant="destructive"
-                    className="border-red-200 bg-red-50"
-                  >
+                  <Alert variant="destructive" className="border-red-200 bg-red-50">
                     <AlertCircle className="h-4 w-4" />
-                    <AlertDescription className="text-sm">
-                      {error}
-                    </AlertDescription>
+                    <AlertDescription className="text-sm">{error}</AlertDescription>
                   </Alert>
                 </motion.div>
               )}
@@ -149,14 +149,11 @@ export default function SignupPage() {
                 transition={{ duration: 0.5, delay: 0.4 }}
                 className="space-y-2"
               >
-                <Label
-                  htmlFor="fullName"
-                  className="text-sm font-semibold text-gray-700"
-                >
+                <Label htmlFor="fullName" className="text-sm font-semibold text-gray-700">
                   Full Name
                 </Label>
                 <div className="relative">
-                  <User className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
                   <Input
                     id="fullName"
                     type="text"
@@ -175,14 +172,11 @@ export default function SignupPage() {
                 transition={{ duration: 0.5, delay: 0.5 }}
                 className="space-y-2"
               >
-                <Label
-                  htmlFor="email"
-                  className="text-sm font-semibold text-gray-700"
-                >
+                <Label htmlFor="email" className="text-sm font-semibold text-gray-700">
                   Email Address
                 </Label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
                   <Input
                     id="email"
                     type="email"
@@ -201,14 +195,11 @@ export default function SignupPage() {
                 transition={{ duration: 0.5, delay: 0.6 }}
                 className="space-y-2"
               >
-                <Label
-                  htmlFor="password"
-                  className="text-sm font-semibold text-gray-700"
-                >
+                <Label htmlFor="password" className="text-sm font-semibold text-gray-700">
                   Password
                 </Label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
                   <Input
                     id="password"
                     type={showPassword ? "text" : "password"}
@@ -222,18 +213,12 @@ export default function SignupPage() {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
                   >
-                    {showPassword ? (
-                      <EyeOff className="h-5 w-5" />
-                    ) : (
-                      <Eye className="h-5 w-5" />
-                    )}
+                    {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                   </button>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  Must be at least 6 characters long
-                </p>
+                <p className="text-xs text-gray-500 mt-1">Must be at least 6 characters long</p>
               </motion.div>
             </CardContent>
 
@@ -251,7 +236,7 @@ export default function SignupPage() {
                 >
                   {loading ? (
                     <div className="flex items-center gap-2">
-                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       <span>Creating account...</span>
                     </div>
                   ) : (
@@ -271,42 +256,24 @@ export default function SignupPage() {
               >
                 <div className="relative">
                   <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-gray-200"></div>
+                    <div className="w-full border-t border-gray-200" />
                   </div>
                   <div className="relative flex justify-center text-sm">
-                    <span className="px-4 bg-white text-gray-500">
-                      Already have an account?
-                    </span>
+                    <span className="px-4 bg-white text-gray-500">Already have an account?</span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3">
-                  <a href="/login">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full h-11 border-2 hover:bg-blue-50 hover:border-blue-300 transition-all group"
-                    >
-                      <Sparkles className="mr-2 h-4 w-4 text-blue-600" />
-                      <span className="font-semibold">
-                        Sign in to your account
-                      </span>
-                      <ArrowRight className="ml-auto h-4 w-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
-                    </Button>
-                  </a>
-
-                  {/* <a href="/apply">
-                    <Button 
-                      type="button"
-                      variant="outline" 
-                      className="w-full h-11 border-2 border-purple-200 hover:bg-purple-50 hover:border-purple-300 transition-all group"
-                    >
-                      <GraduationCap className="mr-2 h-4 w-4 text-purple-600" />
-                      <span className="font-semibold">Apply to become a tutor</span>
-                      <ArrowRight className="ml-auto h-4 w-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
-                    </Button>
-                  </a> */}
-                </div>
+                <a href="/login">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full h-11 border-2 hover:bg-blue-50 hover:border-blue-300 transition-all group"
+                  >
+                    <Sparkles className="mr-2 h-4 w-4 text-blue-600" />
+                    <span className="font-semibold">Sign in to your account</span>
+                    <ArrowRight className="ml-auto h-4 w-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
+                  </Button>
+                </a>
               </motion.div>
 
               <motion.div
@@ -317,31 +284,14 @@ export default function SignupPage() {
               >
                 <p className="text-xs text-center text-gray-500 px-4">
                   By creating an account, you agree to our{" "}
-                  <a href="/terms" className="text-blue-600 hover:underline">
-                    Terms of Service
-                  </a>{" "}
+                  <a href="/terms" className="text-blue-600 hover:underline">Terms of Service</a>{" "}
                   and{" "}
-                  <a href="/privacy" className="text-blue-600 hover:underline">
-                    Privacy Policy
-                  </a>
+                  <a href="/privacy" className="text-blue-600 hover:underline">Privacy Policy</a>
                 </p>
               </motion.div>
             </CardFooter>
           </form>
         </Card>
-
-        {/* Trust Badge */}
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 1 }}
-          className="mt-6 text-center"
-        >
-          {/* <p className="text-sm text-gray-600">
-            <CheckCircle2 className="inline h-4 w-4 text-green-600 mr-1" />
-            Join 500+ AUB students already learning with us
-          </p> */}
-        </motion.div>
       </motion.div>
     </div>
   );
