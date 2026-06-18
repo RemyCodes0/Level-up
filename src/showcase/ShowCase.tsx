@@ -3,25 +3,13 @@
 import { useEffect, useState } from "react";
 import { Helmet } from "react-helmet-async";
 import {
-  ChevronLeft, ChevronRight, Play, Loader2, AlertCircle,
-  BookOpen, Clock, ArrowLeft, GraduationCap, MessageSquare, Mail,
+  ChevronLeft, ChevronRight, Play, AlertCircle,
+  BookOpen, Clock, ArrowLeft, GraduationCap, MessageSquare,
 } from "lucide-react";
 import { getShowcaseCourses } from "../api/CourseApi";
 import type { CourseFromAPI } from "../api/CourseApi";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
-
-const FEEDBACK_EMAIL = "tuyishimechristophe84@gmail.com";
-
-function buildFeedbackUrl(courseName?: string) {
-  const to = encodeURIComponent(FEEDBACK_EMAIL);
-  const subject = encodeURIComponent(
-    courseName ? `Level Up Showcase Feedback — ${courseName}` : "Level Up Showcase Feedback"
-  );
-  const body = encodeURIComponent(
-    `Hi Level Up team,\n\nHere's my feedback on the showcase:\n\n\n\n---\nCourse: ${courseName || "N/A"}\nSent from the Level Up showcase`
-  );
-  return `https://mail.google.com/mail/?view=cm&to=${to}&su=${subject}&body=${body}`;
-}
+import { FeedbackModal } from "../feedback/FeedBackModel";
 
 // ── Subject-coded accents — one per course card, not one repeated brand color ──
 // Cycles if there are ever more than 6 courses; stable assignment by index.
@@ -54,6 +42,7 @@ export default function ShowcasePage() {
   const [error, setError] = useState(false);
   const [openCourseId, setOpenCourseId] = useState<string | null>(null);
   const [activeLessonIdx, setActiveLessonIdx] = useState(0);
+  const [showFeedback, setShowFeedback] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,7 +172,7 @@ export default function ShowcasePage() {
             padding: 22px 20px 20px;
             gap: 12px;
           }
-          .sc-feedback-card a {
+          .sc-feedback-card button {
             width: 100%;
             justify-content: center;
           }
@@ -202,6 +191,7 @@ export default function ShowcasePage() {
             courses={courses}
             error={error}
             onOpen={(id) => { setOpenCourseId(id); setActiveLessonIdx(0); }}
+            onFeedback={() => setShowFeedback(true)}
           />
         ) : (
           <SyllabusView
@@ -210,6 +200,15 @@ export default function ShowcasePage() {
             activeLessonIdx={activeLessonIdx}
             onSelectLesson={setActiveLessonIdx}
             onBack={() => setOpenCourseId(null)}
+            onFeedback={() => setShowFeedback(true)}
+          />
+        )}
+
+        {showFeedback && (
+          <FeedbackModal
+            onClose={() => setShowFeedback(false)}
+            courseId={openCourse?._id ?? null}
+            courseName={openCourse ? toCourseTitle(openCourse.topic) : undefined}
           />
         )}
       </div>
@@ -220,11 +219,12 @@ export default function ShowcasePage() {
 // ─── Catalog grid ──────────────────────────────────────────────────────────
 
 function CatalogView({
-  courses, error, onOpen,
+  courses, error, onOpen, onFeedback,
 }: {
   courses: CourseFromAPI[] | null;
   error: boolean;
   onOpen: (id: string) => void;
+  onFeedback: () => void;
 }) {
   return (
     <div className="sc-container">
@@ -319,6 +319,40 @@ function CatalogView({
           })}
         </div>
       )}
+
+      {/* ── Feedback card ── */}
+      <div className="sc-feedback-card">
+        <div
+          style={{
+            width: 44, height: 44, borderRadius: "50%", background: "#E4E7F2",
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          }}
+        >
+          <MessageSquare size={20} style={{ color: "#3D4F7A" }} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 600, color: "#1C2333", margin: "0 0 4px" }}>
+            Got feedback on the catalog?
+          </h3>
+          <p style={{ fontSize: 13.5, color: "#7A7464", margin: "0 0 14px", lineHeight: 1.5 }}>
+            This is where you can tell us what's working, what's missing, or what surprised you.
+          </p>
+          <button
+            onClick={onFeedback}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 8,
+              padding: "10px 20px", borderRadius: 8, border: "none",
+              background: "#1C2333", color: "#fff", fontSize: 14, fontWeight: 600,
+              cursor: "pointer", transition: "opacity 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.85"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
+          >
+            <MessageSquare size={15} />
+            Leave feedback
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -326,13 +360,14 @@ function CatalogView({
 // ─── Syllabus + player view ──────────────────────────────────────────────
 
 function SyllabusView({
-  course, accentIndex, activeLessonIdx, onSelectLesson, onBack,
+  course, accentIndex, activeLessonIdx, onSelectLesson, onBack, onFeedback,
 }: {
   course: CourseFromAPI;
   accentIndex: number;
   activeLessonIdx: number;
   onSelectLesson: (i: number) => void;
   onBack: () => void;
+  onFeedback: () => void;
 }) {
   const accent = getAccent(accentIndex);
   const lesson = course.lessons[activeLessonIdx];
@@ -459,24 +494,22 @@ function SyllabusView({
             What did you think of this course?
           </h3>
           <p style={{ fontSize: 13.5, color: "#7A7464", margin: "0 0 14px", lineHeight: 1.5 }}>
-            These lessons were entirely AI-generated. We'd love to hear your thoughts — what worked, what didn't, what surprised you.
+            These lessons were entirely AI-generated. This is where you leave feedback — what worked, what didn't, what surprised you.
           </p>
-          <a
-            href={buildFeedbackUrl(toCourseTitle(course.topic))}
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            onClick={onFeedback}
             style={{
               display: "inline-flex", alignItems: "center", gap: 8,
-              padding: "10px 20px", borderRadius: 8,
+              padding: "10px 20px", borderRadius: 8, border: "none",
               background: accent.ink, color: "#fff", fontSize: 14, fontWeight: 600,
-              textDecoration: "none", transition: "opacity 0.15s",
+              cursor: "pointer", transition: "opacity 0.15s",
             }}
             onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.85"; }}
             onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
           >
-            <Mail size={15} />
-            Share your feedback
-          </a>
+            <MessageSquare size={15} />
+            Leave feedback
+          </button>
         </div>
       </div>
     </div>

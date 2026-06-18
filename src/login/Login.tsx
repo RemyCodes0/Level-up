@@ -211,7 +211,7 @@ export default function LoginPage() {
                   <Input
                     id="email"
                     type="email"
-                    placeholder="your-email@mail.aub.edu"
+                    placeholder="your-email@gmail.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="pl-10 h-12 border-2 border-gray-200 focus:border-blue-500 transition-colors"

@@ -19,7 +19,7 @@ import {
   ChevronRight, ChevronLeft, Clock, BarChart2, BookOpen, AlertCircle,
   Award, TrendingUp, TrendingDown, ClipboardList, Trophy,
   X, Check, PanelLeft, PenSquare, GraduationCap, Loader2, Trash2, XCircle,
-  CreditCard, Zap, Minus, Plus, MessageSquare, Mail,
+  CreditCard, Zap, Minus, Plus, MessageSquare,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -289,62 +289,8 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ─── Feedback Components (mailto: based, zero backend) ──────────────────────
-
-const FEEDBACK_EMAIL = "tuyishimechristophe84@gmail.com";
-
-function buildMailtoUrl(courseName?: string) {
-  const to = encodeURIComponent(FEEDBACK_EMAIL);
-  const subject = encodeURIComponent(
-    courseName ? `Level Up Feedback — ${courseName}` : "Level Up Feedback"
-  );
-  const body = encodeURIComponent(
-    `Hi Level Up team,\n\nHere's my feedback:\n\n\n\n---\nCourse: ${courseName || "N/A"}\nSent from the Level Up app`
-  );
-  return `https://mail.google.com/mail/?view=cm&to=${to}&su=${subject}&body=${body}`;
-}
-
-function FeedbackFab({ courseName }: { courseName?: string }) {
-  return (
-    <a
-      href={buildMailtoUrl(courseName)}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="fixed bottom-6 right-6 z-40 w-12 h-12 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center group"
-      title="Send feedback"
-    >
-      <MessageSquare className="h-5 w-5" />
-      <span className="absolute right-full mr-3 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
-        Send feedback
-      </span>
-    </a>
-  );
-}
-
-function FeedbackPrompt({ courseName }: { courseName: string }) {
-  return (
-    <Card className="border-0 shadow-md bg-gradient-to-r from-blue-50 to-indigo-50 p-5 mt-6">
-      <div className="flex items-start gap-4">
-        <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-          <MessageSquare className="h-5 w-5 text-blue-600" />
-        </div>
-        <div className="flex-1">
-          <h3 className="font-semibold text-slate-800 mb-1">How was this course?</h3>
-          <p className="text-sm text-slate-500 mb-3">Your feedback helps us improve — we read every message.</p>
-          <a
-            href={buildMailtoUrl(courseName)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-blue-200 text-blue-700 text-sm font-medium hover:bg-blue-50 hover:border-blue-300 transition-all"
-          >
-            <Mail className="h-4 w-4" />
-            Share your feedback
-          </a>
-        </div>
-      </div>
-    </Card>
-  );
-}
+// ─── Feedback (imported from separate component) ────────────────────────────
+import { FeedbackModal } from "../feedback/FeedBackModel";
 
 function UploadPhase({ onGenerate, credits }: {
   onGenerate: (fileName: string, file?: File | null) => void;
@@ -689,13 +635,14 @@ function ResultsSection({ answers, questions }: { answers: QuizAnswer[]; questio
   );
 }
 
-function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapsed, onToggle, loading, error, credits, onBuy, isMobile }: {
+function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapsed, onToggle, loading, error, credits, onBuy, isMobile, onFeedback }: {
   history: HistoryEntry[]; activeId: string | null;
   onSelect: (entry: HistoryEntry) => void; onNew: () => void;
   onDelete: (id: string) => void; collapsed: boolean; onToggle: () => void;
   loading: boolean; error: boolean;
   credits: Credits | null; onBuy: () => void;
   isMobile?: boolean;
+  onFeedback: () => void;
 }) {
   const groups = history.reduce<Record<string, HistoryEntry[]>>((acc, e) => {
     const diffDays = Math.floor((Date.now() - e.createdAt.getTime()) / 86400000);
@@ -813,6 +760,22 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
           </div>
         ))}
       </nav>
+
+      {/* ── Explicit feedback entry point ── */}
+      <div className="shrink-0 border-t border-slate-100 p-3">
+        <button
+          onClick={onFeedback}
+          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/60 hover:bg-blue-50 hover:border-blue-300 transition-all group"
+        >
+          <span className="w-7 h-7 rounded-lg bg-blue-100 flex items-center justify-center shrink-0 group-hover:bg-blue-200 transition-colors">
+            <MessageSquare className="h-4 w-4 text-blue-600" />
+          </span>
+          <span className="text-left min-w-0">
+            <span className="block text-xs font-bold text-blue-700">Give feedback</span>
+            <span className="block text-[11px] text-blue-500/80 leading-snug">Tell us what to improve</span>
+          </span>
+        </button>
+      </div>
     </aside>
     </>
   );
@@ -846,6 +809,7 @@ export default function AILearningPage() {
   const [credits, setCredits] = useState<Credits | null>(null);
   // const [showPaywall, setShowPaywall] = useState(false); // paywall disabled for now
   const [retryingLesson, setRetryingLesson] = useState<number | null>(null);
+  const [showFeedback, setShowFeedback] = useState(false);
 
   const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
@@ -1015,12 +979,12 @@ export default function AILearningPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
         {/* PaywallModal disabled for now */}
+        {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
           <div className="flex-1 overflow-y-auto"><GeneratingPhase fileName={fileName} /></div>
         </div>
-        <FeedbackFab courseName={fileName} />
       </div>
     );
   }
@@ -1029,12 +993,12 @@ export default function AILearningPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
         {/* PaywallModal disabled for now */}
+        {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
           <div className="flex-1 overflow-y-auto"><UploadPhase onGenerate={startNewCourse} credits={credits} /></div>
         </div>
-        <FeedbackFab />
       </div>
     );
   }
@@ -1042,35 +1006,51 @@ export default function AILearningPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
       {/* PaywallModal disabled for now */}
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
       <Helmet><title>AI Learning Course | Level Up</title></Helmet>
       <div className="flex h-screen relative">
-        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} />
+        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} />
         {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
 
         {/* Course sidebar backdrop on mobile */}
         {isMobile && courseSidebarOpen && (
           <div className="fixed inset-0 z-30 bg-black/30 backdrop-blur-[2px]" onClick={() => setCourseSidebarOpen(false)} />
         )}
-        <aside className={`${
-          isMobile
-            ? `fixed top-0 right-0 z-40 h-full w-72 ${courseSidebarOpen ? "translate-x-0" : "translate-x-full"}`
-            : `${courseSidebarOpen ? "w-72" : "w-0 overflow-hidden"} shrink-0`
-        } transition-all duration-300 bg-white border-l border-slate-200 flex flex-col shadow-sm`}>
-          <div className="p-5 border-b border-slate-100">
-            <div className="flex items-center gap-2 mb-2">
-              <Sparkles className="h-4 w-4 text-blue-600" />
-              <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">AI Course</span>
-            </div>
-            <h2 className="font-bold text-slate-900 text-sm leading-snug line-clamp-2">{fileName}</h2>
-            {!allLessonsReady && (
-              <div className="mt-3 flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
-                <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin shrink-0" />
-                <p className="text-xs text-blue-700">{lessonStatuses.filter((s) => s === "generating").length} lesson{lessonStatuses.filter((s) => s === "generating").length !== 1 ? "s" : ""} generating…</p>
-              </div>
-            )}
-          </div>
 
-          <nav className="flex-1 overflow-y-auto py-3">
+        {/*
+          The course panel and its collapse tab share a `relative` wrapper that's
+          scoped to just this panel, not the full-width outer row. That scoping is
+          the actual fix: the old tab used `absolute right-0` on the outer
+          `flex h-screen relative` container, which spans the entire viewport — so
+          `right-0` always meant "the screen's right edge," not "this panel's right
+          edge." Collapsing the panel didn't move the tab's anchor at all; it just
+          made the panel underneath it shrink away, so the tab visibly jumped to
+          the screen edge. By moving `relative` onto a wrapper that itself
+          shrinks/grows with the panel (`w-72` ↔ `w-0`), `right-0` now resolves
+          against the panel's own current edge — same mechanism the left history
+          sidebar already used correctly with `left-0`.
+        */}
+        <div className={`relative shrink-0 ${isMobile ? "" : "transition-all duration-300"}`}>
+          <aside className={`${
+            isMobile
+              ? `fixed top-0 right-0 z-40 h-full w-72 ${courseSidebarOpen ? "translate-x-0" : "translate-x-full"}`
+              : `${courseSidebarOpen ? "w-72" : "w-0"} overflow-hidden`
+          } transition-all duration-300 h-full bg-white border-l border-slate-200 flex flex-col shadow-sm`}>
+            <div className="p-5 border-b border-slate-100 w-72">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="h-4 w-4 text-blue-600" />
+                <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">AI Course</span>
+              </div>
+              <h2 className="font-bold text-slate-900 text-sm leading-snug line-clamp-2">{fileName}</h2>
+              {!allLessonsReady && (
+                <div className="mt-3 flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
+                  <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin shrink-0" />
+                  <p className="text-xs text-blue-700">{lessonStatuses.filter((s) => s === "generating").length} lesson{lessonStatuses.filter((s) => s === "generating").length !== 1 ? "s" : ""} generating…</p>
+                </div>
+              )}
+            </div>
+
+          <nav className="flex-1 overflow-y-auto py-3 w-72">
             <div className="px-4 mb-1">
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Video Lessons</p>
             </div>
@@ -1139,14 +1119,30 @@ export default function AILearningPage() {
               {!quizDone && <Lock className="h-3 w-3 text-slate-300 ml-auto mt-1" />}
             </button>
           </nav>
-        </aside>
+          </aside>
+          {!courseSidebarOpen && !isMobile && (
+            <button
+              onClick={() => setCourseSidebarOpen(true)}
+              className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-l-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"
+              title="Show course menu"
+            >
+              <PanelLeft className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        {isMobile && (
+          <button
+            onClick={() => setCourseSidebarOpen((o) => !o)}
+            className="fixed top-4 right-4 z-50 w-9 h-9 flex items-center justify-center bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-slate-800 shadow-md transition-all"
+            title={courseSidebarOpen ? "Hide course menu" : "Show course menu"}
+          >
+            <PanelLeft className="h-4 w-4" />
+          </button>
+        )}
 
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
-            <button onClick={() => setCourseSidebarOpen((o) => !o)} className="mb-4 text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 transition-colors">
-              {courseSidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-              {courseSidebarOpen ? "Hide" : "Show"} course nav
-            </button>
             {activeSection === "video" && (
               <div className="space-y-6">
                 <VideoPlayer lesson={lessons[activeLesson]} onComplete={() => markComplete(lessons[activeLesson].id)} onRetry={() => handleRetryLesson(activeLesson)} retrying={retryingLesson === activeLesson} />
@@ -1172,12 +1168,28 @@ export default function AILearningPage() {
             {activeSection === "results" && (
               <>
                 <ResultsSection answers={quizAnswers} questions={quizQuestions} />
-                <FeedbackPrompt courseName={fileName} />
+                <Card className="border-0 shadow-md bg-gradient-to-r from-blue-50 to-indigo-50 p-5 mt-6">
+                  <div className="flex items-start gap-4">
+                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                      <MessageSquare className="h-5 w-5 text-blue-600" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-slate-800 mb-1">How was this course?</h3>
+                      <p className="text-sm text-slate-500 mb-3">Your feedback helps us improve — it only takes a minute.</p>
+                      <button
+                        onClick={() => setShowFeedback(true)}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-blue-200 text-blue-700 text-sm font-medium hover:bg-blue-50 hover:border-blue-300 transition-all"
+                      >
+                        <MessageSquare className="h-4 w-4" />
+                        Share your feedback
+                      </button>
+                    </div>
+                  </div>
+                </Card>
               </>
             )}
           </div>
         </main>
-        <FeedbackFab courseName={fileName} />
       </div>
     </div>
   );

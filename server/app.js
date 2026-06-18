@@ -10,6 +10,7 @@ const bookRoutes = require("./routes/book");
 const reviewRoutes = require("./routes/review");
 const courseRoutes = require('./routes/course');
 const paymentRoutes = require('./routes/payment');
+const feedbackRoutes = require('./routes/feedback')
 
 const Tutor = require('./models/Tutor');
 
@@ -29,6 +30,7 @@ app.use('/api/book/', bookRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/course', courseRoutes);
 app.use('/api/payment', paymentRoutes);
+app.use('/api/feedback', feedbackRoutes);
 
 // Serve audio files for browser playback at /audio/*
 // The browser fetches these directly during Remotion Player playback.
