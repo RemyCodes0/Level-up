@@ -107,6 +107,7 @@ async function buildLesson(courseId, lesson) {
 }
 
 // ── Orchestrates the whole course ────────────────────────────────────────────
+// ── Orchestrates the whole course ────────────────────────────────────────────
 async function processCourse(courseId, topic, pdfBuffer) {
   try {
     console.log(`[${courseId}] Generating course plan...`);
@@ -125,11 +126,10 @@ async function processCourse(courseId, topic, pdfBuffer) {
     // Lesson 1 first — user can start watching while the rest generate
     await buildLesson(courseId, lessons[0]);
 
-    // Build remaining lessons 2 at a time for speed
+    // Build remaining lessons one at a time, in the background
     const remaining = lessons.slice(1);
-    for (let i = 0; i < remaining.length; i += 2) {
-      const batch = remaining.slice(i, i + 2);
-      await Promise.allSettled(batch.map((l) => buildLesson(courseId, l)));
+    for (const lesson of remaining) {
+      await buildLesson(courseId, lesson);
     }
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
