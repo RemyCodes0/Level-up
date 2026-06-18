@@ -86,6 +86,114 @@ export default function ShowcasePage() {
         .sc-root { font-family: 'Inter', sans-serif; color: #1C2333; }
         .sc-display { font-family: 'Fraunces', serif; }
         .sc-mono { font-family: 'JetBrains Mono', monospace; }
+
+        .sc-container {
+          max-width: 1140px;
+          margin: 0 auto;
+          padding: 0 24px;
+        }
+
+        .sc-hero {
+          padding: 88px 0 64px;
+          text-align: center;
+        }
+
+        .sc-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+          gap: 20px;
+          padding-bottom: 96px;
+        }
+
+        .sc-syllabus-wrap {
+          padding: 40px 24px 96px;
+        }
+
+        .sc-syllabus-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1.6fr) minmax(220px, 1fr);
+          gap: 32px;
+        }
+
+        .sc-lesson-nav {
+          display: flex;
+          justify-content: space-between;
+          margin-top: 24px;
+          gap: 12px;
+        }
+
+        .sc-feedback-card {
+          margin-top: 48px;
+          padding: 28px 28px 24px;
+          background: #fff;
+          border: 1px solid #E7E2D5;
+          border-radius: 12px;
+          display: flex;
+          align-items: flex-start;
+          gap: 16px;
+        }
+
+        .sc-card {
+          text-align: left;
+          background: #fff;
+          border: 1px solid #E7E2D5;
+          border-radius: 10px;
+          padding: 22px 22px 20px;
+          cursor: pointer;
+          transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        /* ── Tablet ── */
+        @media (max-width: 860px) {
+          .sc-syllabus-grid {
+            grid-template-columns: 1fr;
+            gap: 28px;
+          }
+          .sc-syllabus-wrap {
+            padding: 32px 20px 72px;
+          }
+        }
+
+        /* ── Mobile ── */
+        @media (max-width: 640px) {
+          .sc-container {
+            padding: 0 16px;
+          }
+          .sc-hero {
+            padding: 56px 0 44px;
+          }
+          .sc-grid {
+            grid-template-columns: 1fr;
+            gap: 14px;
+            padding-bottom: 64px;
+          }
+          .sc-syllabus-wrap {
+            padding: 24px 16px 56px;
+          }
+          .sc-card {
+            padding: 18px 18px 16px;
+          }
+          .sc-lesson-nav button {
+            flex: 1;
+            justify-content: center;
+            padding: 11px 14px !important;
+          }
+          .sc-feedback-card {
+            flex-direction: column;
+            padding: 22px 20px 20px;
+            gap: 12px;
+          }
+          .sc-feedback-card a {
+            width: 100%;
+            justify-content: center;
+          }
+        }
+
+        @media (max-width: 400px) {
+          .sc-hero {
+            padding: 44px 0 36px;
+          }
+        }
       `}</style>
 
       <div className="sc-root">
@@ -119,9 +227,9 @@ function CatalogView({
   onOpen: (id: string) => void;
 }) {
   return (
-    <div style={{ maxWidth: 1140, margin: "0 auto", padding: "0 24px" }}>
+    <div className="sc-container">
       {/* ── Hero ── */}
-      <header style={{ padding: "88px 0 64px", textAlign: "center" }}>
+      <header className="sc-hero">
         <p
           className="sc-mono"
           style={{
@@ -134,7 +242,7 @@ function CatalogView({
         <h1
           className="sc-display"
           style={{
-            fontSize: "clamp(34px, 5vw, 56px)", fontWeight: 600, lineHeight: 1.08,
+            fontSize: "clamp(30px, 7vw, 56px)", fontWeight: 600, lineHeight: 1.08,
             letterSpacing: "-0.01em", margin: "0 0 20px",
           }}
         >
@@ -162,14 +270,7 @@ function CatalogView({
           <p style={{ color: "#5B5648" }}>No courses in the catalog yet.</p>
         </div>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-            gap: 20,
-            paddingBottom: 96,
-          }}
-        >
+        <div className="sc-grid">
           {courses.map((course, i) => {
             const accent = getAccent(i);
             const readyLessons = course.lessons.filter((l) => l.status === "ready").length;
@@ -177,12 +278,8 @@ function CatalogView({
               <button
                 key={course._id}
                 onClick={() => onOpen(course._id)}
-                style={{
-                  textAlign: "left", background: "#fff",
-                  border: "1px solid #E7E2D5", borderLeft: `4px solid ${accent.ink}`,
-                  borderRadius: 10, padding: "22px 22px 20px", cursor: "pointer",
-                  transition: "transform 0.15s ease, box-shadow 0.15s ease",
-                }}
+                className="sc-card"
+                style={{ borderLeft: `4px solid ${accent.ink}` }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.transform = "translateY(-2px)";
                   e.currentTarget.style.boxShadow = "0 10px 24px -8px rgba(28,35,51,0.12)";
@@ -192,7 +289,7 @@ function CatalogView({
                   e.currentTarget.style.boxShadow = "none";
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
                   <span
                     className="sc-mono"
                     style={{
@@ -213,7 +310,7 @@ function CatalogView({
                 >
                   {toCourseTitle(course.topic)}
                 </h3>
-                <p style={{ fontSize: 13.5, color: "#7A7464", margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                <p style={{ fontSize: 13.5, color: "#7A7464", margin: 0, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                   <BookOpen size={13} />
                   {readyLessons}/{course.lessons.length} lessons ready · {course.questions.length}-question quiz
                 </p>
@@ -241,7 +338,7 @@ function SyllabusView({
   const lesson = course.lessons[activeLessonIdx];
 
   return (
-    <div style={{ maxWidth: 1140, margin: "0 auto", padding: "40px 24px 96px" }}>
+    <div className="sc-container sc-syllabus-wrap">
       <button
         onClick={onBack}
         style={{
@@ -263,11 +360,11 @@ function SyllabusView({
           {accent.label}-{String(accentIndex + 1).padStart(2, "0")}
         </span>
       </div>
-      <h1 className="sc-display" style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 600, margin: "8px 0 36px", letterSpacing: "-0.01em" }}>
+      <h1 className="sc-display" style={{ fontSize: "clamp(26px, 6vw, 40px)", fontWeight: 600, margin: "8px 0 36px", letterSpacing: "-0.01em" }}>
         {toCourseTitle(course.topic)}
       </h1>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.6fr) minmax(220px, 1fr)", gap: 32 }}>
+      <div className="sc-syllabus-grid">
         {/* Player */}
         <div>
           {!lesson.code ? (
@@ -285,7 +382,7 @@ function SyllabusView({
             <DynamicPlayer code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} />
           )}
           <div style={{ marginTop: 18 }}>
-            <h2 className="sc-display" style={{ fontSize: 20, fontWeight: 600, margin: "0 0 8px" }}>
+            <h2 className="sc-display" style={{ fontSize: "clamp(17px, 3vw, 20px)", fontWeight: 600, margin: "0 0 8px" }}>
               {activeLessonIdx + 1}. {lesson.title}
             </h2>
             <p style={{ fontSize: 14.5, color: "#5B5648", lineHeight: 1.6, margin: 0 }}>
@@ -293,7 +390,7 @@ function SyllabusView({
             </p>
           </div>
 
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 24 }}>
+          <div className="sc-lesson-nav">
             <button
               onClick={() => onSelectLesson(Math.max(0, activeLessonIdx - 1))}
               disabled={activeLessonIdx === 0}
@@ -348,13 +445,7 @@ function SyllabusView({
       </div>
 
       {/* ── Feedback card ── */}
-      <div
-        style={{
-          marginTop: 48, padding: "28px 28px 24px", background: "#fff",
-          border: "1px solid #E7E2D5", borderRadius: 12,
-          display: "flex", alignItems: "flex-start", gap: 16,
-        }}
-      >
+      <div className="sc-feedback-card">
         <div
           style={{
             width: 44, height: 44, borderRadius: "50%", background: accent.tint,
@@ -363,7 +454,7 @@ function SyllabusView({
         >
           <MessageSquare size={20} style={{ color: accent.ink }} />
         </div>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <h3 style={{ fontSize: 16, fontWeight: 600, color: "#1C2333", margin: "0 0 4px" }}>
             What did you think of this course?
           </h3>
@@ -394,7 +485,7 @@ function SyllabusView({
 
 function navBtnStyle(disabled: boolean): React.CSSProperties {
   return {
-    display: "flex", alignItems: "center", gap: 6,
+    display: "flex", alignItems: "center", gap: 6, justifyContent: "center",
     background: "none", border: "1px solid #E7E2D5", borderRadius: 8,
     padding: "9px 16px", fontSize: 13.5, color: disabled ? "#C9C3B5" : "#1C2333",
     cursor: disabled ? "not-allowed" : "pointer",
