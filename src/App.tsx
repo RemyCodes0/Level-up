@@ -26,6 +26,7 @@ import ApplyTutorPage from './Tutor-Application/TutorApplication'
 import Analytics from "./Analytics";
 import AILearningPage from './ai/AiTutor'
 import ShowcasePage from './showcase/ShowCase'
+import VerifyEmailPage from './signup/Verifyemailpage'
 function App() {
 
 
@@ -40,6 +41,7 @@ function App() {
       <Route path="/login" element={<LoginPage/>}/>
       <Route path="/profile" element={<ProfilePage/>}/>
       <Route path="/signup" element={<SignupPage/>}/>
+      <Route path="/verify-email" element={<VerifyEmailPage/>}/>
       <Route path="/tutors/:id" element={<TutorProfilePage/>}/>
       <Route path="/tutors" element={<TutorsPage/>}/>
       <Route path="/ai_tutor" element={<AILearningPage/>}/>

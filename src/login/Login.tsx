@@ -25,7 +25,11 @@ import {
   Sparkles,
   Eye,
   EyeOff,
+  Loader2,
+  CheckCircle,
 } from "lucide-react";
+
+const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -33,10 +37,11 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendMsg, setResendMsg] = useState("");
   const navigate = useNavigate();
 
-  // Set gradient directly on body so it fills the whole screen,
-  // overriding the global bg-background from index.css
   useEffect(() => {
     document.body.style.background =
       "linear-gradient(135deg, #eff6ff 0%, #f5f3ff 50%, #fdf2f8 100%)";
@@ -50,12 +55,14 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setNeedsVerification(false);
+    setResendMsg("");
     setLoading(true);
     try {
-      const res = await axios.post(
-        `${import.meta.env.VITE_API_URL}/api/auth/login`,
-        { email, password }
-      );
+      const res = await axios.post(`${BASE_URL}/api/auth/login`, {
+        email,
+        password,
+      });
       localStorage.setItem("token", res.data.token);
       localStorage.setItem(
         "user",
@@ -67,11 +74,30 @@ export default function LoginPage() {
         })
       );
       navigate("/ai_tutor");
-    } catch (error) {
-      console.error(error);
-      setError("Invalid email or password. Please try again.");
+    } catch (err: any) {
+      const data = err.response?.data;
+      if (data?.needsVerification) {
+        setNeedsVerification(true);
+        setError("Please verify your email before logging in.");
+      } else {
+        setNeedsVerification(false);
+        setError(data?.message || "Invalid email or password. Please try again.");
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResend = async () => {
+    setResending(true);
+    setResendMsg("");
+    try {
+      const res = await axios.post(`${BASE_URL}/api/auth/resend-verification`, { email });
+      setResendMsg(res.data.message || "Verification email resent!");
+    } catch {
+      setResendMsg("Failed to resend. Please try again.");
+    } finally {
+      setResending(false);
     }
   };
 
@@ -138,9 +164,35 @@ export default function LoginPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3 }}
                 >
-                  <Alert variant="destructive" className="border-red-200 bg-red-50">
+                  <Alert
+                    variant="destructive"
+                    className={needsVerification ? "border-amber-200 bg-amber-50" : "border-red-200 bg-red-50"}
+                  >
                     <AlertCircle className="h-4 w-4" />
-                    <AlertDescription className="text-sm">{error}</AlertDescription>
+                    <AlertDescription className="text-sm">
+                      {error}
+                      {needsVerification && (
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            onClick={handleResend}
+                            disabled={resending}
+                            className="text-sm text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50 flex items-center gap-1.5"
+                          >
+                            {resending ? (
+                              <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Resending…</>
+                            ) : (
+                              <><Mail className="h-3.5 w-3.5" /> Resend verification email</>
+                            )}
+                          </button>
+                          {resendMsg && (
+                            <p className="text-xs text-emerald-600 mt-2 flex items-center gap-1">
+                              <CheckCircle className="h-3 w-3" /> {resendMsg}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </AlertDescription>
                   </Alert>
                 </motion.div>
               )}

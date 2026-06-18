@@ -122,10 +122,14 @@ async function processCourse(courseId, topic, pdfBuffer) {
       questions,
     });
 
+    // Lesson 1 first — user can start watching while the rest generate
     await buildLesson(courseId, lessons[0]);
 
-    for (let i = 1; i < lessons.length; i++) {
-      await buildLesson(courseId, lessons[i]);
+    // Build remaining lessons 2 at a time for speed
+    const remaining = lessons.slice(1);
+    for (let i = 0; i < remaining.length; i += 2) {
+      const batch = remaining.slice(i, i + 2);
+      await Promise.allSettled(batch.map((l) => buildLesson(courseId, l)));
     }
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
@@ -234,10 +238,49 @@ async function getShowcaseCoursesHandler(req, res) {
   }
 }
 
+// ── Retry a single failed/broken lesson ─────────────────────────────────────
+// Rebuilds scene plan + audio + code for one lesson. Only allowed if the
+// lesson exists and is owned by the requesting user.
+async function retryLessonHandler(req, res) {
+  try {
+    const { courseId, lessonIndex } = req.params;
+    const idx = parseInt(lessonIndex, 10);
+
+    const course = await Course.findOne({ _id: courseId, userId: req.user._id });
+    if (!course) return res.status(404).json({ error: "Course not found" });
+    if (idx < 0 || idx >= course.lessons.length) return res.status(400).json({ error: "Invalid lesson index" });
+
+    const lesson = course.lessons[idx];
+
+    // Mark as rendering so the frontend shows the loading state
+    await Course.findByIdAndUpdate(courseId, {
+      $set: { [`lessons.${idx}.status`]: "rendering", [`lessons.${idx}.code`]: null },
+    });
+
+    res.json({ ok: true, message: "Regenerating lesson" });
+
+    // Rebuild in background (same as initial generation)
+    const lessonData = {
+      lessonNumber: idx + 1,
+      title: lesson.title,
+      description: lesson.description,
+      keyPoints: lesson.keyPoints,
+    };
+
+    buildLesson(courseId, lessonData).catch((err) => {
+      console.error(`[${courseId}] Retry lesson ${idx + 1} failed:`, err.message);
+    });
+  } catch (err) {
+    console.error("retryLessonHandler error:", err);
+    res.status(500).json({ error: "Failed to retry lesson" });
+  }
+}
+
 module.exports = {
   generateCourseHandler,
   getCourseStatusHandler,
   listCoursesHandler,
   deleteCourseHandler,
   getShowcaseCoursesHandler,
+  retryLessonHandler,
 };

@@ -19,6 +19,8 @@ const UserSchema = new mongoose.Schema({
   availability: [AvailabilitySchema],
   rating: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Review' }],
   verified: { type: Boolean, default: false },
+  verificationToken: { type: String, default: null },
+  verificationTokenExpires: { type: Date, default: null },
 
   // ── AI Course Credits ──────────────────────────────────────────────────────
   courseCredits: { type: Number, default: 0 },      // paid credits

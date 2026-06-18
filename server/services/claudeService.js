@@ -91,7 +91,7 @@ ${rules}
   }
 
   const message = await client.messages.create({
-    model: "claude-sonnet-4-6",
+    model: "claude-opus-4-6",
     max_tokens: 6000,
     messages,
   });
@@ -137,16 +137,24 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 5. Each <Series.Sequence> MUST use durationInFrames set to EXACTLY the number given for that scene above. Never change, compute, or round these numbers — copy them exactly.
 6. Inside each <Series.Sequence>, include <Audio src={"<that scene's audioUrl>"} /> using the exact URL string directly. The audioUrl values are full HTTP URLs — use them directly as the src, with NO staticFile() wrapper.
 7. Inside each scene, build animations that visually match that scene's visualDescription and display its onScreenText. Use spring entrances, interpolated fades, moving shapes, staggered reveals, SVG graphics — make it dynamic and educational.
-8. The sum of all durationInFrames MUST equal exactly ${totalFrames}.
-9. Use only inline styles. No external CSS, no Tailwind.
-10. Do NOT include registerRoot or Composition — only the component itself plus any helper components.
-11. Keep total code under 1000 lines. Use reusable helper components and loops to stay concise.
-12. Every <Series.Sequence> MUST have a positive integer durationInFrames (at least 1). Never produce a zero or negative duration.
-13. PERFORMANCE: Keep each frame cheap to render. Do NOT put more than ~100 elements on screen at once. Avoid heavy per-frame computation, deeply nested loops, or generating large arrays inside the render function. Precompute static values outside the component. Every frame must render in well under one second.
-14. Return ONLY the raw .tsx code. No markdown fences, no explanation.
-15. Create animations that fills the screen at least 3/4 of the space provided
+8. INTERPOLATE SAFETY — violations CRASH the video at runtime:
+   - ALWAYS 3 arguments: interpolate(value, inputRange, outputRange). NEVER 2.
+   - inputRange and outputRange MUST be inline literal arrays of the SAME length.
+   - BAD: interpolate(frame, [0, 30]) — missing outputRange, CRASHES.
+   - BAD: interpolate(frame, someVar, anotherVar) — could be undefined, CRASHES.
+   - BAD: Array.from({length: n}, (_, i) => interpolate(frame, [0, d], arr[i])) — arr[i] might be undefined.
+   - GOOD: interpolate(frame, [0, 30], [0, 1])
+   - GOOD: interpolate(frame, [0, 15, 30], [0, 1, 0])
+   - NEVER use Easing — it is not available in this environment.
+   - When computing ranges with Array.from or .map, ALWAYS hardcode both arrays or verify lengths match BEFORE calling interpolate.
+9. The sum of all durationInFrames MUST equal exactly ${totalFrames}.
+10. Use only inline styles. No external CSS, no Tailwind.
+11. Do NOT include registerRoot or Composition — only the component itself plus any helper components.
+12. Keep total code under 800 lines. Use reusable helper components and loops to stay concise.
+13. Every <Series.Sequence> MUST have a positive integer durationInFrames (at least 1). Never produce a zero or negative duration.
+14. PERFORMANCE: Keep each frame cheap to render. Do NOT put more than ~50 elements on screen at once. Avoid heavy per-frame computation, deeply nested loops, or generating large arrays inside the render function. Precompute static values outside the component. Every frame must render in well under one second.
+15. Return ONLY the raw .tsx code. No markdown fences, no explanation.
 16. Put heavy emphasis on animations which is the key role of this app, producing astonishing animations, with only contineously moving animations scenes(most of the time). 
-
 Begin with imports, then any helper components, then the main "${componentName}" component. Make sure the final line closes the component cleanly.
   `;
 }
@@ -168,7 +176,7 @@ async function generateLessonCode(
       );
 
       const stream = await client.messages.create({
-        model: "claude-sonnet-4-6",
+        model: "claude-opus-4-6",
         max_tokens: 25000,
         stream: true,
         messages: [

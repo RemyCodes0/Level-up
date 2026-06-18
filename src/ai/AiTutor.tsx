@@ -10,6 +10,7 @@ import {
   pollCourse,
   listCourses,
   deleteCourse,
+  retryLesson,
 } from "../api/CourseApi";
 import type { CourseFromAPI } from "../api/CourseApi";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
@@ -85,6 +86,50 @@ const MOCK_LESSONS: Lesson[] = Array.from({ length: 6 }, (_, i) => ({
 }));
 
 const MOCK_QUESTIONS: MCQQuestion[] = [];
+
+const PROGRESS_DURATION_MS = 6 * 60 * 1000;
+const PROGRESS_TICK_MS = 300;
+const PROGRESS_MAX = 99;
+
+function useLessonProgress(statuses: LessonStatus[]): number[] {
+  const [progresses, setProgresses] = useState<number[]>(statuses.map(() => 0));
+  const startTimesRef = useRef<(number | null)[]>(statuses.map(() => null));
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const statusKey = statuses.join(",");
+
+  useEffect(() => {
+    if (tickRef.current) clearInterval(tickRef.current);
+    setProgresses((prev) => {
+      const next = [...prev];
+      statuses.forEach((s, i) => {
+        if (s === "ready") next[i] = 100;
+        if (s === "failed") { next[i] = 0; startTimesRef.current[i] = null; }
+      });
+      return next;
+    });
+    const activeIdx = statuses.findIndex((s) => s === "generating");
+    if (activeIdx === -1) return;
+    if (startTimesRef.current[activeIdx] === null) {
+      startTimesRef.current[activeIdx] = Date.now();
+    }
+    tickRef.current = setInterval(() => {
+      const start = startTimesRef.current[activeIdx];
+      if (start === null) return;
+      const fraction = Math.min((Date.now() - start) / PROGRESS_DURATION_MS, 1);
+      const eased = 1 - Math.pow(1 - fraction, 3);
+      const pct = Math.min(eased * PROGRESS_MAX, PROGRESS_MAX);
+      setProgresses((prev) => {
+        if (statuses[activeIdx] !== "generating") return prev;
+        const next = [...prev];
+        next[activeIdx] = pct;
+        return next;
+      });
+    }, PROGRESS_TICK_MS);
+    return () => { if (tickRef.current) clearInterval(tickRef.current); };
+  }, [statusKey]);
+
+  return progresses;
+}
 
 // ─── Paywall Modal ────────────────────────────────────────────────────────────
 
@@ -369,7 +414,7 @@ function GeneratingPhase({ fileName }: { fileName: string }) {
   );
 }
 
-function VideoPlayer({ lesson, onComplete }: { lesson: Lesson; onComplete: () => void }) {
+function VideoPlayer({ lesson, onComplete, onRetry, retrying }: { lesson: Lesson; onComplete: () => void; onRetry?: () => void; retrying?: boolean }) {
   if (!lesson.code) {
     return (
       <div className="space-y-4">
@@ -393,7 +438,7 @@ function VideoPlayer({ lesson, onComplete }: { lesson: Lesson; onComplete: () =>
   }
   return (
     <div className="space-y-4">
-      <DynamicPlayer code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} onEnded={onComplete} />
+      <DynamicPlayer code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} onEnded={onComplete} onRetry={onRetry} retrying={retrying} />
       <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-5">
         <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-blue-600" />Key points in this lesson</h3>
         <ul className="space-y-2">
@@ -716,12 +761,14 @@ export default function AILearningPage() {
   const [historySidebarCollapsed, setHistorySidebarCollapsed] = useState(false);
   const [credits, setCredits] = useState<Credits | null>(null);
   // const [showPaywall, setShowPaywall] = useState(false); // paywall disabled for now
+  const [retryingLesson, setRetryingLesson] = useState<number | null>(null);
 
   const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
 
   const bgTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const pollCancelRef = useRef<(() => void) | null>(null);
+  const lessonProgresses = useLessonProgress(lessonStatuses);
 
   useEffect(() => { if (!user) router("/login"); }, []);
 
@@ -789,6 +836,29 @@ export default function AILearningPage() {
   }, []);
 
   const markComplete = (lessonId: number) => setLessons((prev) => prev.map((l) => l.id === lessonId ? { ...l, completed: true } : l));
+
+  const handleRetryLesson = async (lessonIndex: number) => {
+    if (!activeHistoryId || retryingLesson !== null) return;
+    setRetryingLesson(lessonIndex);
+    try {
+      await retryLesson(activeHistoryId, lessonIndex);
+      // Mark as generating so the UI updates immediately
+      setLessonStatuses((prev) => prev.map((s, i) => i === lessonIndex ? "generating" : s));
+      setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code: null, totalFrames: null } : l));
+      // Polling will pick up the new code when it's ready
+      if (pollCancelRef.current) pollCancelRef.current();
+      pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames }; }));
+        if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
+        if (course.questions?.length) setQuizQuestions(course.questions);
+      });
+    } catch (err) {
+      console.error("Failed to retry lesson:", err);
+      alert("Failed to regenerate lesson. Please try again.");
+    } finally {
+      setRetryingLesson(null);
+    }
+  };
 
   useEffect(() => {
     if (!activeHistoryId) return;
@@ -905,9 +975,11 @@ export default function AILearningPage() {
               const status = lessonStatuses[i];
               const isGenerating = status === "generating";
               const isFailed = status === "failed";
+              const isWaiting = isGenerating && lessonStatuses.findIndex((s) => s === "generating") !== i;
               const isActive = activeSection === "video" && activeLesson === i;
               // Only locked while still generating — accessible as soon as ready, regardless of previous lessons
               const isLocked = isGenerating;
+              const progress = lessonProgresses[i] ?? 0;
               return (
                 <button key={lesson.id} disabled={isLocked}
                   onClick={() => { if (!isLocked) { setActiveLesson(i); setActiveSection("video"); } }}
@@ -921,7 +993,17 @@ export default function AILearningPage() {
                       {i + 1}. {lesson.title}
                     </p>
                     {isGenerating ? (
-                      <p className="text-xs text-blue-400 mt-0.5">Generating…</p>
+                      <div className="mt-1.5">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs text-blue-400">{isWaiting ? "waiting…" : "generating…"}</span>
+                          <span className="text-xs font-semibold text-blue-500">{isWaiting ? "—" : `${Math.round(progress)}%`}</span>
+                        </div>
+                        <div className="w-full bg-slate-100 rounded-full h-1 overflow-hidden">
+                          {isWaiting ? <div className="h-1 w-0" /> : (
+                            <div className="h-1 rounded-full bg-gradient-to-r from-blue-400 to-indigo-400 transition-all duration-500" style={{ width: `${progress}%` }} />
+                          )}
+                        </div>
+                      </div>
                     ) : isFailed ? (
                       <p className="text-xs text-red-400 mt-0.5 flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Generation failed</p>
                     ) : (
@@ -964,7 +1046,7 @@ export default function AILearningPage() {
             </button>
             {activeSection === "video" && (
               <div className="space-y-6">
-                <VideoPlayer lesson={lessons[activeLesson]} onComplete={() => markComplete(lessons[activeLesson].id)} />
+                <VideoPlayer lesson={lessons[activeLesson]} onComplete={() => markComplete(lessons[activeLesson].id)} onRetry={() => handleRetryLesson(activeLesson)} retrying={retryingLesson === activeLesson} />
                 <div className="flex items-center justify-between pt-2">
                   <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)}><ChevronLeft className="h-4 w-4 mr-1" /> Previous</Button>
                   {activeLesson < lessons.length - 1 ? (

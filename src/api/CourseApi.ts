@@ -82,6 +82,15 @@ export async function deleteCourse(courseId: string): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete course");
 }
 
+// ── Retry a failed/broken lesson (rebuilds scene + audio + code) ─────────────
+export async function retryLesson(courseId: string, lessonIndex: number): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/course/${courseId}/retry/${lessonIndex}`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+  if (!res.ok) throw new Error("Failed to retry lesson");
+}
+
 // ── Fetch the curated public showcase courses (no auth required) ────────────
 export async function getShowcaseCourses(): Promise<CourseFromAPI[]> {
   const res = await fetch(`${BASE_URL}/api/course/showcase`);

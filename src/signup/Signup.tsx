@@ -26,7 +26,11 @@ import {
   Eye,
   EyeOff,
   User,
+  CheckCircle,
+  Loader2,
 } from "lucide-react";
+
+const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -36,10 +40,11 @@ export default function SignupPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [verified, setVerified] = useState(false); // shows "check your email" screen
+  const [resending, setResending] = useState(false);
+  const [resendMsg, setResendMsg] = useState("");
   const router = useNavigate();
 
-  // Set gradient directly on body so it fills the whole screen,
-  // overriding the global bg-background from index.css
   useEffect(() => {
     document.body.style.background =
       "linear-gradient(135deg, #eff6ff 0%, #f5f3ff 50%, #fdf2f8 100%)";
@@ -55,24 +60,108 @@ export default function SignupPage() {
     setError("");
     setLoading(true);
     try {
-      const res = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/register`, {
+      const res = await axios.post(`${BASE_URL}/api/auth/register`, {
         name: fullName,
         email,
         password,
         role,
       });
-      const { token, ...user } = res.data;
-      localStorage.setItem("token", token);
-      localStorage.setItem("user", JSON.stringify(user));
-      router("/ai_tutor");
-    } catch (error) {
-      console.error(error);
-      setError("Registration failed. Please try again.");
+
+      // New flow: backend returns requiresVerification instead of a token
+      if (res.data.requiresVerification) {
+        setVerified(true);
+      } else {
+        // Fallback for backwards compat if backend hasn't been updated yet
+        const { token, ...user } = res.data;
+        localStorage.setItem("token", token);
+        localStorage.setItem("user", JSON.stringify(user));
+        router("/ai_tutor");
+      }
+    } catch (err: any) {
+      const msg = err.response?.data?.message || "Registration failed. Please try again.";
+      setError(msg);
     } finally {
       setLoading(false);
     }
   };
 
+  const handleResend = async () => {
+    setResending(true);
+    setResendMsg("");
+    try {
+      const res = await axios.post(`${BASE_URL}/api/auth/resend-verification`, { email });
+      setResendMsg(res.data.message || "Verification email resent!");
+    } catch {
+      setResendMsg("Failed to resend. Please try again.");
+    } finally {
+      setResending(false);
+    }
+  };
+
+  // ── "Check your email" screen after successful registration ──────────────
+  if (verified) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center p-4 relative overflow-hidden">
+        <div className="fixed inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute top-0 left-0 w-1/2 h-1/2 bg-blue-400/20 rounded-full blur-3xl animate-pulse" />
+          <div className="absolute bottom-0 right-0 w-2/3 h-2/3 bg-purple-400/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: "1s" }} />
+        </div>
+
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.4 }}
+          className="w-full max-w-md relative z-10"
+        >
+          <Card className="border-0 shadow-2xl backdrop-blur-sm bg-white/95">
+            <CardContent className="pt-10 pb-8 px-8 text-center">
+              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-5">
+                <Mail className="h-8 w-8 text-blue-600" />
+              </div>
+              <h2 className="text-2xl font-bold text-slate-900 mb-2">Check your email</h2>
+              <p className="text-sm text-slate-500 mb-1">
+                We sent a verification link to
+              </p>
+              <p className="text-sm font-semibold text-slate-800 mb-6">{email}</p>
+              <p className="text-xs text-slate-400 mb-6">
+                Click the link in the email to verify your account, then come back and log in. The link expires in 24 hours.
+              </p>
+
+              <button
+                onClick={handleResend}
+                disabled={resending}
+                className="text-sm text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50 flex items-center gap-2 mx-auto mb-4"
+              >
+                {resending ? (
+                  <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Resending…</>
+                ) : (
+                  "Didn't receive it? Resend verification email"
+                )}
+              </button>
+
+              {resendMsg && (
+                <p className="text-xs text-emerald-600 mb-4 flex items-center gap-1 justify-center">
+                  <CheckCircle className="h-3.5 w-3.5" /> {resendMsg}
+                </p>
+              )}
+
+              <div className="border-t border-slate-200 pt-5 mt-2">
+                <Button
+                  onClick={() => router("/login")}
+                  className="w-full h-11 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 font-semibold"
+                >
+                  Go to login
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // ── Normal signup form ────────────────────────────────────────────────────
   return (
     <div className="min-h-screen w-full flex items-center justify-center p-4 relative overflow-hidden">
       {/* Animated background blobs */}
