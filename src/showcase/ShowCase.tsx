@@ -4,11 +4,24 @@ import { useEffect, useState } from "react";
 import { Helmet } from "react-helmet-async";
 import {
   ChevronLeft, ChevronRight, Play, Loader2, AlertCircle,
-  BookOpen, Clock, ArrowLeft, GraduationCap,
+  BookOpen, Clock, ArrowLeft, GraduationCap, MessageSquare, Mail,
 } from "lucide-react";
 import { getShowcaseCourses } from "../api/CourseApi";
 import type { CourseFromAPI } from "../api/CourseApi";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
+
+const FEEDBACK_EMAIL = "tuyishimechristophe84@gmail.com";
+
+function buildFeedbackUrl(courseName?: string) {
+  const to = encodeURIComponent(FEEDBACK_EMAIL);
+  const subject = encodeURIComponent(
+    courseName ? `Level Up Showcase Feedback — ${courseName}` : "Level Up Showcase Feedback"
+  );
+  const body = encodeURIComponent(
+    `Hi Level Up team,\n\nHere's my feedback on the showcase:\n\n\n\n---\nCourse: ${courseName || "N/A"}\nSent from the Level Up showcase`
+  );
+  return `https://mail.google.com/mail/?view=cm&to=${to}&su=${subject}&body=${body}`;
+}
 
 // ── Subject-coded accents — one per course card, not one repeated brand color ──
 // Cycles if there are ever more than 6 courses; stable assignment by index.
@@ -128,7 +141,7 @@ function CatalogView({
           6 real courses.<br />36 real lessons.
         </h1>
         <p style={{ fontSize: 17, color: "#5B5648", maxWidth: 480, margin: "0 auto", lineHeight: 1.6 }}>
-          Every video below was generated end to end by Level Up AI — narrated, animated, and quizzed.
+          Every video below was generated end to end by AI — narrated, animated, and quizzed.
           Pick a subject and press play.
         </p>
       </header>
@@ -141,6 +154,7 @@ function CatalogView({
         </div>
       ) : !courses ? (
         <div style={{ textAlign: "center", padding: "80px 0" }}>
+          <Loader2 size={26} className="animate-spin" style={{ color: "#8A8270", marginBottom: 12 }} />
           <p style={{ color: "#8A8270" }}>Loading the catalog…</p>
         </div>
       ) : courses.length === 0 ? (
@@ -202,7 +216,7 @@ function CatalogView({
                 </h3>
                 <p style={{ fontSize: 13.5, color: "#7A7464", margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
                   <BookOpen size={13} />
-                  {readyLessons}/{course.lessons.length} lessons ready
+                  {readyLessons}/{course.lessons.length} lessons ready · {course.questions.length}-question quiz
                 </p>
               </button>
             );
@@ -332,6 +346,48 @@ function SyllabusView({
             })}
           </div>
         </aside>
+      </div>
+
+      {/* ── Feedback card ── */}
+      <div
+        style={{
+          marginTop: 48, padding: "28px 28px 24px", background: "#fff",
+          border: "1px solid #E7E2D5", borderRadius: 12,
+          display: "flex", alignItems: "flex-start", gap: 16,
+        }}
+      >
+        <div
+          style={{
+            width: 44, height: 44, borderRadius: "50%", background: accent.tint,
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          }}
+        >
+          <MessageSquare size={20} style={{ color: accent.ink }} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 600, color: "#1C2333", margin: "0 0 4px" }}>
+            What did you think of this course?
+          </h3>
+          <p style={{ fontSize: 13.5, color: "#7A7464", margin: "0 0 14px", lineHeight: 1.5 }}>
+            These lessons were entirely AI-generated. We'd love to hear your thoughts — what worked, what didn't, what surprised you.
+          </p>
+          <a
+            href={buildFeedbackUrl(toCourseTitle(course.topic))}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 8,
+              padding: "10px 20px", borderRadius: 8,
+              background: accent.ink, color: "#fff", fontSize: 14, fontWeight: 600,
+              textDecoration: "none", transition: "opacity 0.15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.85"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
+          >
+            <Mail size={15} />
+            Share your feedback
+          </a>
+        </div>
       </div>
     </div>
   );
