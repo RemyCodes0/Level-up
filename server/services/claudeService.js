@@ -140,11 +140,12 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 8. The sum of all durationInFrames MUST equal exactly ${totalFrames}.
 9. Use only inline styles. No external CSS, no Tailwind.
 10. Do NOT include registerRoot or Composition — only the component itself plus any helper components.
-11. Keep total code under 800 lines. Use reusable helper components and loops to stay concise.
+11. Keep total code under 1000 lines. Use reusable helper components and loops to stay concise.
 12. Every <Series.Sequence> MUST have a positive integer durationInFrames (at least 1). Never produce a zero or negative duration.
-13. PERFORMANCE: Keep each frame cheap to render. Do NOT put more than ~50 elements on screen at once. Avoid heavy per-frame computation, deeply nested loops, or generating large arrays inside the render function. Precompute static values outside the component. Every frame must render in well under one second.
+13. PERFORMANCE: Keep each frame cheap to render. Do NOT put more than ~100 elements on screen at once. Avoid heavy per-frame computation, deeply nested loops, or generating large arrays inside the render function. Precompute static values outside the component. Every frame must render in well under one second.
 14. Return ONLY the raw .tsx code. No markdown fences, no explanation.
 15. Create animations that fills the screen at least 3/4 of the space provided
+16. Put heavy emphasis on animations which is the key role of this app, producing astonishing animations, with only contineously moving animations scenes(most of the time). 
 
 Begin with imports, then any helper components, then the main "${componentName}" component. Make sure the final line closes the component cleanly.
   `;

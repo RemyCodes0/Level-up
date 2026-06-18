@@ -86,61 +86,14 @@ const MOCK_LESSONS: Lesson[] = Array.from({ length: 6 }, (_, i) => ({
 
 const MOCK_QUESTIONS: MCQQuestion[] = [];
 
-const PROGRESS_DURATION_MS = 6 * 60 * 1000;
-const PROGRESS_TICK_MS = 300;
-const PROGRESS_MAX = 99;
-
-function useLessonProgress(statuses: LessonStatus[]): number[] {
-  const [progresses, setProgresses] = useState<number[]>(statuses.map(() => 0));
-  const startTimesRef = useRef<(number | null)[]>(statuses.map(() => null));
-  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const statusKey = statuses.join(",");
-
-  useEffect(() => {
-    if (tickRef.current) clearInterval(tickRef.current);
-    setProgresses((prev) => {
-      const next = [...prev];
-      statuses.forEach((s, i) => {
-        if (s === "ready") next[i] = 100;
-        if (s === "failed") { next[i] = 0; startTimesRef.current[i] = null; }
-      });
-      return next;
-    });
-    const activeIdx = statuses.findIndex((s) => s === "generating");
-    if (activeIdx === -1) return;
-    if (startTimesRef.current[activeIdx] === null) {
-      startTimesRef.current[activeIdx] = Date.now();
-    }
-    tickRef.current = setInterval(() => {
-      const start = startTimesRef.current[activeIdx];
-      if (start === null) return;
-      const fraction = Math.min((Date.now() - start) / PROGRESS_DURATION_MS, 1);
-      const eased = 1 - Math.pow(1 - fraction, 3);
-      const pct = Math.min(eased * PROGRESS_MAX, PROGRESS_MAX);
-      setProgresses((prev) => {
-        if (statuses[activeIdx] !== "generating") return prev;
-        const next = [...prev];
-        next[activeIdx] = pct;
-        return next;
-      });
-    }, PROGRESS_TICK_MS);
-    return () => { if (tickRef.current) clearInterval(tickRef.current); };
-  }, [statusKey]);
-
-  return progresses;
-}
-
 // ─── Paywall Modal ────────────────────────────────────────────────────────────
 
 function PaywallModal({ onClose }: { onClose: () => void }) {
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(false);
 
-  const ORIGINAL_PRICE_PER_COURSE = 7;
-  const PRICE_PER_COURSE = 4.99;
-  const DISCOUNT_PCT = Math.round((1 - PRICE_PER_COURSE / ORIGINAL_PRICE_PER_COURSE) * 100);
+  const PRICE_PER_COURSE = 6.99;
   const total = (quantity * PRICE_PER_COURSE).toFixed(2);
-  const totalSavings = (quantity * (ORIGINAL_PRICE_PER_COURSE - PRICE_PER_COURSE)).toFixed(2);
 
   const decrement = () => setQuantity((q) => Math.max(1, q - 1));
   const increment = () => setQuantity((q) => Math.min(99, q + 1));
@@ -188,23 +141,9 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
           <Zap className="h-7 w-7 text-white" />
         </div>
 
-        <h2 className="text-2xl font-bold text-slate-900 text-center mb-1">
+        <h2 className="text-2xl font-bold text-slate-900 text-center mb-2">
           Get more courses
         </h2>
-
-        <div className="flex items-center justify-center gap-2 mb-2">
-          <span className="text-slate-400 line-through text-sm">
-            ${ORIGINAL_PRICE_PER_COURSE.toFixed(2)}
-          </span>
-          <span className="text-lg font-extrabold text-slate-900">
-            ${PRICE_PER_COURSE.toFixed(2)}
-          </span>
-          <span className="text-sm text-slate-500">/ course</span>
-          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">
-            {DISCOUNT_PCT}% off
-          </Badge>
-        </div>
-
         <p className="text-slate-500 text-center text-sm mb-6">
           Each course includes 6 animated lessons, voiceover narration, and a 20-question quiz.
         </p>
@@ -256,17 +195,12 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Price summary */}
-        <div className="flex items-center justify-between mb-1 px-1">
+        <div className="flex items-center justify-between mb-4 px-1">
           <span className="text-sm text-slate-500">
-            {quantity} course{quantity !== 1 ? "s" : ""} ×{" "}
-            <span className="line-through text-slate-400">${ORIGINAL_PRICE_PER_COURSE.toFixed(2)}</span>{" "}
-            <span className="font-medium text-slate-700">${PRICE_PER_COURSE.toFixed(2)}</span>
+            {quantity} course{quantity !== 1 ? "s" : ""} × $6.99
           </span>
           <span className="text-xl font-bold text-slate-900">${total}</span>
         </div>
-        <p className="text-xs text-emerald-600 text-right mb-4 px-1">
-          You save ${totalSavings} ({DISCOUNT_PCT}% off)
-        </p>
 
         {/* CTA */}
         <Button
@@ -300,19 +234,23 @@ function UploadPhase({ onGenerate, credits }: {
 }) {
   const [inputValue, setInputValue] = useState("");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [showPaywall, setShowPaywall] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // When free trial is used and no paid credits, lock the input
+  const locked = !!(credits && !credits.canGenerate);
+
   const handleFile = (file: File) => {
+    if (locked) return;
     if (file.type === "application/pdf" || file.name.endsWith(".pptx")) setUploadedFile(file);
   };
   const handleSubmit = () => {
+    if (locked) return;
     if (!uploadedFile && !inputValue.trim()) return;
-    if (credits && !credits.canGenerate) { setShowPaywall(true); return; }
     onGenerate(uploadedFile ? uploadedFile.name : inputValue.trim().slice(0, 40), uploadedFile);
   };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (locked) return;
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
   };
   useEffect(() => {
@@ -322,12 +260,11 @@ function UploadPhase({ onGenerate, credits }: {
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [inputValue]);
 
-  const canSubmit = !!uploadedFile || inputValue.trim().length > 0;
+  const canSubmit = !locked && (!!uploadedFile || inputValue.trim().length > 0);
   const suggestions = ["Cell Biology lecture slides", "Calculus II integration techniques", "Data structures & algorithms", "Electromagnetic waves"];
 
   return (
     <>
-      {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} />}
       <div className="min-h-full bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
         <div className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)] px-4 pb-8">
           <div className="text-center mb-10">
@@ -340,7 +277,16 @@ function UploadPhase({ onGenerate, credits }: {
             <p className="text-muted-foreground text-base">Describe your topic or upload your course materials — AI generates your full course.</p>
           </div>
           <div className="w-full max-w-2xl">
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+            <div className={`bg-white rounded-2xl border shadow-lg overflow-hidden relative ${locked ? "border-slate-300 opacity-60" : "border-slate-200"}`}>
+              {locked && (
+                <div className="absolute inset-0 z-10 bg-slate-100/50 backdrop-blur-[1px] rounded-2xl flex items-center justify-center cursor-not-allowed">
+                  <div className="text-center px-6">
+                    <Lock className="h-6 w-6 text-slate-400 mx-auto mb-2" />
+                    <p className="text-sm font-semibold text-slate-600">Free trial used</p>
+                    {/* <p className="text-xs text-slate-400 mt-1">Purchase courses to continue generating</p> */}
+                  </div>
+                </div>
+              )}
               {uploadedFile && (
                 <div className="px-4 pt-3">
                   <div className="inline-flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 text-sm">
@@ -352,15 +298,16 @@ function UploadPhase({ onGenerate, credits }: {
                 </div>
               )}
               <div className="px-4 pt-3 pb-2">
-                <textarea ref={textareaRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={handleKeyDown}
-                  placeholder="Explain DNA replication and cell division…" rows={1}
-                  className="w-full resize-none bg-transparent text-slate-800 placeholder:text-slate-400 text-base focus:outline-none leading-relaxed"
+                <textarea ref={textareaRef} value={inputValue} onChange={(e) => { if (!locked) setInputValue(e.target.value); }} onKeyDown={handleKeyDown}
+                  placeholder={locked ? "Free trial used — purchase courses to continue" : "Explain DNA replication and cell division…"} rows={1}
+                  disabled={locked}
+                  className={`w-full resize-none bg-transparent placeholder:text-slate-400 text-base focus:outline-none leading-relaxed ${locked ? "text-slate-400 cursor-not-allowed" : "text-slate-800"}`}
                   style={{ minHeight: "40px", maxHeight: "160px" }} />
               </div>
               <div className="flex items-center justify-between px-3 pb-3 pt-1">
                 <div className="flex items-center gap-1">
                   <input ref={fileRef} type="file" accept=".pdf,.pptx" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }} />
-                  <button onClick={() => fileRef.current?.click()} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all" title="Attach PDF or PPTX">
+                  <button onClick={() => !locked && fileRef.current?.click()} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${locked ? "text-slate-300 cursor-not-allowed" : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"}`} title="Attach PDF or PPTX">
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" />
                     </svg>
@@ -648,7 +595,6 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
         <button onClick={onNew} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-all"><PenSquare className="h-4 w-4" /></button>
       </div>
 
-      {/* ── Credit status banner — moved to TOP for visibility ── */}
       {credits && (
         <div className={`px-3 py-3 border-b-2 ${
           !credits.canGenerate
@@ -721,19 +667,13 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
             <p className="px-3 py-1.5 text-xs font-semibold text-slate-400">{group}</p>
             {groups[group].map((entry) => {
               const isActive = entry.id === activeId;
-              const pct = Math.round((entry.completedLessons / MOCK_LESSONS.length) * 100);
               return (
                 <div key={entry.id} className={`group/item relative flex items-center mx-1 rounded-lg transition-all ${isActive ? "bg-slate-100" : "hover:bg-slate-50"}`}>
                   <button onClick={() => onSelect(entry)} className={`flex-1 text-left px-3 py-2.5 min-w-0 ${isActive ? "text-slate-900" : "text-slate-700"}`}>
                     <p className="text-xs font-medium leading-snug line-clamp-1 pr-6">{entry.fileName.replace(/\.(pdf|pptx)$/i, "")}</p>
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <div className="flex-1 bg-slate-200 rounded-full h-1">
-                        <div className={`h-1 rounded-full ${pct === 100 ? "bg-emerald-500" : "bg-blue-400"}`} style={{ width: `${pct}%` }} />
-                      </div>
-                      {entry.quizScore !== null
-                        ? <span className="text-xs font-semibold text-emerald-600 shrink-0">{entry.quizScore}%</span>
-                        : <span className="text-xs text-slate-400 shrink-0">{pct}%</span>}
-                    </div>
+                    {entry.quizScore !== null && (
+                      <p className="text-xs font-semibold text-emerald-600 mt-1">Quiz: {entry.quizScore}%</p>
+                    )}
                   </button>
                   <button onClick={(e) => { e.stopPropagation(); if (window.confirm(`Delete "${entry.fileName.replace(/\.(pdf|pptx)$/i, "")}"? This cannot be undone.`)) onDelete(entry.id); }}
                     className="absolute right-2 top-2 w-6 h-6 flex items-center justify-center rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover/item:opacity-100 transition-all">
@@ -749,11 +689,10 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
   );
 }
 
-function LessonStatusIcon({ status, completed, isActive, isLocked }: { status: LessonStatus; completed: boolean; isActive: boolean; isLocked: boolean }) {
+function LessonStatusIcon({ status, completed, isActive }: { status: LessonStatus; completed: boolean; isActive: boolean }) {
   if (completed) return <CheckCircle className="h-4 w-4 text-emerald-500" />;
   if (status === "failed") return <XCircle className="h-4 w-4 text-red-400" />;
   if (status === "generating") return <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />;
-  if (isLocked) return <Lock className="h-4 w-4 text-slate-300" />;
   if (isActive) return <Play className="h-4 w-4 text-blue-600 fill-blue-600" />;
   return <Circle className="h-4 w-4 text-slate-300" />;
 }
@@ -776,14 +715,13 @@ export default function AILearningPage() {
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
   const [historySidebarCollapsed, setHistorySidebarCollapsed] = useState(false);
   const [credits, setCredits] = useState<Credits | null>(null);
-  const [showPaywall, setShowPaywall] = useState(false);
+  // const [showPaywall, setShowPaywall] = useState(false); // paywall disabled for now
 
   const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
 
   const bgTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const pollCancelRef = useRef<(() => void) | null>(null);
-  const lessonProgresses = useLessonProgress(lessonStatuses);
 
   useEffect(() => { if (!user) router("/login"); }, []);
 
@@ -909,15 +847,13 @@ export default function AILearningPage() {
   };
 
   const allLessonsReady = lessonStatuses.every((s) => s === "ready" || s === "failed");
-  const allComplete = lessons.every((l) => l.completed);
-  const completedCount = lessons.filter((l) => l.completed).length;
 
   if (phase === "generating") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
-        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} />}
+        {/* PaywallModal disabled for now */}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={restoreEntry} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={restoreEntry} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
           <div className="flex-1 overflow-y-auto"><GeneratingPhase fileName={fileName} /></div>
         </div>
@@ -928,9 +864,9 @@ export default function AILearningPage() {
   if (phase === "upload") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
-        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} />}
+        {/* PaywallModal disabled for now */}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={restoreEntry} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={restoreEntry} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
           <div className="flex-1 overflow-y-auto"><UploadPhase onGenerate={startNewCourse} credits={credits} /></div>
         </div>
@@ -940,10 +876,10 @@ export default function AILearningPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
-      {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} />}
+      {/* PaywallModal disabled for now */}
       <Helmet><title>AI Learning Course | Level Up</title></Helmet>
       <div className="flex h-screen relative">
-        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={restoreEntry} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} />
+        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={restoreEntry} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} />
         {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
 
         <aside className={`${courseSidebarOpen ? "w-72" : "w-0 overflow-hidden"} transition-all duration-300 bg-white border-r border-slate-200 flex flex-col shrink-0 shadow-sm`}>
@@ -953,12 +889,6 @@ export default function AILearningPage() {
               <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">AI Course</span>
             </div>
             <h2 className="font-bold text-slate-900 text-sm leading-snug line-clamp-2">{fileName}</h2>
-            <div className="mt-2 flex items-center gap-2">
-              <div className="flex-1 bg-slate-100 rounded-full h-1.5">
-                <div className="bg-gradient-to-r from-blue-500 to-indigo-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${(completedCount / lessons.length) * 100}%` }} />
-              </div>
-              <span className="text-xs text-muted-foreground">{completedCount}/{lessons.length}</span>
-            </div>
             {!allLessonsReady && (
               <div className="mt-3 flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
                 <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin shrink-0" />
@@ -975,34 +905,23 @@ export default function AILearningPage() {
               const status = lessonStatuses[i];
               const isGenerating = status === "generating";
               const isFailed = status === "failed";
-              const isWaiting = isGenerating && lessonStatuses.findIndex((s) => s === "generating") !== i;
               const isActive = activeSection === "video" && activeLesson === i;
-              const isLocked = isGenerating || (i > 0 && !lessons[i - 1].completed && !isFailed);
-              const progress = lessonProgresses[i] ?? 0;
+              // Only locked while still generating — accessible as soon as ready, regardless of previous lessons
+              const isLocked = isGenerating;
               return (
                 <button key={lesson.id} disabled={isLocked}
                   onClick={() => { if (!isLocked) { setActiveLesson(i); setActiveSection("video"); } }}
                   className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${isActive ? "bg-blue-50 border-r-2 border-blue-600" : isFailed ? "opacity-70 hover:bg-red-50/50" : isLocked ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50"}`}
                 >
                   <div className="mt-0.5 shrink-0">
-                    <LessonStatusIcon status={status} completed={lesson.completed} isActive={isActive} isLocked={isLocked} />
+                    <LessonStatusIcon status={status} completed={lesson.completed} isActive={isActive} />
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className={`text-xs font-semibold truncate ${isActive ? "text-blue-700" : isFailed ? "text-red-500" : "text-slate-700"}`}>
                       {i + 1}. {lesson.title}
                     </p>
                     {isGenerating ? (
-                      <div className="mt-1.5">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-blue-400">{isWaiting ? "waiting…" : "generating…"}</span>
-                          <span className="text-xs font-semibold text-blue-500">{isWaiting ? "—" : `${Math.round(progress)}%`}</span>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-1 overflow-hidden">
-                          {isWaiting ? <div className="h-1 w-0" /> : (
-                            <div className="h-1 rounded-full bg-gradient-to-r from-blue-400 to-indigo-400 transition-all duration-500" style={{ width: `${progress}%` }} />
-                          )}
-                        </div>
-                      </div>
+                      <p className="text-xs text-blue-400 mt-0.5">Generating…</p>
                     ) : isFailed ? (
                       <p className="text-xs text-red-400 mt-0.5 flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Generation failed</p>
                     ) : (
@@ -1016,14 +935,14 @@ export default function AILearningPage() {
             <div className="px-4 mt-4 mb-1">
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Assessment</p>
             </div>
-            <button disabled={!allComplete} onClick={() => allComplete && setActiveSection("quiz")}
-              className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${activeSection === "quiz" ? "bg-purple-50 border-r-2 border-purple-600" : !allComplete ? "opacity-40 cursor-not-allowed" : "hover:bg-slate-50"}`}>
+            <button disabled={!allLessonsReady} onClick={() => allLessonsReady && setActiveSection("quiz")}
+              className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${activeSection === "quiz" ? "bg-purple-50 border-r-2 border-purple-600" : !allLessonsReady ? "opacity-40 cursor-not-allowed" : "hover:bg-slate-50"}`}>
               <ClipboardList className={`h-4 w-4 mt-0.5 ${activeSection === "quiz" ? "text-purple-600" : quizDone ? "text-emerald-500" : "text-slate-400"}`} />
               <div>
                 <p className={`text-xs font-semibold ${activeSection === "quiz" ? "text-purple-700" : "text-slate-700"}`}>Final Quiz</p>
                 <p className="text-xs text-muted-foreground">{quizQuestions.length || 20} questions</p>
               </div>
-              {!allComplete && <Lock className="h-3 w-3 text-slate-300 ml-auto mt-1" />}
+              {!allLessonsReady && <Lock className="h-3 w-3 text-slate-300 ml-auto mt-1" />}
             </button>
             <button disabled={!quizDone} onClick={() => quizDone && setActiveSection("results")}
               className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${activeSection === "results" ? "bg-amber-50 border-r-2 border-amber-500" : !quizDone ? "opacity-40 cursor-not-allowed" : "hover:bg-slate-50"}`}>
@@ -1049,27 +968,19 @@ export default function AILearningPage() {
                 <div className="flex items-center justify-between pt-2">
                   <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)}><ChevronLeft className="h-4 w-4 mr-1" /> Previous</Button>
                   {activeLesson < lessons.length - 1 ? (
-                    <div className="flex flex-col items-end gap-1">
-                      <Button className="bg-blue-600 hover:bg-blue-700 text-white"
-                        disabled={!lessons[activeLesson].completed || lessonStatuses[activeLesson + 1] === "generating"}
-                        onClick={() => { markComplete(lessons[activeLesson].id); setActiveLesson((i) => i + 1); }}>
-                        {lessonStatuses[activeLesson + 1] === "generating"
-                          ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Next lesson generating…</>)
-                          : (<>Next Lesson <ChevronRight className="h-4 w-4 ml-1" /></>)}
-                      </Button>
-                      {lessonStatuses[activeLesson + 1] === "generating" && lessons[activeLesson].completed && (
-                        <p className="text-xs text-blue-500">Next lesson will be ready shortly</p>
-                      )}
-                    </div>
+                    <Button className="bg-blue-600 hover:bg-blue-700 text-white"
+                      disabled={lessonStatuses[activeLesson + 1] === "generating"}
+                      onClick={() => setActiveLesson((i) => i + 1)}>
+                      {lessonStatuses[activeLesson + 1] === "generating"
+                        ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Next lesson generating…</>)
+                        : (<>Next Lesson <ChevronRight className="h-4 w-4 ml-1" /></>)}
+                    </Button>
                   ) : (
-                    <Button className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white" disabled={!allComplete} onClick={() => setActiveSection("quiz")}>
+                    <Button className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white" disabled={!allLessonsReady} onClick={() => setActiveSection("quiz")}>
                       <ClipboardList className="h-4 w-4 mr-2" />Take the Quiz
                     </Button>
                   )}
                 </div>
-                {!lessons[activeLesson].completed && lessons[activeLesson].code && (
-                  <p className="text-center text-xs text-muted-foreground">Watch the video to completion to unlock the next lesson</p>
-                )}
               </div>
             )}
             {activeSection === "quiz" && <QuizSection questions={quizQuestions} onSubmit={(answers) => { setQuizAnswers(answers); setQuizDone(true); setActiveSection("results"); }} />}
