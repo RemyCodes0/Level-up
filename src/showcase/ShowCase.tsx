@@ -154,7 +154,6 @@ function CatalogView({
         </div>
       ) : !courses ? (
         <div style={{ textAlign: "center", padding: "80px 0" }}>
-          <Loader2 size={26} className="animate-spin" style={{ color: "#8A8270", marginBottom: 12 }} />
           <p style={{ color: "#8A8270" }}>Loading the catalog…</p>
         </div>
       ) : courses.length === 0 ? (
