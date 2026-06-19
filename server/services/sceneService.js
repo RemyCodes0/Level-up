@@ -22,8 +22,14 @@ function safeParseJson(text) {
 
 // Generates a scene-by-scene plan for ONE lesson.
 // Each scene has: narration text (for TTS) + a visual description (for the animation).
+// Runs on Claude Haiku — this is structured JSON generation (scene timing,
+// narration text, visual descriptions), the same category of task as the
+// course plan, which has run safely on Haiku with no quality loss. The
+// animation CODE itself stays on Sonnet (see claudeService.js) — this step
+// never touches that, so switching it here doesn't affect visual quality.
 async function generateScenePlan(lesson, maxAttempts = 3) {
   let lastError = null;
+  const start = Date.now();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -85,7 +91,10 @@ Rules:
         throw new Error("Scene plan returned no scenes");
       }
 
-      console.log(`  [scenes] Generated ${parsed.scenes.length} scenes`);
+      const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(
+        `  [scenes] Generated ${parsed.scenes.length} scenes — took ${elapsedSec}s`
+      );
       return parsed.scenes;
     } catch (err) {
       lastError = err;

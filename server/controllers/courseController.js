@@ -50,6 +50,7 @@ async function generateCourseHandler(req, res) {
 // ── Builds one lesson: scenes → audio → code → save to DB ───────────────────
 async function buildLesson(courseId, lesson) {
   const MAX_ATTEMPTS = 2;
+  const lessonStart = Date.now();
   let measuredScenes = null;
   let totalFrames = 0;
 
@@ -87,7 +88,8 @@ async function buildLesson(courseId, lesson) {
         },
       });
 
-      console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready.`);
+      const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
+      console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready — took ${elapsedMin} min total (scene plan + audio + code).`);
       return;
 
     } catch (err) {
@@ -98,8 +100,9 @@ async function buildLesson(courseId, lesson) {
     }
   }
 
+  const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
   console.error(
-    `[${courseId}] Lesson ${lesson.lessonNumber} permanently failed after ${MAX_ATTEMPTS} attempts`
+    `[${courseId}] Lesson ${lesson.lessonNumber} permanently failed after ${MAX_ATTEMPTS} attempts (${elapsedMin} min elapsed)`
   );
   await Course.findByIdAndUpdate(courseId, {
     $set: { [`lessons.${lesson.lessonNumber - 1}.status`]: "failed" },
@@ -107,8 +110,8 @@ async function buildLesson(courseId, lesson) {
 }
 
 // ── Orchestrates the whole course ────────────────────────────────────────────
-// ── Orchestrates the whole course ────────────────────────────────────────────
 async function processCourse(courseId, topic, pdfBuffer) {
+  const courseStart = Date.now();
   try {
     console.log(`[${courseId}] Generating course plan...`);
     const { lessons, questions } = await generateCoursePlan(topic, null, pdfBuffer);
@@ -126,16 +129,19 @@ async function processCourse(courseId, topic, pdfBuffer) {
     // Lesson 1 first — user can start watching while the rest generate
     await buildLesson(courseId, lessons[0]);
 
-    // Build remaining lessons one at a time, in the background
+    // Build remaining lessons 2 at a time for speed
     const remaining = lessons.slice(1);
-    for (const lesson of remaining) {
-      await buildLesson(courseId, lesson);
+    for (let i = 0; i < remaining.length; i += 2) {
+      const batch = remaining.slice(i, i + 2);
+      await Promise.allSettled(batch.map((l) => buildLesson(courseId, l)));
     }
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
-    console.log(`[${courseId}] Course fully ready.`);
+    const totalMin = ((Date.now() - courseStart) / 60000).toFixed(1);
+    console.log(`[${courseId}] Course fully ready — took ${totalMin} min total.`);
   } catch (err) {
-    console.error(`[${courseId}] Course processing failed:`, err);
+    const totalMin = ((Date.now() - courseStart) / 60000).toFixed(1);
+    console.error(`[${courseId}] Course processing failed after ${totalMin} min:`, err);
     await Course.findByIdAndUpdate(courseId, { status: "failed" });
   }
 }

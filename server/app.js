@@ -11,6 +11,7 @@ const reviewRoutes = require("./routes/review");
 const courseRoutes = require('./routes/course');
 const paymentRoutes = require('./routes/payment');
 const feedbackRoutes = require('./routes/feedback')
+const exportRoutes = require('./routes/export')
 
 const Tutor = require('./models/Tutor');
 
@@ -31,7 +32,7 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api/course', courseRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/feedback', feedbackRoutes);
-
+app.use('/api/export', exportRoutes)
 // Serve audio files for browser playback at /audio/*
 // The browser fetches these directly during Remotion Player playback.
 app.use(
