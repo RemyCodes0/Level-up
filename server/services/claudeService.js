@@ -91,7 +91,7 @@ ${rules}
   }
 
   const message = await client.messages.create({
-    model: "claude-opus-4-6",
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 6000,
     messages,
   });
@@ -176,7 +176,7 @@ async function generateLessonCode(
       );
 
       const stream = await client.messages.create({
-        model: "claude-opus-4-6",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 25000,
         stream: true,
         messages: [
