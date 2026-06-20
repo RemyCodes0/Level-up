@@ -289,9 +289,11 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
     </div>
   );
 }
-
+const storedUser = localStorage.getItem("user");
+  const user = storedUser ? JSON.parse(storedUser) : null;
 // ─── Feedback (imported from separate component) ────────────────────────────
 import { FeedbackModal, FeedbackFab } from "../feedback/FeedBackModel";
+import { PDFDocument } from "pdf-lib";
 
 function UploadPhase({ onGenerate, credits }: {
   onGenerate: (fileName: string, file?: File | null) => void;
@@ -299,18 +301,46 @@ function UploadPhase({ onGenerate, credits }: {
 }) {
   const [inputValue, setInputValue] = useState("");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [pageCount, setPageCount] = useState<number | null>(null);
+  const [checkingPages, setCheckingPages] = useState(false);
+  const [pageCountError, setPageCountError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // When free trial is used and no paid credits, lock the input
-  const locked = !!(credits && !credits.canGenerate);
+  const MAX_PAGES = 30;
 
-  const handleFile = (file: File) => {
+  // When free trial is used and no paid credits, lock the input
+  const locked = (credits && !credits.canGenerate);
+
+  const handleFile = async (file: File) => {
     if (locked) return;
-    if (file.type === "application/pdf" || file.name.endsWith(".pptx")) setUploadedFile(file);
+    if (!(file.type === "application/pdf" || file.name.endsWith(".pptx"))) return;
+
+    setUploadedFile(file);
+    setPageCount(null);
+    setPageCountError(null);
+
+    // Only PDFs have a checkable page count this way — PPTX needs conversion
+    // to PDF first per the existing upload note, so skip the check for it.
+    if (file.type !== "application/pdf") return;
+
+    setCheckingPages(true);
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+      setPageCount(pdf.getPageCount());
+    } catch (err) {
+      console.error("Failed to read PDF page count:", err);
+      setPageCountError("Couldn't read this PDF's page count — it may be corrupted or encrypted.");
+    } finally {
+      setCheckingPages(false);
+    }
   };
+  const exceedsPageLimit = pageCount !== null && pageCount > MAX_PAGES;
+
   const handleSubmit = () => {
     if (locked) return;
+    if (exceedsPageLimit) return;
     if (!uploadedFile && !inputValue.trim()) return;
     onGenerate(uploadedFile ? uploadedFile.name : inputValue.trim(), uploadedFile);
   };
@@ -325,7 +355,7 @@ function UploadPhase({ onGenerate, credits }: {
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [inputValue]);
 
-  const canSubmit = !locked && (!!uploadedFile || inputValue.trim().length > 0);
+  const canSubmit = !locked && !exceedsPageLimit && !checkingPages && (!!uploadedFile || inputValue.trim().length > 0);
   const suggestions = ["Cell Biology lecture slides", "Calculus II integration techniques", "Data structures & algorithms", "Electromagnetic waves"];
 
   return (
@@ -354,12 +384,34 @@ function UploadPhase({ onGenerate, credits }: {
               )}
               {uploadedFile && (
                 <div className="px-4 pt-3">
-                  <div className="inline-flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 text-sm">
-                    <FileText className="h-4 w-4 text-blue-600 shrink-0" />
-                    <span className="text-blue-800 font-medium max-w-[260px] truncate">{uploadedFile.name}</span>
-                    <span className="text-blue-400 text-xs">{(uploadedFile.size / 1024 / 1024).toFixed(1)} MB</span>
-                    <button onClick={() => setUploadedFile(null)} className="text-blue-400 hover:text-blue-700 ml-1"><X className="h-3.5 w-3.5" /></button>
+                  <div className={`inline-flex items-center gap-2 border rounded-lg px-3 py-1.5 text-sm ${exceedsPageLimit ? "bg-amber-50 border-amber-200" : "bg-blue-50 border-blue-200"}`}>
+                    <FileText className={`h-4 w-4 shrink-0 ${exceedsPageLimit ? "text-amber-600" : "text-blue-600"}`} />
+                    <span className={`font-medium max-w-[260px] truncate ${exceedsPageLimit ? "text-amber-800" : "text-blue-800"}`}>{uploadedFile.name}</span>
+                    <span className={`text-xs ${exceedsPageLimit ? "text-amber-500" : "text-blue-400"}`}>{(uploadedFile.size / 1024 / 1024).toFixed(1)} MB</span>
+                    {checkingPages && (
+                      <span className="text-xs text-blue-400 flex items-center gap-1">
+                        <Loader2 className="h-3 w-3 animate-spin" /> Checking pages…
+                      </span>
+                    )}
+                    {pageCount !== null && (
+                      <span className={`text-xs font-semibold ${exceedsPageLimit ? "text-amber-700" : "text-blue-500"}`}>
+                        {pageCount} page{pageCount !== 1 ? "s" : ""}
+                      </span>
+                    )}
+                    <button onClick={() => { setUploadedFile(null); setPageCount(null); setPageCountError(null); }} className={`ml-1 ${exceedsPageLimit ? "text-amber-500 hover:text-amber-800" : "text-blue-400 hover:text-blue-700"}`}><X className="h-3.5 w-3.5" /></button>
                   </div>
+                  {exceedsPageLimit && (
+                    <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3 shrink-0" />
+                      This PDF has {pageCount} pages — our limit is {MAX_PAGES}. Please trim it before uploading.
+                    </p>
+                  )}
+                  {pageCountError && (
+                    <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3 shrink-0" />
+                      {pageCountError}
+                    </p>
+                  )}
                 </div>
               )}
               <div className="px-4 pt-3 pb-2">
