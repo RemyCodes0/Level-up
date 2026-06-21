@@ -1,12 +1,9 @@
 const Anthropic = require("@anthropic-ai/sdk");
 const { validateGeneratedCode } = require("./validateCode");
+const { reviewGeneratedCode } = require("./codeCriticService");
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// Generates the full course structure (lesson metadata + quiz) as JSON.
-// Accepts either a text topic, extracted pdfText, or a raw pdfBuffer.
-// When pdfBuffer is provided, the PDF is sent directly to Claude so it can
-// see images, equations, and diagrams — not just extracted text.
 // Safely extracts and parses a JSON object from a model response that may
 // contain stray text, markdown fences, or a conversational preamble
 // (e.g. "I'd be happy to help, but..."). Mirrors the same defensive parsing
@@ -138,14 +135,11 @@ ${rules}
   );
 }
 
-
-// ── Static rules block, cached across all 6 lesson-code calls per course ───
-// This text is IDENTICAL on every call to generateLessonCode — only the
-// scene data (below, in the per-call user message) changes. Marking it
-// cacheable means Anthropic charges ~10% of normal input price for this
-// block on every call after the first within the cache window, instead of
-// full price every single time. Same model, same output, same quality —
-// purely a billing optimization on the part of the prompt that never changes.
+// Static rules block, cached across all 6 lesson-code calls per course.
+// Now includes a complete worked example, not just abstract rules — a
+// single correctly-formed example scene anchors the model's actual output
+// pattern far more reliably than rules alone, which is one of the most
+// effective levers for reducing error rates in code generation specifically.
 const CODE_GEN_STATIC_RULES = `
 You are an expert Remotion motion-graphics developer.
 
@@ -180,6 +174,44 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 15. Return ONLY the raw .tsx code. No markdown fences, no explanation.
 16. Put heavy emphasis on animations which is the key role of this app, producing astonishing animations, with only continuously moving animation scenes (most of the time).
 
+WORKED EXAMPLE — this is exactly the pattern every scene must follow. Study the structure, the interpolate() calls, and the Audio tag closely before writing your own:
+
+\`\`\`tsx
+import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio } from "remotion";
+
+function TitleCard({ text }: { text: string }) {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const scale = spring({ frame, fps, config: { damping: 12 } });
+  const opacity = interpolate(frame, [0, 15], [0, 1]);
+
+  return (
+    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", backgroundColor: "#1e293b" }}>
+      <h1 style={{ color: "white", fontSize: 64, opacity, transform: \`scale(\${scale})\` }}>
+        {text}
+      </h1>
+    </AbsoluteFill>
+  );
+}
+
+export const LessonExample = () => {
+  return (
+    <Series>
+      <Series.Sequence durationInFrames={150}>
+        <Audio src={"https://example.com/audio/scene1.mp3"} />
+        <TitleCard text="Introduction" />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={210}>
+        <Audio src={"https://example.com/audio/scene2.mp3"} />
+        <AbsoluteFill style={{ backgroundColor: "#0f172a" }} />
+      </Series.Sequence>
+    </Series>
+  );
+};
+\`\`\`
+
+Notice in the example: every interpolate() call has exactly 3 arguments with literal arrays ([0, 15], [0, 1]) of matching length, the Audio tag's src is a plain string passed directly, durationInFrames values are plain integer literals, and helper components live above the main exported component. Follow this exact shape.
+
 Begin with imports, then any helper components, then the main component. Make sure the final line closes the component cleanly.
 `;
 
@@ -208,10 +240,18 @@ ${sceneTable}
 }
 
 // Generates the synced Remotion TSX code for ONE lesson using measured scenes.
-// Runs on Claude Sonnet — the model that actually produced reliable,
-// high-quality animation code in this pipeline. The static rules block is
-// marked cacheable so repeated calls (one per lesson, 6 per course) are
-// billed at a fraction of normal input price for that unchanging portion.
+// Runs on Claude Sonnet — the model that has actually produced reliable,
+// high-quality animation code in this pipeline (Haiku, GLM-5.2, and GPT-4.1
+// were all tried for this specific task and underperformed). The static
+// rules block is marked cacheable so repeated calls (one per lesson, 6 per
+// course) are billed at a fraction of normal input price for that
+// unchanging portion.
+//
+// temperature is set to 0.4 (down from the API default of 1.0) — lower
+// temperature trades away some creative variation between scenes in
+// exchange for more consistent, rule-following output, which directly
+// reduces the rate of rule-violation errors (interpolate misuse, wrong
+// import, etc.) this whole pipeline has been fighting.
 async function generateLessonCode(
   lesson,
   componentName,
@@ -231,6 +271,7 @@ async function generateLessonCode(
       const stream = await client.messages.create({
         model: "claude-sonnet-4-6",
         max_tokens: 25000,
+        temperature: 0.4,
         stream: true,
         messages: [
           {
@@ -273,13 +314,27 @@ async function generateLessonCode(
         .replace(/```tsx|```typescript|```ts|```jsx|```/g, "")
         .trim();
 
-      validateGeneratedCode(code, componentName);
+      // validateGeneratedCode now also runs semantic checks (interpolate
+      // shape, forbidden imports, duration-sum auto-fix) and may return a
+      // CORRECTED version of the code (e.g. a small duration drift fixed
+      // on the last scene) — always use the returned value, not the raw one.
+      const validatedCode = validateGeneratedCode(code, componentName, totalFrames);
+
+      // Optional qualitative review — off by default (ENABLE_CODE_CRITIC).
+      // Never blocks: this only logs a warning, since the code already
+      // passed real structural/syntax validation above.
+      const review = await reviewGeneratedCode(validatedCode, lesson);
+      if (!review.skipped && review.ok === false) {
+        console.warn(
+          `  [critic] Flagged issues for ${componentName}: ${review.issues?.join("; ")}`
+        );
+      }
 
       const elapsedSec = ((Date.now() - lessonStart) / 1000).toFixed(1);
       console.log(
-        `  [code] Valid code generated (${code.length} chars) — took ${elapsedSec}s for ${componentName}`
+        `  [code] Valid code generated (${validatedCode.length} chars) — took ${elapsedSec}s for ${componentName}`
       );
-      return code;
+      return validatedCode;
     } catch (err) {
       lastError = err;
       console.warn(

@@ -310,7 +310,7 @@ function UploadPhase({ onGenerate, credits }: {
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const MAX_PAGES = 30;
+  const MAX_PAGES = 100;
 
   // When free trial is used and no paid credits, lock the input
   const locked = (credits && !credits.canGenerate);
@@ -514,11 +514,11 @@ function VideoPlayer({ lesson, onComplete, onRetry, retrying, courseId, lessonNu
   return (
     <div className="space-y-4">
       <DynamicPlayer code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} onEnded={onComplete} onRetry={onRetry} retrying={retrying} />
-      {courseId && (
+      {/* {courseId && (
         <div className="flex justify-end">
           <DownloadLessonButton courseId={courseId} lessonNumber={lessonNumber} lessonTitle={lesson.title} />
         </div>
-      )}
+      )} */}
       <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-5">
         <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-blue-600" />Key points in this lesson</h3>
         <ul className="space-y-2">
