@@ -10,7 +10,7 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const Course = require("../models/Course");
-const { renderLessonToFile } = require("../services/renderService");
+const { renderLessonToFile, FORMATS } = require("../services/renderService");
 
 const EXPORTS_DIR = path.resolve(__dirname, "../exports");
 fs.mkdirSync(EXPORTS_DIR, { recursive: true });
@@ -30,10 +30,17 @@ function scheduleCleanup(jobId, delayMs = 30 * 60 * 1000) {
   }, delayMs);
 }
 
-// POST /api/export/:courseId/:lessonNumber — starts a render job, returns immediately
+// POST /api/export/:courseId/:lessonNumber?format=vertical — starts a render job, returns immediately
 exports.startExport = async (req, res) => {
   const { courseId, lessonNumber } = req.params;
   const lessonIdx = parseInt(lessonNumber, 10) - 1;
+  const format = req.query.format || "landscape";
+
+  if (!FORMATS[format]) {
+    return res.status(400).json({
+      message: `Invalid format "${format}". Use one of: ${Object.keys(FORMATS).join(", ")}`,
+    });
+  }
 
   try {
     const course = await Course.findById(courseId);
@@ -58,7 +65,8 @@ exports.startExport = async (req, res) => {
       (progress) => {
         const job = jobs.get(jobId);
         if (job) job.progress = progress;
-      }
+      },
+      format
     )
       .then(() => {
         jobs.set(jobId, { status: "ready", progress: 100, filePath: outputPath, error: null });

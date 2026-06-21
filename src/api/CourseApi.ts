@@ -18,6 +18,7 @@ export interface LessonFromAPI {
   code: string | null;
   totalFrames: number | null;
   status: "rendering" | "ready" | "failed";
+  error?: string | null;
 }
 
 export interface QuestionFromAPI {
@@ -65,8 +66,13 @@ export async function getCourseStatus(courseId: string): Promise<CourseFromAPI> 
 }
 
 // ── List the logged-in user's saved courses (for the sidebar on page load) ───
-export async function listCourses(): Promise<CourseFromAPI[]> {
-  const res = await fetch(`${BASE_URL}/api/course/list`, {
+export interface ListCoursesResult {
+  courses: CourseFromAPI[];
+  hasMore: boolean;
+}
+
+export async function listCourses(page = 1, limit = 8): Promise<ListCoursesResult> {
+  const res = await fetch(`${BASE_URL}/api/course/list?page=${page}&limit=${limit}`, {
     headers: { ...authHeaders() },
   });
   if (!res.ok) throw new Error("Failed to list courses");

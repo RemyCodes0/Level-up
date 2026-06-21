@@ -16,6 +16,21 @@ interface CompilationResult {
   error: string | null;
 }
 
+// Wraps Remotion's <Audio> so EVERY usage across EVERY AI-generated lesson
+// defaults to pauseWhenBuffering={true} — without this, if a scene's audio
+// file hasn't finished loading over the network when its Sequence starts,
+// the audio stutters/glitches as it plays through underbuffered data.
+// With pauseWhenBuffering, Remotion instead pauses the whole composition
+// (video + audio together) until that scene's audio is ready, then resumes
+// in sync — no glitching, just a brief clean pause on a slow connection.
+//
+// Defined once at module level (not inside useMemo) since it doesn't depend
+// on the compiled code — no need to recreate it on every recompilation.
+// Props spread AFTER the default so an AI-generated lesson could still
+// explicitly override it if it ever needed to (none currently do).
+const BufferedAudio: React.FC<any> = (props) =>
+  React.createElement(Audio, { pauseWhenBuffering: true, ...props });
+
 export function useCompilation(code: string): CompilationResult {
   return useMemo(() => {
     if (!code?.trim()) return { Component: null, error: null };
@@ -82,7 +97,9 @@ export function useCompilation(code: string): CompilationResult {
         throw babelErr;
       }
 
-      // Step 5 — execute inside new Function with Remotion APIs injected
+      // Step 5 — execute inside new Function with Remotion APIs injected.
+      // NOTE: "Audio" here is BufferedAudio (see above), not the raw import —
+      // every <Audio> tag in the generated code resolves to our wrapper.
       const factory = new Function(
         "React",
         "AbsoluteFill",
@@ -94,9 +111,9 @@ export function useCompilation(code: string): CompilationResult {
         "Series",
         "Audio",
         `
-"use strict";
-${transpiled}
-return ${exportedName};
+        "use strict";
+        ${transpiled}
+        return ${exportedName};
         `
       );
 
@@ -109,7 +126,7 @@ return ${exportedName};
         interpolate,
         Sequence,
         Series,
-        Audio
+        BufferedAudio
       );
 
       if (typeof Component !== "function") {

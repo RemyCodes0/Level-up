@@ -12,6 +12,13 @@ interface DynamicPlayerProps {
   retrying?: boolean;
 }
 
+// Pulls every audio URL out of the lesson's generated code (each scene has
+// its own <Audio src="..."/> tag) so they can all be prefetched up front.
+function extractAudioUrls(code: string): string[] {
+  const matches = code.matchAll(/<Audio\s+[^>]*src=\{?["']([^"']+)["']\}?/g);
+  return [...matches].map((m) => m[1]);
+}
+
 export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   code,
   durationInFrames,
@@ -21,6 +28,37 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
 }) => {
   const playerRef = useRef<PlayerRef>(null);
   const { Component, error } = useCompilation(code);
+
+  // Prefetches every scene's audio file as soon as the lesson loads —
+  // before the user even presses play. Without this, each scene's <Audio>
+  // tag only starts fetching its file right when that scene's Sequence
+  // becomes active, which combined with pauseWhenBuffering causes a brief
+  // pause at EVERY scene transition while it waits for data that hasn't
+  // arrived yet. Pre-warming the browser's HTTP cache here means that by
+  // the time playback reaches scene 5, its audio is already loaded and
+  // pauseWhenBuffering has nothing to wait for.
+  useEffect(() => {
+    if (!code) return;
+    const urls = extractAudioUrls(code);
+    const preloadedAudio = urls.map((url) => {
+      const audio = new window.Audio();
+      audio.preload = "auto";
+      audio.src = url;
+      // Calling load() explicitly kicks off the fetch immediately in all
+      // browsers, rather than waiting for some browsers' lazier defaults.
+      audio.load();
+      return audio;
+    });
+
+    // Nothing to clean up beyond letting these get garbage collected —
+    // they're not attached to the DOM and don't play anything themselves,
+    // they exist purely to warm the browser's HTTP cache for these URLs.
+    return () => {
+      preloadedAudio.forEach((audio) => {
+        audio.src = "";
+      });
+    };
+  }, [code]);
 
   useEffect(() => {
     const player = playerRef.current;

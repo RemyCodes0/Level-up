@@ -8,6 +8,7 @@ const {
 const { generateScenePlan } = require("../services/sceneService");
 const { generateAllSceneAudio } = require("../services/ttsService");
 const Course = require("../models/Course");
+const GenerationLog = require("../models/GenerationLog");
 const User = require("../models/User");
 
 // Audio dir — for cleanup when a course is deleted
@@ -51,15 +52,56 @@ async function generateCourseHandler(req, res) {
 async function buildLesson(courseId, lesson) {
   const MAX_ATTEMPTS = 2;
   const lessonStart = Date.now();
-  let measuredScenes = null;
-  let totalFrames = 0;
 
-  console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
-  const scenes = await generateScenePlan(lesson);
+  // Helper: writes a GenerationLog entry. Never throws — a logging failure
+  // should never take down lesson generation itself.
+  async function logAttempt({ status, stage, errorMessage, attemptNumber }) {
+    try {
+      await GenerationLog.create({
+        courseId,
+        lessonNumber: lesson.lessonNumber,
+        lessonTitle: lesson.title,
+        status,
+        stage,
+        errorMessage,
+        durationSec: Math.round((Date.now() - lessonStart) / 1000),
+        attemptNumber,
+      });
+    } catch (logErr) {
+      console.error(`[${courseId}] Failed to write generation log:`, logErr.message);
+    }
+  }
 
-  console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio...`);
-  ({ scenes: measuredScenes, totalFrames } = await generateAllSceneAudio(scenes));
+  // ── Stage 1+2: scene plan + audio ───────────────────────────────────────
+  // Previously NOT wrapped in try/catch — if either of these threw for a
+  // lesson built in a parallel batch (Promise.allSettled), the rejection
+  // was silently swallowed and the lesson's status stayed "rendering"
+  // forever, with no error surfaced anywhere. Fixed: both stages now report
+  // failure correctly, the same way the code-generation stage already did.
+  let measuredScenes, totalFrames;
+  try {
+    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
+    const scenes = await generateScenePlan(lesson);
 
+    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio...`);
+    ({ scenes: measuredScenes, totalFrames } = await generateAllSceneAudio(scenes));
+  } catch (err) {
+    const stage = measuredScenes === undefined ? "scenes" : "audio";
+    const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
+    console.error(
+      `[${courseId}] Lesson ${lesson.lessonNumber} failed at ${stage} stage (${elapsedMin} min elapsed): ${err.message}`
+    );
+    await logAttempt({ status: "failed", stage, errorMessage: err.message, attemptNumber: 1 });
+    await Course.findByIdAndUpdate(courseId, {
+      $set: {
+        [`lessons.${lesson.lessonNumber - 1}.status`]: "failed",
+        [`lessons.${lesson.lessonNumber - 1}.error`]: `Failed at ${stage}: ${err.message}`,
+      },
+    });
+    return;
+  }
+
+  // ── Stage 3: code generation (already had its own retry loop) ──────────
   let lastError = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -85,11 +127,13 @@ async function buildLesson(courseId, lesson) {
           [`lessons.${lesson.lessonNumber - 1}.code`]: tsxCode,
           [`lessons.${lesson.lessonNumber - 1}.totalFrames`]: totalFrames,
           [`lessons.${lesson.lessonNumber - 1}.status`]: "ready",
+          [`lessons.${lesson.lessonNumber - 1}.error`]: null,
         },
       });
 
       const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
       console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready — took ${elapsedMin} min total (scene plan + audio + code).`);
+      await logAttempt({ status: "success", stage: "code", errorMessage: null, attemptNumber: attempt });
       return;
 
     } catch (err) {
@@ -97,6 +141,7 @@ async function buildLesson(courseId, lesson) {
       console.error(
         `[${courseId}] Lesson ${lesson.lessonNumber} attempt ${attempt}/${MAX_ATTEMPTS} failed: ${err.message}`
       );
+      await logAttempt({ status: "failed", stage: "code", errorMessage: err.message, attemptNumber: attempt });
     }
   }
 
@@ -105,9 +150,13 @@ async function buildLesson(courseId, lesson) {
     `[${courseId}] Lesson ${lesson.lessonNumber} permanently failed after ${MAX_ATTEMPTS} attempts (${elapsedMin} min elapsed)`
   );
   await Course.findByIdAndUpdate(courseId, {
-    $set: { [`lessons.${lesson.lessonNumber - 1}.status`]: "failed" },
+    $set: {
+      [`lessons.${lesson.lessonNumber - 1}.status`]: "failed",
+      [`lessons.${lesson.lessonNumber - 1}.error`]: lastError?.message || "Unknown error",
+    },
   });
 }
+
 
 // ── Orchestrates the whole course ────────────────────────────────────────────
 async function processCourse(courseId, topic, pdfBuffer) {
@@ -165,12 +214,22 @@ async function getCourseStatusHandler(req, res) {
 }
 
 // ── List the logged-in user's courses ────────────────────────────────────────
+// Supports pagination via ?page=1&limit=8 — defaults to page 1, 8 per page.
+// Fetches one extra document beyond the page size to cheaply determine
+// hasMore without a separate count() query.
 async function listCoursesHandler(req, res) {
   try {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 50);
+    const skip = (page - 1) * limit;
+
     const courses = await Course.find({ userId: req.user._id })
       .sort({ createdAt: -1 })
-      .limit(50);
-    res.json(courses);
+      .skip(skip)
+      .limit(limit + 1);
+
+    const hasMore = courses.length > limit;
+    res.json({ courses: courses.slice(0, limit), hasMore });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to list courses" });

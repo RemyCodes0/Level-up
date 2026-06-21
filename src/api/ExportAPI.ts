@@ -5,6 +5,8 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+export type ExportFormat = "landscape" | "vertical" | "square";
+
 export interface ExportStatus {
   status: "rendering" | "ready" | "failed";
   progress: number;
@@ -14,9 +16,10 @@ export interface ExportStatus {
 // Starts a render job for one lesson, returns a jobId immediately.
 export async function startLessonExport(
   courseId: string,
-  lessonNumber: number
+  lessonNumber: number,
+  format: ExportFormat = "landscape"
 ): Promise<{ jobId: string }> {
-  const res = await fetch(`${BASE_URL}/api/export/${courseId}/${lessonNumber}`, {
+  const res = await fetch(`${BASE_URL}/api/export/${courseId}/${lessonNumber}?format=${format}`, {
     method: "POST",
     headers: { ...authHeaders() },
   });

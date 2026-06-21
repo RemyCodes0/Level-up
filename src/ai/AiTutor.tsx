@@ -68,6 +68,7 @@ interface Lesson {
   videoUrl?: string | null;
   code?: string | null;
   totalFrames?: number | null;
+  error?: string | null;
 }
 
 interface MCQQuestion {
@@ -102,6 +103,8 @@ const MOCK_LESSONS: Lesson[] = Array.from({ length: 6 }, (_, i) => ({
 }));
 
 const MOCK_QUESTIONS: MCQQuestion[] = [];
+
+const HISTORY_PAGE_SIZE = 8;
 
 const PROGRESS_DURATION_MS = 6 * 60 * 1000;
 const PROGRESS_TICK_MS = 300;
@@ -292,7 +295,7 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
 const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
 // ─── Feedback (imported from separate component) ────────────────────────────
-import { FeedbackModal, FeedbackFab } from "../feedback/FeedBackModel";
+import { FeedbackModal } from "../feedback/FeedBackModel";
 import { PDFDocument } from "pdf-lib";
 
 function UploadPhase({ onGenerate, credits }: {
@@ -474,7 +477,7 @@ function GeneratingPhase({ fileName }: { fileName: string }) {
           <Brain className="h-10 w-10 text-blue-600 animate-pulse" />
         </div>
         <h2 className="text-2xl font-bold text-slate-900 mb-2">Building Your Course</h2>
-        <p className="text-muted-foreground mb-2 text-sm">{fileName}</p>
+        <p className="text-muted-foreground mb-2 text-sm line-clamp-2 px-4">{fileName}</p>
         <p className="text-blue-600 font-medium mb-6 h-6 transition-all">{steps[stepIndex]}</p>
         <div className="w-full bg-slate-200 rounded-full h-2 mb-3">
           <div className="bg-gradient-to-r from-blue-500 to-indigo-500 h-2 rounded-full transition-all duration-300" style={{ width: `${Math.min(progress, 100)}%` }} />
@@ -693,13 +696,17 @@ function ResultsSection({ answers, questions }: { answers: QuizAnswer[]; questio
   );
 }
 
-function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapsed, onToggle, loading, error, credits, onBuy, isMobile }: {
+function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapsed, onToggle, loading, error, credits, onBuy, isMobile, onFeedback, hasMore, loadingMore, onLoadMore }: {
   history: HistoryEntry[]; activeId: string | null;
   onSelect: (entry: HistoryEntry) => void; onNew: () => void;
   onDelete: (id: string) => void; collapsed: boolean; onToggle: () => void;
   loading: boolean; error: boolean;
   credits: Credits | null; onBuy: () => void;
   isMobile?: boolean;
+  onFeedback: () => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
 }) {
   const groups = history.reduce<Record<string, HistoryEntry[]>>((acc, e) => {
     const diffDays = Math.floor((Date.now() - e.createdAt.getTime()) / 86400000);
@@ -816,7 +823,32 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
             })}
           </div>
         ))}
+        {hasMore && (
+          <div className="px-3 pt-1 pb-2">
+            <button
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-all disabled:opacity-50"
+            >
+              {loadingMore ? (
+                <><Loader2 className="h-3 w-3 animate-spin" /> Loading…</>
+              ) : (
+                "See more"
+              )}
+            </button>
+          </div>
+        )}
       </nav>
+
+      <div className="border-t border-slate-100 p-3">
+        <button
+          onClick={onFeedback}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-bold hover:bg-emerald-100 hover:border-emerald-300 transition-all"
+        >
+          <MessageSquare className="h-4 w-4" />
+          Send feedback
+        </button>
+      </div>
     </aside>
     </>
   );
@@ -845,12 +877,17 @@ export default function AILearningPage() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
   const [historySidebarCollapsed, setHistorySidebarCollapsed] = useState(false);
   const [credits, setCredits] = useState<Credits | null>(null);
   // const [showPaywall, setShowPaywall] = useState(false); // paywall disabled for now
   const [retryingLesson, setRetryingLesson] = useState<number | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
+  const [failureBanner, setFailureBanner] = useState<{ lessonIndex: number; title: string; error: string | null } | null>(null);
+  const seenFailuresRef = useRef<Set<number>>(new Set());
 
   const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
@@ -891,38 +928,60 @@ export default function AILearningPage() {
   useEffect(() => { fetchCredits(); }, []);
   useEffect(() => { return () => { if (pollCancelRef.current) pollCancelRef.current(); }; }, []);
 
+  // Converts one CourseFromAPI into a HistoryEntry — shared by the initial
+  // load and the "See more" pagination load below.
+  const mapCourseToEntry = (c: CourseFromAPI): HistoryEntry => {
+    const mappedLessons: Lesson[] = (c.lessons || []).map((l, i) => ({
+      id: i + 1, title: l.title || `Lesson ${i + 1}`, duration: "~2:00", completed: false,
+      description: l.description || "", keyPoints: l.keyPoints?.length ? l.keyPoints : ["", "", "", ""],
+      videoUrl: l.videoUrl, code: l.code ?? null, totalFrames: l.totalFrames ?? null, error: l.error ?? null,
+    }));
+    const mappedStatuses: LessonStatus[] = (c.lessons || []).map((l) =>
+      l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : "generating"
+    );
+    return {
+      id: c._id, fileName: c.topic,
+      createdAt: c.createdAt ? new Date(c.createdAt) : new Date(),
+      completedLessons: 0, quizScore: null,
+      lessons: mappedLessons.length ? mappedLessons : MOCK_LESSONS,
+      lessonStatuses: mappedStatuses.length ? mappedStatuses : MOCK_LESSONS.map(() => "generating" as LessonStatus),
+      quizAnswers: [], quizDone: false, questions: c.questions || [],
+    };
+  };
+
+  const loadMoreHistory = async () => {
+    if (loadingMoreHistory || !historyHasMore) return;
+    setLoadingMoreHistory(true);
+    try {
+      const nextPage = historyPage + 1;
+      const { courses, hasMore } = await listCourses(nextPage, HISTORY_PAGE_SIZE);
+      setHistory((prev) => [...prev, ...courses.map(mapCourseToEntry)]);
+      setHistoryPage(nextPage);
+      setHistoryHasMore(hasMore);
+    } catch (err) {
+      console.error("Failed to load more courses:", err);
+    } finally {
+      setLoadingMoreHistory(false);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const courses = await listCourses();
+        const { courses, hasMore } = await listCourses(1, HISTORY_PAGE_SIZE);
         if (cancelled) return;
+        setHistoryHasMore(hasMore);
+        setHistoryPage(1);
         if (courses.length === 0) { setHistoryLoading(false); return; }
-        const entries: HistoryEntry[] = courses.map((c) => {
-          const mappedLessons: Lesson[] = (c.lessons || []).map((l, i) => ({
-            id: i + 1, title: l.title || `Lesson ${i + 1}`, duration: "~2:00", completed: false,
-            description: l.description || "", keyPoints: l.keyPoints?.length ? l.keyPoints : ["", "", "", ""],
-            videoUrl: l.videoUrl, code: l.code ?? null, totalFrames: l.totalFrames ?? null,
-          }));
-          const mappedStatuses: LessonStatus[] = (c.lessons || []).map((l) =>
-            l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : "generating"
-          );
-          return {
-            id: c._id, fileName: c.topic,
-            createdAt: c.createdAt ? new Date(c.createdAt) : new Date(),
-            completedLessons: 0, quizScore: null,
-            lessons: mappedLessons.length ? mappedLessons : MOCK_LESSONS,
-            lessonStatuses: mappedStatuses.length ? mappedStatuses : MOCK_LESSONS.map(() => "generating" as LessonStatus),
-            quizAnswers: [], quizDone: false, questions: c.questions || [],
-          };
-        });
+        const entries: HistoryEntry[] = courses.map(mapCourseToEntry);
         if (!cancelled) { setHistory(entries); setHistoryLoading(false); }
         const stillGenerating = courses.find((c) => c.status === "generating");
         if (stillGenerating && !cancelled) {
           pollCancelRef.current = pollCourse(stillGenerating._id, (course: CourseFromAPI) => {
             setHistory((prev) => prev.map((e) => e.id !== course._id ? e : {
               ...e,
-              lessons: e.lessons.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames }; }),
+              lessons: e.lessons.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }),
               lessonStatuses: course.lessons.map((l) => l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : "generating"),
               questions: course.questions?.length ? course.questions : e.questions,
             }));
@@ -935,6 +994,27 @@ export default function AILearningPage() {
 
   const markComplete = (lessonId: number) => setLessons((prev) => prev.map((l) => l.id === lessonId ? { ...l, completed: true } : l));
 
+  // Surfaces a banner the moment ANY lesson's status flips to "failed" —
+  // catches it even if the user is looking at a different lesson right now,
+  // rather than relying on them noticing the small sidebar marker.
+  useEffect(() => {
+    lessonStatuses.forEach((status, i) => {
+      if (status === "failed" && !seenFailuresRef.current.has(i)) {
+        seenFailuresRef.current.add(i);
+        setFailureBanner({
+          lessonIndex: i,
+          title: lessons[i]?.title || `Lesson ${i + 1}`,
+          error: lessons[i]?.error ?? null,
+        });
+      }
+      // Reset tracking if a lesson goes back to generating (e.g. after retry)
+      // so a SECOND failure on the same lesson can trigger the banner again.
+      if (status !== "failed" && seenFailuresRef.current.has(i)) {
+        seenFailuresRef.current.delete(i);
+      }
+    });
+  }, [lessonStatuses, lessons]);
+
   const handleRetryLesson = async (lessonIndex: number) => {
     if (!activeHistoryId || retryingLesson !== null) return;
     setRetryingLesson(lessonIndex);
@@ -946,7 +1026,7 @@ export default function AILearningPage() {
       // Polling will pick up the new code when it's ready
       if (pollCancelRef.current) pollCancelRef.current();
       pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames }; }));
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
         if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
@@ -987,8 +1067,9 @@ export default function AILearningPage() {
       setHistory((prev) => [{ id: courseId, fileName: name, createdAt: new Date(), completedLessons: 0, quizScore: null, lessons: freshLessons, lessonStatuses: freshStatuses, quizAnswers: [], quizDone: false, questions: [] }, ...prev]);
       setActiveHistoryId(courseId); setLessons(freshLessons); setLessonStatuses(freshStatuses);
       setQuizQuestions([]); setActiveSection("video"); setActiveLesson(0); setQuizAnswers([]); setQuizDone(false); setPhase("course");
+      seenFailuresRef.current.clear(); setFailureBanner(null);
       pollCancelRef.current = pollCourse(courseId, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames }; }));
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
         if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
@@ -1007,7 +1088,7 @@ export default function AILearningPage() {
     setActiveSection(entry.quizDone ? "results" : "video"); setActiveLesson(0); setPhase("course");
     if (entry.lessonStatuses?.some((s) => s === "generating")) {
       pollCancelRef.current = pollCourse(entry.id, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames }; }));
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
         setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
@@ -1022,11 +1103,10 @@ export default function AILearningPage() {
         {/* PaywallModal disabled for now */}
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
           <div className="flex-1 overflow-y-auto"><GeneratingPhase fileName={fileName} /></div>
         </div>
-        <FeedbackFab onClick={() => setShowFeedback(true)} />
       </div>
     );
   }
@@ -1037,11 +1117,10 @@ export default function AILearningPage() {
         {/* PaywallModal disabled for now */}
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
           <div className="flex-1 overflow-y-auto"><UploadPhase onGenerate={startNewCourse} credits={credits} /></div>
         </div>
-        <FeedbackFab onClick={() => setShowFeedback(true)} />
       </div>
     );
   }
@@ -1052,7 +1131,7 @@ export default function AILearningPage() {
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
       <Helmet><title>AI Learning Course | Level Up</title></Helmet>
       <div className="flex h-screen relative">
-        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} />
+        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
         {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
 
         {/* Course sidebar backdrop on mobile */}
@@ -1151,6 +1230,31 @@ export default function AILearningPage() {
 
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+            {failureBanner && (
+              <div className="mb-4 flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                <XCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-red-700">
+                    "{failureBanner.title}" failed to generate
+                  </p>
+                  {failureBanner.error && (
+                    <p className="text-xs text-red-500 mt-0.5 break-words">{failureBanner.error}</p>
+                  )}
+                  <button
+                    onClick={() => {
+                      handleRetryLesson(failureBanner.lessonIndex);
+                      setFailureBanner(null);
+                    }}
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-red-700 hover:text-red-900 bg-white border border-red-300 rounded-lg px-3 py-1.5 transition-colors"
+                  >
+                    Retry this lesson
+                  </button>
+                </div>
+                <button onClick={() => setFailureBanner(null)} className="text-red-400 hover:text-red-600 shrink-0">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
             <button onClick={() => setCourseSidebarOpen((o) => !o)} className="mb-4 text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 transition-colors">
               {courseSidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
               {courseSidebarOpen ? "Hide" : "Show"} course nav
@@ -1202,7 +1306,6 @@ export default function AILearningPage() {
             )}
           </div>
         </main>
-        <FeedbackFab onClick={() => setShowFeedback(true)} />
       </div>
     </div>
   );

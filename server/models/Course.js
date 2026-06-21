@@ -16,6 +16,13 @@ const lessonSchema = new mongoose.Schema({
     enum: ["rendering", "ready", "failed"],
     default: "rendering",
   },
+  // Set when status is "failed" — the actual error message from the last
+  // failed attempt, so the frontend can tell the user why, not just that
+  // it failed. Cleared back to null on a successful retry.
+  error: {
+    type: String,
+    default: null,
+  },
 });
 
 const questionSchema = new mongoose.Schema({
