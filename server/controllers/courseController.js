@@ -175,13 +175,13 @@ async function processCourse(courseId, topic, pdfBuffer) {
       questions,
     });
 
-    // Lesson 1 first — user can start watching while the rest generate
-    await buildLesson(courseId, lessons[0]);
-
-    // Build remaining lessons 2 at a time for speed
-    const remaining = lessons.slice(1);
-    for (let i = 0; i < remaining.length; i += 2) {
-      const batch = remaining.slice(i, i + 2);
+    // All 6 lessons build in pairs of 2, from the start — [1,2], [3,4], [5,6].
+    // 3 sequential stages total instead of 4 (lesson 1 alone + 3 batches),
+    // so the whole course finishes sooner. Trade-off: lesson 1 now shares
+    // resources with lesson 2 while generating, so it takes a bit longer
+    // to become watchable than it did when it had the API/CPU to itself.
+    for (let i = 0; i < lessons.length; i += 2) {
+      const batch = lessons.slice(i, i + 2);
       await Promise.allSettled(batch.map((l) => buildLesson(courseId, l)));
     }
 
