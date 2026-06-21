@@ -87,9 +87,21 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
 
       const loc = node.loc ? ` (line ${node.loc.start.line})` : "";
 
-      if (node.arguments.length !== 3) {
+      // interpolate() requires 3 args minimum, and Remotion supports a
+      // legitimate optional 4th argument: an options object like
+      // { extrapolateLeft: "clamp", extrapolateRight: "clamp" }. Only
+      // reject calls with fewer than 3 args, more than 4, or where a 4th
+      // argument exists but isn't a plain object literal (which would mean
+      // it's not the options pattern at all).
+      if (node.arguments.length < 3 || node.arguments.length > 4) {
         interpolateErrors.push(
-          `interpolate() called with ${node.arguments.length} argument(s) instead of 3${loc}`
+          `interpolate() called with ${node.arguments.length} argument(s) — expected 3, or 4 with an options object${loc}`
+        );
+        return;
+      }
+      if (node.arguments.length === 4 && node.arguments[3].type !== "ObjectExpression") {
+        interpolateErrors.push(
+          `interpolate()'s 4th argument must be a plain options object (e.g. { extrapolateLeft: "clamp" })${loc}`
         );
         return;
       }

@@ -67,6 +67,34 @@ export const LessonAbc123 = () => {
   if (!threw) throw new Error("Should have thrown but did not");
 });
 
+// ── Test 4b: interpolate() with a valid 4th options arg is ALLOWED ───────
+test("interpolate() with a 4th options object (extrapolateLeft/Right) is allowed", () => {
+  const code = `
+export const LessonAbc123 = () => {
+  const x = interpolate(0, [0, 30], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  return <div />;
+};
+`;
+  validateGeneratedCode(code, "LessonAbc123"); // should NOT throw
+});
+
+// ── Test 4c: interpolate() with a non-object 4th arg is still rejected ──
+test("interpolate() with a non-object 4th argument is rejected", () => {
+  const code = `
+export const LessonAbc123 = () => {
+  const x = interpolate(0, [0, 30], [0, 1], someVariable);
+  return <div />;
+};
+`;
+  let threw = false;
+  try {
+    validateGeneratedCode(code, "LessonAbc123");
+  } catch {
+    threw = true;
+  }
+  if (!threw) throw new Error("Should have thrown but did not");
+});
+
 // ── Test 4: mismatched array lengths should be rejected ──────────────────
 test("interpolate() with mismatched array lengths is rejected", () => {
   const code = `
