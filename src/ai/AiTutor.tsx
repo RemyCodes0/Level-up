@@ -1190,7 +1190,7 @@ export default function AILearningPage() {
         </aside>
 
         <main className="flex-1 overflow-y-auto">
-          <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+          <div className="px-4 sm:px-6 py-6 sm:py-8">
             {failureBanner && (
               <div className="mb-4 flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-3 sm:px-4 py-3">
                 <XCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
