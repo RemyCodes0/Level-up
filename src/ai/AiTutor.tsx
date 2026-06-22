@@ -26,7 +26,6 @@ import { useNavigate } from "react-router-dom";
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
-// ── Responsive hook ─────────────────────────────────────────────────────────
 function useIsMobile(breakpoint = 768) {
   const [isMobile, setIsMobile] = useState(
     typeof window !== "undefined" ? window.innerWidth < breakpoint : false
@@ -150,8 +149,6 @@ function useLessonProgress(statuses: LessonStatus[]): number[] {
   return progresses;
 }
 
-// ─── Paywall Modal ────────────────────────────────────────────────────────────
-
 function PaywallModal({ onClose }: { onClose: () => void }) {
   const [quantity, setQuantity] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -196,7 +193,7 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto">
         <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors">
           <X className="h-5 w-5" />
         </button>
@@ -205,21 +202,20 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
           <Zap className="h-7 w-7 text-white" />
         </div>
 
-        <h2 className="text-2xl font-bold text-slate-900 text-center mb-2">
+        <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center mb-2">
           Get more courses
         </h2>
         <p className="text-slate-500 text-center text-sm mb-6">
           Each course includes 6 animated lessons, voiceover narration, and a 20-question quiz.
         </p>
 
-        {/* Quantity selector */}
         <div className="mb-6">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">How many courses?</p>
-          <div className="flex items-center justify-center gap-4">
+          <div className="flex items-center justify-center gap-3 sm:gap-4">
             <button
               onClick={decrement}
               disabled={quantity <= 1}
-              className="w-10 h-10 rounded-xl border-2 border-slate-200 flex items-center justify-center text-slate-600 hover:border-slate-300 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl border-2 border-slate-200 flex items-center justify-center text-slate-600 hover:border-slate-300 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0"
             >
               <Minus className="h-4 w-4" />
             </button>
@@ -230,12 +226,12 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
               max={99}
               value={quantity}
               onChange={(e) => handleQuantityInput(e.target.value)}
-              className="w-20 h-12 text-center text-2xl font-bold text-slate-900 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-blue-400"
+              className="w-16 sm:w-20 h-11 sm:h-12 text-center text-xl sm:text-2xl font-bold text-slate-900 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-blue-400"
             />
             <button
               onClick={increment}
               disabled={quantity >= 99}
-              className="w-10 h-10 rounded-xl border-2 border-slate-200 flex items-center justify-center text-slate-600 hover:border-slate-300 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl border-2 border-slate-200 flex items-center justify-center text-slate-600 hover:border-slate-300 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0"
             >
               <Plus className="h-4 w-4" />
             </button>
@@ -243,7 +239,6 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
           <p className="text-center text-xs text-slate-400 mt-2">{quantity} course{quantity !== 1 ? "s" : ""}</p>
         </div>
 
-        {/* What you get */}
         <div className="bg-slate-50 rounded-xl p-4 mb-6 space-y-2">
           {[
             "6 AI-generated animated video lessons per course",
@@ -251,22 +246,20 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
             "20-question personalized quiz",
             "Upload a PDF or type any topic",
           ].map((item) => (
-            <div key={item} className="flex items-center gap-2 text-sm text-slate-700">
-              <CheckCircle className="h-4 w-4 text-emerald-500 shrink-0" />
+            <div key={item} className="flex items-start gap-2 text-sm text-slate-700">
+              <CheckCircle className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
               {item}
             </div>
           ))}
         </div>
 
-        {/* Price summary */}
-        <div className="flex items-center justify-between mb-4 px-1">
+        <div className="flex items-center justify-between mb-4 px-1 gap-2">
           <span className="text-sm text-slate-500">
             {quantity} course{quantity !== 1 ? "s" : ""} × $6.99
           </span>
-          <span className="text-xl font-bold text-slate-900">${total}</span>
+          <span className="text-lg sm:text-xl font-bold text-slate-900 whitespace-nowrap">${total}</span>
         </div>
 
-        {/* CTA */}
         <Button
           onClick={handleBuy}
           disabled={loading}
@@ -294,7 +287,6 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
 }
 const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
-// ─── Feedback (imported from separate component) ────────────────────────────
 import { FeedbackModal } from "../feedback/FeedBackModel";
 import { PDFDocument } from "pdf-lib";
 
@@ -312,7 +304,6 @@ function UploadPhase({ onGenerate, credits }: {
 
   const MAX_PAGES = 100;
 
-  // When free trial is used and no paid credits, lock the input
   const locked = (credits && !credits.canGenerate);
 
   const handleFile = async (file: File) => {
@@ -323,8 +314,6 @@ function UploadPhase({ onGenerate, credits }: {
     setPageCount(null);
     setPageCountError(null);
 
-    // Only PDFs have a checkable page count this way — PPTX needs conversion
-    // to PDF first per the existing upload note, so skip the check for it.
     if (file.type !== "application/pdf") return;
 
     setCheckingPages(true);
@@ -371,8 +360,8 @@ function UploadPhase({ onGenerate, credits }: {
                 <img src="/logo.png" alt="Level Up Logo" className="h-8 w-8 object-cover rounded-lg" />
               </div>
             </div>
-            <h1 className="text-3xl font-bold text-slate-900 mb-2">What would you like to learn?</h1>
-            <p className="text-muted-foreground text-base">Describe your topic or upload your course materials — AI generates your full course.</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-2 px-2">What would you like to learn?</h1>
+            <p className="text-muted-foreground text-sm sm:text-base px-2">Describe your topic or upload your course materials — AI generates your full course.</p>
           </div>
           <div className="w-full max-w-2xl">
             <div className={`bg-white rounded-2xl border shadow-lg overflow-hidden relative ${locked ? "border-slate-300 opacity-60" : "border-slate-200"}`}>
@@ -381,15 +370,14 @@ function UploadPhase({ onGenerate, credits }: {
                   <div className="text-center px-6">
                     <Lock className="h-6 w-6 text-slate-400 mx-auto mb-2" />
                     <p className="text-sm font-semibold text-slate-600">Free trial used</p>
-                    {/* <p className="text-xs text-slate-400 mt-1">Purchase courses to continue generating</p> */}
                   </div>
                 </div>
               )}
               {uploadedFile && (
                 <div className="px-4 pt-3">
-                  <div className={`inline-flex items-center gap-2 border rounded-lg px-3 py-1.5 text-sm ${exceedsPageLimit ? "bg-amber-50 border-amber-200" : "bg-blue-50 border-blue-200"}`}>
+                  <div className={`inline-flex items-center gap-2 border rounded-lg px-3 py-1.5 text-sm flex-wrap ${exceedsPageLimit ? "bg-amber-50 border-amber-200" : "bg-blue-50 border-blue-200"}`}>
                     <FileText className={`h-4 w-4 shrink-0 ${exceedsPageLimit ? "text-amber-600" : "text-blue-600"}`} />
-                    <span className={`font-medium max-w-[260px] truncate ${exceedsPageLimit ? "text-amber-800" : "text-blue-800"}`}>{uploadedFile.name}</span>
+                    <span className={`font-medium max-w-[160px] sm:max-w-[260px] truncate ${exceedsPageLimit ? "text-amber-800" : "text-blue-800"}`}>{uploadedFile.name}</span>
                     <span className={`text-xs ${exceedsPageLimit ? "text-amber-500" : "text-blue-400"}`}>{(uploadedFile.size / 1024 / 1024).toFixed(1)} MB</span>
                     {checkingPages && (
                       <span className="text-xs text-blue-400 flex items-center gap-1">
@@ -424,29 +412,30 @@ function UploadPhase({ onGenerate, credits }: {
                   className={`w-full resize-none bg-transparent placeholder:text-slate-400 text-base focus:outline-none leading-relaxed ${locked ? "text-slate-400 cursor-not-allowed" : "text-slate-800"}`}
                   style={{ minHeight: "40px", maxHeight: "160px" }} />
               </div>
-              <div className="flex items-center justify-between px-3 pb-3 pt-1">
-                <div className="flex items-center gap-1">
+              <div className="flex items-center justify-between px-3 pb-3 pt-1 gap-2">
+                <div className="flex items-center gap-1 min-w-0">
                   <input ref={fileRef} type="file" accept=".pdf,.pptx" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }} />
-                  <button onClick={() => !locked && fileRef.current?.click()} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${locked ? "text-slate-300 cursor-not-allowed" : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"}`} title="Attach PDF or PPTX">
+                  <button onClick={() => !locked && fileRef.current?.click()} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all shrink-0 ${locked ? "text-slate-300 cursor-not-allowed" : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"}`} title="Attach PDF or PPTX">
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" />
                     </svg>
                   </button>
-                  <span className="text-xs text-slate-400 ml-1">PDF (10MB, 30 pages max) · PPTX (convert to PDF before uploading)</span>
+                  <span className="text-xs text-slate-400 ml-1 hidden sm:inline truncate">PDF (10MB, 30 pages max) · PPTX (convert to PDF before uploading)</span>
+                  <span className="text-xs text-slate-400 ml-1 sm:hidden">PDF/PPTX</span>
                 </div>
-                <button onClick={handleSubmit} disabled={!canSubmit} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${canSubmit ? "bg-slate-900 text-white hover:bg-slate-700" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}>
+                <button onClick={handleSubmit} disabled={!canSubmit} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all shrink-0 ${canSubmit ? "bg-slate-900 text-white hover:bg-slate-700" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}>
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" />
                   </svg>
                 </button>
               </div>
             </div>
-            <div className="mt-4 flex flex-wrap gap-2 justify-center">
+            <div className="mt-4 flex flex-wrap gap-2 justify-center px-2">
               {suggestions.map((s) => (
                 <button key={s} onClick={() => setInputValue(s)} className="text-xs text-slate-500 bg-white border border-slate-200 rounded-full px-3 py-1.5 hover:border-slate-400 hover:text-slate-700 transition-all shadow-sm">{s}</button>
               ))}
             </div>
-            <p className="text-center text-xs text-slate-400 mt-5">Lesson 1 ready in ~5 minutes · remaining lessons load while you watch</p>
+            <p className="text-center text-xs text-slate-400 mt-5 px-2">Lesson 1 ready in ~5 minutes · remaining lessons load while you watch</p>
           </div>
         </div>
       </div>
@@ -476,9 +465,9 @@ function GeneratingPhase({ fileName }: { fileName: string }) {
         <div className="w-20 h-20 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-6">
           <Brain className="h-10 w-10 text-blue-600 animate-pulse" />
         </div>
-        <h2 className="text-2xl font-bold text-slate-900 mb-2">Building Your Course</h2>
+        <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mb-2">Building Your Course</h2>
         <p className="text-muted-foreground mb-2 text-sm line-clamp-2 px-4">{fileName}</p>
-        <p className="text-blue-600 font-medium mb-6 h-6 transition-all">{steps[stepIndex]}</p>
+        <p className="text-blue-600 font-medium mb-6 h-6 transition-all text-sm sm:text-base">{steps[stepIndex]}</p>
         <div className="w-full bg-slate-200 rounded-full h-2 mb-3">
           <div className="bg-gradient-to-r from-blue-500 to-indigo-500 h-2 rounded-full transition-all duration-300" style={{ width: `${Math.min(progress, 100)}%` }} />
         </div>
@@ -493,13 +482,13 @@ function VideoPlayer({ lesson, onComplete, onRetry, retrying, courseId, lessonNu
   if (!lesson.code) {
     return (
       <div className="space-y-4">
-        <div className="rounded-xl overflow-hidden shadow-xl border border-slate-200 bg-slate-900 aspect-video flex flex-col items-center justify-center text-center px-6">
-          <Loader2 className="h-10 w-10 text-blue-400 animate-spin mb-4" />
-          <p className="text-white font-semibold text-lg">Preparing this lesson…</p>
-          <p className="text-white/60 text-sm mt-1">Your lesson is being generated. This usually takes about 6 minutes.</p>
+        <div className="rounded-xl overflow-hidden shadow-xl border border-slate-200 bg-slate-900 aspect-video flex flex-col items-center justify-center text-center px-4 sm:px-6">
+          <Loader2 className="h-8 w-8 sm:h-10 sm:w-10 text-blue-400 animate-spin mb-4" />
+          <p className="text-white font-semibold text-base sm:text-lg">Preparing this lesson…</p>
+          <p className="text-white/60 text-xs sm:text-sm mt-1">Your lesson is being generated. This usually takes about 6 minutes.</p>
         </div>
-        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-5">
-          <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-blue-600" />Key points in this lesson</h3>
+        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
+          <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
           <ul className="space-y-2">
             {lesson.keyPoints.map((pt, i) => (
               <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
@@ -514,13 +503,8 @@ function VideoPlayer({ lesson, onComplete, onRetry, retrying, courseId, lessonNu
   return (
     <div className="space-y-4">
       <DynamicPlayer code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} onEnded={onComplete} onRetry={onRetry} retrying={retrying} />
-      {/* {courseId && (
-        <div className="flex justify-end">
-          <DownloadLessonButton courseId={courseId} lessonNumber={lessonNumber} lessonTitle={lesson.title} />
-        </div>
-      )} */}
-      <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-5">
-        <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2"><BookOpen className="h-4 w-4 text-blue-600" />Key points in this lesson</h3>
+      <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
+        <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
         <ul className="space-y-2">
           {lesson.keyPoints.map((pt, i) => (
             <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
@@ -567,13 +551,13 @@ function QuizSection({ questions, onSubmit }: { questions: MCQQuestion[]; onSubm
   const handleSubmit = () => { setSubmitted(true); onSubmit(answers); };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2"><ClipboardList className="h-5 w-5 text-purple-600" />Learning Assessment</h2>
+          <h2 className="text-lg sm:text-xl font-bold text-slate-900 flex items-center gap-2"><ClipboardList className="h-5 w-5 text-purple-600 shrink-0" />Learning Assessment</h2>
           <p className="text-sm text-muted-foreground">{answers.length} of {questions.length} answered</p>
         </div>
-        <div className={`flex items-center gap-2 px-4 py-2 rounded-full font-mono font-bold text-sm ${timeLeft < 300 ? "bg-red-50 text-red-600 border border-red-200" : "bg-slate-100 text-slate-700"}`}>
+        <div className={`self-start sm:self-auto flex items-center gap-2 px-4 py-2 rounded-full font-mono font-bold text-sm ${timeLeft < 300 ? "bg-red-50 text-red-600 border border-red-200" : "bg-slate-100 text-slate-700"}`}>
           <Clock className="h-4 w-4" />{fmt(timeLeft)}
         </div>
       </div>
@@ -582,8 +566,8 @@ function QuizSection({ questions, onSubmit }: { questions: MCQQuestion[]; onSubm
           <button key={qq.id} onClick={() => setCurrentQ(i)} className={`w-7 h-7 rounded-md text-xs font-semibold transition-all ${i === currentQ ? "bg-blue-600 text-white shadow-sm" : answered(qq.id) ? "bg-emerald-100 text-emerald-700 border border-emerald-300" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>{i + 1}</button>
         ))}
       </div>
-      <Card className="border-0 shadow-lg bg-white/90 backdrop-blur p-6">
-        <div className="flex items-center justify-between mb-4">
+      <Card className="border-0 shadow-lg bg-white/90 backdrop-blur p-4 sm:p-6">
+        <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
           <Badge variant="secondary" className="bg-purple-50 text-purple-700 border-purple-200">{q.topic}</Badge>
           <span className="text-sm text-muted-foreground font-medium">Q{currentQ + 1} / {questions.length}</span>
         </div>
@@ -592,20 +576,20 @@ function QuizSection({ questions, onSubmit }: { questions: MCQQuestion[]; onSubm
           {q.options.map((opt, i) => {
             const sel = answered(q.id)?.selected === i;
             return (
-              <button key={i} onClick={() => select(q.id, i)} className={`w-full text-left p-4 rounded-xl border text-sm transition-all ${sel ? "border-blue-500 bg-blue-50 text-blue-900 font-medium" : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50/50"}`}>
-                <span className={`inline-flex w-6 h-6 rounded-full border text-xs items-center justify-center mr-3 font-semibold ${sel ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 text-slate-500"}`}>{String.fromCharCode(65 + i)}</span>
+              <button key={i} onClick={() => select(q.id, i)} className={`w-full text-left p-3 sm:p-4 rounded-xl border text-sm transition-all ${sel ? "border-blue-500 bg-blue-50 text-blue-900 font-medium" : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50/50"}`}>
+                <span className={`inline-flex w-6 h-6 rounded-full border text-xs items-center justify-center mr-3 font-semibold shrink-0 ${sel ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 text-slate-500"}`}>{String.fromCharCode(65 + i)}</span>
                 {opt}
               </button>
             );
           })}
         </div>
       </Card>
-      <div className="flex items-center justify-between">
-        <Button variant="outline" onClick={() => setCurrentQ((qi) => Math.max(0, qi - 1))} disabled={currentQ === 0}><ChevronLeft className="h-4 w-4 mr-1" /> Previous</Button>
+      <div className="flex items-center justify-between gap-2">
+        <Button variant="outline" onClick={() => setCurrentQ((qi) => Math.max(0, qi - 1))} disabled={currentQ === 0} className="text-xs sm:text-sm px-3 sm:px-4"><ChevronLeft className="h-4 w-4 mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
         {currentQ < questions.length - 1 ? (
-          <Button onClick={() => setCurrentQ((qi) => Math.min(questions.length - 1, qi + 1))} className="bg-blue-600 hover:bg-blue-700 text-white">Next <ChevronRight className="h-4 w-4 ml-1" /></Button>
+          <Button onClick={() => setCurrentQ((qi) => Math.min(questions.length - 1, qi + 1))} className="bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm px-3 sm:px-4"><span className="hidden sm:inline">Next</span> <ChevronRight className="h-4 w-4 ml-1" /></Button>
         ) : (
-          <Button onClick={handleSubmit} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white" disabled={answers.length < questions.length}><Trophy className="h-4 w-4 mr-2" />Submit Assessment</Button>
+          <Button onClick={handleSubmit} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs sm:text-sm px-3 sm:px-4" disabled={answers.length < questions.length}><Trophy className="h-4 w-4 mr-2 shrink-0" /><span className="hidden sm:inline">Submit </span>Assessment</Button>
         )}
       </div>
       {answers.length < questions.length && currentQ === questions.length - 1 && (
@@ -634,14 +618,14 @@ function ResultsSection({ answers, questions }: { answers: QuizAnswer[]; questio
   return (
     <div className="space-y-6">
       <Card className="border-0 shadow-lg bg-white/90 backdrop-blur overflow-hidden">
-        <div className={`bg-${readinessColor}-50 border-b border-${readinessColor}-100 p-6`}>
+        <div className={`bg-${readinessColor}-50 border-b border-${readinessColor}-100 p-4 sm:p-6`}>
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
-              <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2"><Award className={`h-6 w-6 text-${readinessColor}-600`} />Your Learning Readiness Score</h2>
-              <p className="text-muted-foreground mt-1">{score} / {questions.length} correct</p>
+              <h2 className="text-lg sm:text-2xl font-bold text-slate-900 flex items-center gap-2"><Award className={`h-5 w-5 sm:h-6 sm:w-6 text-${readinessColor}-600 shrink-0`} />Your Learning Readiness Score</h2>
+              <p className="text-muted-foreground mt-1 text-sm sm:text-base">{score} / {questions.length} correct</p>
             </div>
             <div className="text-center">
-              <div className={`text-5xl font-black text-${readinessColor}-600`}>{pct}%</div>
+              <div className={`text-4xl sm:text-5xl font-black text-${readinessColor}-600`}>{pct}%</div>
               <Badge className={`bg-${readinessColor}-100 text-${readinessColor}-700 border-${readinessColor}-200 mt-1`}>{readinessLabel}</Badge>
             </div>
           </div>
@@ -651,14 +635,14 @@ function ResultsSection({ answers, questions }: { answers: QuizAnswer[]; questio
             </div>
           </div>
         </div>
-        <div className="p-6">
-          <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><BarChart2 className="h-4 w-4 text-slate-500" /> Topic breakdown</h3>
+        <div className="p-4 sm:p-6">
+          <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2 text-sm sm:text-base"><BarChart2 className="h-4 w-4 text-slate-500 shrink-0" /> Topic breakdown</h3>
           <div className="space-y-3">
             {topics.map(({ topic, pct: tPct, correct, total }) => (
               <div key={topic}>
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="text-slate-700 font-medium">{topic}</span>
-                  <span className={`font-semibold ${tPct >= 70 ? "text-emerald-600" : "text-red-500"}`}>{correct}/{total} · {tPct}%</span>
+                <div className="flex justify-between text-sm mb-1 gap-2">
+                  <span className="text-slate-700 font-medium truncate">{topic}</span>
+                  <span className={`font-semibold shrink-0 ${tPct >= 70 ? "text-emerald-600" : "text-red-500"}`}>{correct}/{total} · {tPct}%</span>
                 </div>
                 <div className="w-full bg-slate-100 rounded-full h-2">
                   <div className={`h-2 rounded-full ${tPct >= 70 ? "bg-emerald-500" : "bg-red-400"}`} style={{ width: `${tPct}%` }} />
@@ -668,25 +652,25 @@ function ResultsSection({ answers, questions }: { answers: QuizAnswer[]; questio
           </div>
         </div>
       </Card>
-      <div className="grid md:grid-cols-2 gap-4">
-        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-5">
-          <h3 className="font-semibold text-emerald-700 mb-3 flex items-center gap-2"><TrendingUp className="h-4 w-4" /> Strengths</h3>
+      <div className="grid sm:grid-cols-2 gap-4">
+        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
+          <h3 className="font-semibold text-emerald-700 mb-3 flex items-center gap-2 text-sm sm:text-base"><TrendingUp className="h-4 w-4 shrink-0" /> Strengths</h3>
           {strengths.length === 0 ? <p className="text-sm text-muted-foreground">Keep studying — strengths will emerge!</p> : (
             <ul className="space-y-2">{strengths.map(({ topic, pct: tPct }) => (
-              <li key={topic} className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-emerald-500" />{topic}</span>
-                <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs">{tPct}%</Badge>
+              <li key={topic} className="flex items-center justify-between text-sm gap-2">
+                <span className="flex items-center gap-2 truncate"><Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />{topic}</span>
+                <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs shrink-0">{tPct}%</Badge>
               </li>
             ))}</ul>
           )}
         </Card>
-        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-5">
-          <h3 className="font-semibold text-red-600 mb-3 flex items-center gap-2"><TrendingDown className="h-4 w-4" /> Needs review</h3>
+        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
+          <h3 className="font-semibold text-red-600 mb-3 flex items-center gap-2 text-sm sm:text-base"><TrendingDown className="h-4 w-4 shrink-0" /> Needs review</h3>
           {weaknesses.length === 0 ? <p className="text-sm text-muted-foreground">Excellent — no weak areas detected!</p> : (
             <ul className="space-y-2">{weaknesses.map(({ topic, pct: tPct }) => (
-              <li key={topic} className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2"><AlertCircle className="h-3.5 w-3.5 text-red-400" />{topic}</span>
-                <Badge className="bg-red-50 text-red-600 border-red-200 text-xs">{tPct}%</Badge>
+              <li key={topic} className="flex items-center justify-between text-sm gap-2">
+                <span className="flex items-center gap-2 truncate"><AlertCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />{topic}</span>
+                <Badge className="bg-red-50 text-red-600 border-red-200 text-xs shrink-0">{tPct}%</Badge>
               </li>
             ))}</ul>
           )}
@@ -720,13 +704,12 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
 
   return (
     <>
-      {/* Backdrop for mobile overlay */}
       {isMobile && !collapsed && (
         <div className="fixed inset-0 z-30 bg-black/30 backdrop-blur-[2px]" onClick={onToggle} />
       )}
       <aside className={`${
         isMobile
-          ? `fixed top-0 left-0 z-40 h-full ${collapsed ? "-translate-x-full" : "translate-x-0"} w-64`
+          ? `fixed top-0 left-0 z-40 h-full ${collapsed ? "-translate-x-full" : "translate-x-0"} w-[80vw] max-w-64`
           : `${collapsed ? "w-0" : "w-64"} shrink-0`
       } transition-all duration-300 bg-white border-r border-slate-200 flex flex-col overflow-hidden`}>
       <div className="flex items-center justify-between px-3 py-3 border-b border-slate-100">
@@ -764,12 +747,6 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
               {Math.max(credits.courseCredits, 0)} remaining
             </span>
           </div>
-          {/* {!credits.canGenerate && (
-            <button onClick={onBuy}
-              className="w-full mt-1 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-sm font-bold transition-all shadow-md flex items-center justify-center gap-1.5">
-              <CreditCard className="h-4 w-4" /> Buy more courses
-            </button>
-          )} */}
           {credits.canGenerate && credits.courseCredits <= 2 && credits.freeTrialUsed && (
             <button onClick={onBuy}
               className="w-full mt-1 py-2.5 rounded-xl border-2 border-blue-300 bg-white text-blue-700 hover:bg-blue-50 text-sm font-bold transition-all flex items-center justify-center gap-1.5">
@@ -883,7 +860,6 @@ export default function AILearningPage() {
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
   const [historySidebarCollapsed, setHistorySidebarCollapsed] = useState(false);
   const [credits, setCredits] = useState<Credits | null>(null);
-  // const [showPaywall, setShowPaywall] = useState(false); // paywall disabled for now
   const [retryingLesson, setRetryingLesson] = useState<number | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
   const [failureBanner, setFailureBanner] = useState<{ lessonIndex: number; title: string; error: string | null } | null>(null);
@@ -897,7 +873,6 @@ export default function AILearningPage() {
   const lessonProgresses = useLessonProgress(lessonStatuses);
   const isMobile = useIsMobile();
 
-  // Auto-collapse sidebars on mobile
   useEffect(() => {
     if (isMobile) {
       setHistorySidebarCollapsed(true);
@@ -928,8 +903,6 @@ export default function AILearningPage() {
   useEffect(() => { fetchCredits(); }, []);
   useEffect(() => { return () => { if (pollCancelRef.current) pollCancelRef.current(); }; }, []);
 
-  // Converts one CourseFromAPI into a HistoryEntry — shared by the initial
-  // load and the "See more" pagination load below.
   const mapCourseToEntry = (c: CourseFromAPI): HistoryEntry => {
     const mappedLessons: Lesson[] = (c.lessons || []).map((l, i) => ({
       id: i + 1, title: l.title || `Lesson ${i + 1}`, duration: "~2:00", completed: false,
@@ -994,9 +967,6 @@ export default function AILearningPage() {
 
   const markComplete = (lessonId: number) => setLessons((prev) => prev.map((l) => l.id === lessonId ? { ...l, completed: true } : l));
 
-  // Surfaces a banner the moment ANY lesson's status flips to "failed" —
-  // catches it even if the user is looking at a different lesson right now,
-  // rather than relying on them noticing the small sidebar marker.
   useEffect(() => {
     lessonStatuses.forEach((status, i) => {
       if (status === "failed" && !seenFailuresRef.current.has(i)) {
@@ -1007,8 +977,6 @@ export default function AILearningPage() {
           error: lessons[i]?.error ?? null,
         });
       }
-      // Reset tracking if a lesson goes back to generating (e.g. after retry)
-      // so a SECOND failure on the same lesson can trigger the banner again.
       if (status !== "failed" && seenFailuresRef.current.has(i)) {
         seenFailuresRef.current.delete(i);
       }
@@ -1020,10 +988,8 @@ export default function AILearningPage() {
     setRetryingLesson(lessonIndex);
     try {
       await retryLesson(activeHistoryId, lessonIndex);
-      // Mark as generating so the UI updates immediately
       setLessonStatuses((prev) => prev.map((s, i) => i === lessonIndex ? "generating" : s));
       setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code: null, totalFrames: null } : l));
-      // Polling will pick up the new code when it's ready
       if (pollCancelRef.current) pollCancelRef.current();
       pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
         setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
@@ -1100,7 +1066,6 @@ export default function AILearningPage() {
   if (phase === "generating") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
-        {/* PaywallModal disabled for now */}
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
           <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
@@ -1114,7 +1079,6 @@ export default function AILearningPage() {
   if (phase === "upload") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
-        {/* PaywallModal disabled for now */}
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
           <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
@@ -1127,25 +1091,23 @@ export default function AILearningPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
-      {/* PaywallModal disabled for now */}
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
       <Helmet><title>AI Learning Course | Level Up</title></Helmet>
       <div className="flex h-screen relative">
         <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => {}} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
         {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
 
-        {/* Course sidebar backdrop on mobile */}
         {isMobile && courseSidebarOpen && (
           <div className="fixed inset-0 z-30 bg-black/30 backdrop-blur-[2px]" onClick={() => setCourseSidebarOpen(false)} />
         )}
         <aside className={`${
           isMobile
-            ? `fixed top-0 right-0 z-40 h-full w-72 ${courseSidebarOpen ? "translate-x-0" : "translate-x-full"}`
+            ? `fixed top-0 right-0 z-40 h-full w-[85vw] max-w-72 ${courseSidebarOpen ? "translate-x-0" : "translate-x-full"}`
             : `${courseSidebarOpen ? "w-72" : "w-0 overflow-hidden"} shrink-0`
         } transition-all duration-300 bg-white border-l border-slate-200 flex flex-col shadow-sm`}>
-          <div className="p-5 border-b border-slate-100">
+          <div className="p-4 sm:p-5 border-b border-slate-100">
             <div className="flex items-center gap-2 mb-2">
-              <Sparkles className="h-4 w-4 text-blue-600" />
+              <Sparkles className="h-4 w-4 text-blue-600 shrink-0" />
               <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">AI Course</span>
             </div>
             <h2 className="font-bold text-slate-900 text-sm leading-snug line-clamp-2">{fileName}</h2>
@@ -1167,7 +1129,6 @@ export default function AILearningPage() {
               const isFailed = status === "failed";
               const isWaiting = isGenerating && lessonStatuses.findIndex((s) => s === "generating") !== i;
               const isActive = activeSection === "video" && activeLesson === i;
-              // Only locked while still generating — accessible as soon as ready, regardless of previous lessons
               const isLocked = isGenerating;
               const progress = lessonProgresses[i] ?? 0;
               return (
@@ -1231,7 +1192,7 @@ export default function AILearningPage() {
         <main className="flex-1 overflow-y-auto">
           <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
             {failureBanner && (
-              <div className="mb-4 flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+              <div className="mb-4 flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-3 sm:px-4 py-3">
                 <XCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-red-700">
@@ -1262,19 +1223,19 @@ export default function AILearningPage() {
             {activeSection === "video" && (
               <div className="space-y-6">
                 <VideoPlayer lesson={lessons[activeLesson]} onComplete={() => markComplete(lessons[activeLesson].id)} onRetry={() => handleRetryLesson(activeLesson)} retrying={retryingLesson === activeLesson} courseId={activeHistoryId} lessonNumber={activeLesson + 1} />
-                <div className="flex items-center justify-between pt-2">
-                  <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)}><ChevronLeft className="h-4 w-4 mr-1" /> Previous</Button>
+                <div className="flex items-center justify-between gap-2 pt-2">
+                  <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className="text-xs sm:text-sm px-3 sm:px-4 shrink-0"><ChevronLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
                   {activeLesson < lessons.length - 1 ? (
-                    <Button className="bg-blue-600 hover:bg-blue-700 text-white"
+                    <Button className="bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm px-3 sm:px-4"
                       disabled={lessonStatuses[activeLesson + 1] === "generating"}
                       onClick={() => setActiveLesson((i) => i + 1)}>
                       {lessonStatuses[activeLesson + 1] === "generating"
-                        ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Next lesson generating…</>)
-                        : (<>Next Lesson <ChevronRight className="h-4 w-4 ml-1" /></>)}
+                        ? (<><Loader2 className="h-4 w-4 sm:mr-2 animate-spin" /><span className="hidden sm:inline">Next lesson generating…</span></>)
+                        : (<><span className="hidden sm:inline">Next Lesson</span><span className="sm:hidden">Next</span> <ChevronRight className="h-4 w-4 ml-1" /></>)}
                     </Button>
                   ) : (
-                    <Button className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white" disabled={!allLessonsReady} onClick={() => setActiveSection("quiz")}>
-                      <ClipboardList className="h-4 w-4 mr-2" />Take the Quiz
+                    <Button className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs sm:text-sm px-3 sm:px-4" disabled={!allLessonsReady} onClick={() => setActiveSection("quiz")}>
+                      <ClipboardList className="h-4 w-4 sm:mr-2 shrink-0" /><span className="hidden sm:inline">Take the </span>Quiz
                     </Button>
                   )}
                 </div>
@@ -1284,17 +1245,17 @@ export default function AILearningPage() {
             {activeSection === "results" && (
               <>
                 <ResultsSection answers={quizAnswers} questions={quizQuestions} />
-                <Card className="border-0 shadow-md bg-gradient-to-r from-blue-50 to-indigo-50 p-5 mt-6">
-                  <div className="flex items-start gap-4">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                      <MessageSquare className="h-5 w-5 text-blue-600" />
+                <Card className="border-0 shadow-md bg-gradient-to-r from-blue-50 to-indigo-50 p-4 sm:p-5 mt-6">
+                  <div className="flex items-start gap-3 sm:gap-4">
+                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                      <MessageSquare className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600" />
                     </div>
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-slate-800 mb-1">How was this course?</h3>
-                      <p className="text-sm text-slate-500 mb-3">Your feedback helps us improve — it only takes a minute.</p>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold text-slate-800 mb-1 text-sm sm:text-base">How was this course?</h3>
+                      <p className="text-xs sm:text-sm text-slate-500 mb-3">Your feedback helps us improve — it only takes a minute.</p>
                       <button
                         onClick={() => setShowFeedback(true)}
-                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-blue-200 text-blue-700 text-sm font-medium hover:bg-blue-50 hover:border-blue-300 transition-all"
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-blue-200 text-blue-700 text-xs sm:text-sm font-medium hover:bg-blue-50 hover:border-blue-300 transition-all"
                       >
                         <MessageSquare className="h-4 w-4" />
                         Share your feedback
