@@ -12,9 +12,10 @@ import {
   deleteCourse,
   retryLesson,
   unlockCourse,
-  getCourseStatus
+  getCourseStatus,
 } from "../api/CourseApi";
 import type { CourseFromAPI } from "../api/CourseApi";
+import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
 import {
@@ -42,7 +43,7 @@ function useIsMobile(breakpoint = 768) {
   return isMobile;
 }
 
-type AppPhase = "upload" | "generating" | "course";
+type AppPhase = "upload" | "assessment" | "course";
 type CourseSection = "video" | "quiz" | "results";
 type LessonStatus = "ready" | "generating" | "failed" | "locked";
 
@@ -398,41 +399,6 @@ function UploadPhase({ onGenerate, credits }: {
         </div>
       </div>
     </>
-  );
-}
-
-function GeneratingPhase({ fileName }: { fileName: string }) {
-  const [stepIndex, setStepIndex] = useState(0);
-  const [progress, setProgress] = useState(0);
-  const steps = ["Parsing your course materials…", "Structuring your learning path…", "Generating lesson content with AI…", "Creating voiceovers…", "Preparing your first lesson…"];
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setProgress((p) => {
-        const next = Math.min(p + 1.5, 95);
-        setStepIndex(Math.min(Math.floor(next / 20), steps.length - 1));
-        return next;
-      });
-    }, 400);
-    return () => clearInterval(interval);
-  }, []);
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex items-center justify-center">
-      <div className="text-center max-w-md mx-auto px-4">
-        <div className="w-20 h-20 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-6">
-          <Brain className="h-10 w-10 text-blue-600 animate-pulse" />
-        </div>
-        <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mb-2">Building Your Course</h2>
-        <p className="text-muted-foreground mb-2 text-sm line-clamp-2 px-4">{fileName}</p>
-        <p className="text-blue-600 font-medium mb-6 h-6 transition-all text-sm sm:text-base">{steps[stepIndex]}</p>
-        <div className="w-full bg-slate-200 rounded-full h-2 mb-3">
-          <div className="bg-gradient-to-r from-blue-500 to-indigo-500 h-2 rounded-full transition-all duration-300" style={{ width: `${Math.min(progress, 100)}%` }} />
-        </div>
-        <p className="text-xs text-muted-foreground mb-3">{Math.min(Math.round(progress), 100)}% complete</p>
-        <p className="text-xs text-slate-400">Lesson 1 plays in your browser — no download or rendering needed.</p>
-      </div>
-    </div>
   );
 }
 
@@ -807,6 +773,9 @@ function LessonStatusIcon({ status, completed, isActive }: { status: LessonStatu
 export default function AILearningPage() {
   const [phase, setPhase] = useState<AppPhase>("upload");
   const [fileName, setFileName] = useState("");
+  // Holds the topic + file the user submitted, while the optional level-check
+  // chat runs, before we actually kick off generation.
+  const [pendingGeneration, setPendingGeneration] = useState<{ name: string; file?: File | null } | null>(null);
   const router = useNavigate();
   const [lessons, setLessons] = useState<Lesson[]>(MOCK_LESSONS);
   const [lessonStatuses, setLessonStatuses] = useState<LessonStatus[]>(MOCK_LESSONS.map(() => "generating"));
@@ -971,86 +940,27 @@ export default function AILearningPage() {
     }
   };
 
- const handleUnlockCourse = async () => {
-  if (!activeHistoryId || unlockingCourse) return;
-  setUnlockingCourse(true);
-  try {
-    await unlockCourse(activeHistoryId);
-
-    // Refresh the credit counter right away — unlockCourse only returns
-    // { ok, message }, not the updated credit balance, so we re-fetch it
-    // explicitly instead of waiting for a page reload to pick it up.
-    fetchCredits();
-
-    // Optimistically flip locked lessons to "generating" so the UI doesn't
-    // sit on stale "locked" state while we wait for the server.
-    setLessonStatuses((prev) => prev.map((s) => (s === "locked" ? "generating" : s)));
-
-    if (pollCancelRef.current) pollCancelRef.current();
-
-    // Fetch the course status ONCE immediately, instead of waiting for
-    // pollCourse's first internal tick (which can take up to `intervalMs`
-    // — 5 seconds — before firing). This is what was causing the video to
-    // only appear after a manual refresh: the backend had already unlocked
-    // and started generating, but the UI had no fresh data until the next
-    // poll cycle or a full page reload re-ran the mount-time fetch.
+  const handleUnlockCourse = async () => {
+    if (!activeHistoryId || unlockingCourse) return;
+    setUnlockingCourse(true);
     try {
-      const course = await getCourseStatus(activeHistoryId);
-      setLessons((prev) =>
-        prev.map((l, i) => {
-          const a = course.lessons[i];
-          if (!a) return l;
-          return {
-            ...l,
-            title: a.title ?? l.title,
-            description: a.description ?? l.description,
-            keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints,
-            videoUrl: a.videoUrl,
-            code: a.code ?? l.code,
-            totalFrames: a.totalFrames ?? l.totalFrames,
-            error: a.error ?? null,
-          };
-        })
-      );
-      if (course.lessons.length > 0) {
-        setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
-      }
-      if (course.questions?.length) setQuizQuestions(course.questions);
-    } catch (err) {
-      console.error("Failed to fetch course status right after unlock:", err);
-      // Not fatal — the regular poll loop below will pick it up shortly.
+      await unlockCourse(activeHistoryId);
+      // Mark every "locked" lesson as "generating" immediately so the UI
+      // updates right away instead of waiting for the first poll tick.
+      setLessonStatuses((prev) => prev.map((s) => s === "locked" ? "generating" : s));
+      if (pollCancelRef.current) pollCancelRef.current();
+      pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
+        if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
+        if (course.questions?.length) setQuizQuestions(course.questions);
+      });
+    } catch (err: any) {
+      console.error("Failed to unlock course:", err);
+      alert(err?.message || "Couldn't unlock this course. Make sure you have a course credit, then try again.");
+    } finally {
+      setUnlockingCourse(false);
     }
-
-    // Start the regular polling loop as a backup / to track ongoing generation.
-    pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
-      setLessons((prev) =>
-        prev.map((l, i) => {
-          const a = course.lessons[i];
-          if (!a) return l;
-          return {
-            ...l,
-            title: a.title ?? l.title,
-            description: a.description ?? l.description,
-            keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints,
-            videoUrl: a.videoUrl,
-            code: a.code ?? l.code,
-            totalFrames: a.totalFrames ?? l.totalFrames,
-            error: a.error ?? null,
-          };
-        })
-      );
-      if (course.lessons.length > 0) {
-        setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
-      }
-      if (course.questions?.length) setQuizQuestions(course.questions);
-    });
-  } catch (err: any) {
-    console.error("Failed to unlock course:", err);
-    alert(err?.message || "Couldn't unlock this course. Make sure you have a course credit, then try again.");
-  } finally {
-    setUnlockingCourse(false);
-  }
-};
+  };
 
   useEffect(() => {
     if (!activeHistoryId) return;
@@ -1069,18 +979,42 @@ export default function AILearningPage() {
 
   const mapStatus = (s: string): LessonStatus => s === "ready" ? "ready" : s === "failed" ? "failed" : s === "locked" ? "locked" : "generating";
 
+  // Called when the user submits a topic/file from the upload screen.
+  // Instead of generating immediately, it now routes into the optional
+  // level-check chat first. The actual generation happens in runGeneration,
+  // called by the assessment's onComplete/onSkip.
   const startNewCourse = async (name: string, file?: File | null) => {
+    setPendingGeneration({ name, file });
+    setFileName(name);
+    setPhase("assessment");
+  };
+
+  // Does the real generation work. `level` is the result of the level check
+  // (or null if skipped/failed) and gets passed through to the backend so
+  // the course can be pitched appropriately.
+  const runGeneration = async (
+    name: string,
+    file: File | null | undefined,
+    level: "beginner" | "intermediate" | "advanced" | null
+  ) => {
     bgTimersRef.current.forEach(clearTimeout); bgTimersRef.current = [];
     if (pollCancelRef.current) pollCancelRef.current();
-    setFileName(name); setPhase("generating");
+    // Jump straight into the course view (not a separate "generating" screen) —
+    // the per-lesson progress bars in the course sidebar already show each
+    // lesson generating live, so a full-screen generating phase is redundant.
+    setFileName(name); setPhase("course");
+    // Show lessons in their loading state immediately while the request fires.
+    setLessons(MOCK_LESSONS.map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null })));
+    setLessonStatuses(MOCK_LESSONS.map(() => "generating"));
+    setActiveSection("video"); setActiveLesson(0);
     try {
-      const { courseId } = await startCourseGeneration(name, file);
+      const { courseId } = await startCourseGeneration(name, file, level);
       fetchCredits();
       const freshLessons = MOCK_LESSONS.map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null }));
       const freshStatuses: LessonStatus[] = freshLessons.map(() => "generating");
       setHistory((prev) => [{ id: courseId, fileName: name, createdAt: new Date(), completedLessons: 0, quizScore: null, lessons: freshLessons, lessonStatuses: freshStatuses, quizAnswers: [], quizDone: false, questions: [] }, ...prev]);
       setActiveHistoryId(courseId); setLessons(freshLessons); setLessonStatuses(freshStatuses);
-      setQuizQuestions([]); setActiveSection("video"); setActiveLesson(0); setQuizAnswers([]); setQuizDone(false); setPhase("course");
+      setQuizQuestions([]); setActiveSection("video"); setActiveLesson(0); setQuizAnswers([]); setQuizDone(false);
       seenFailuresRef.current.clear(); setFailureBanner(null);
       pollCancelRef.current = pollCourse(courseId, (course: CourseFromAPI) => {
         setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
@@ -1092,6 +1026,15 @@ export default function AILearningPage() {
       setPhase("upload");
       if (!err?.status || err.status !== 402) alert("Failed to generate course. Please try again.");
     }
+  };
+
+  // Bridges the assessment result into generation. Used by both onComplete
+  // (level determined) and onSkip (level = null).
+  const handleAssessmentDone = (level: "beginner" | "intermediate" | "advanced" | null) => {
+    if (!pendingGeneration) { setPhase("upload"); return; }
+    const { name, file } = pendingGeneration;
+    setPendingGeneration(null);
+    runGeneration(name, file, level);
   };
 
   const restoreEntry = (entry: HistoryEntry) => {
@@ -1111,15 +1054,21 @@ export default function AILearningPage() {
 
   const allLessonsReady = lessonStatuses.every((s) => s === "ready" || s === "failed");
 
-  if (phase === "generating") {
+  if (phase === "assessment") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} />}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => { setPendingGeneration(null); setPhase("upload"); }} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
-          <div className="flex-1 overflow-y-auto"><GeneratingPhase fileName={fileName} /></div>
+          <div className="flex-1 overflow-hidden flex flex-col bg-white/40">
+            <LevelAssessmentChat
+              topic={pendingGeneration?.name || fileName}
+              onComplete={(level) => handleAssessmentDone(level)}
+              onSkip={() => handleAssessmentDone(null)}
+            />
+          </div>
         </div>
       </div>
     );

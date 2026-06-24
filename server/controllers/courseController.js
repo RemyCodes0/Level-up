@@ -19,6 +19,9 @@ async function generateCourseHandler(req, res) {
   try {
     const topic = req.body.topic || "";
     const pdfBuffer = req.file?.buffer ?? null;
+    // Level from the optional pre-course chat ("beginner"|"intermediate"|
+    // "advanced"). Absent/empty if the user skipped the chat.
+    const level = req.body.level || null;
 
     if (!topic && !pdfBuffer) {
       res.status(400).json({ error: "Topic or file required" });
@@ -42,7 +45,7 @@ async function generateCourseHandler(req, res) {
     }
 
     res.json({ courseId: course._id, status: "generating" });
-    processCourse(course._id.toString(), topic, pdfBuffer, !!req.usingFreeTrial);
+    processCourse(course._id.toString(), topic, pdfBuffer, !!req.usingFreeTrial, level);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to start course generation" });
@@ -176,11 +179,11 @@ async function buildLessonsInPairs(courseId, lessons) {
 // credits and calls unlockRemainingLessonsHandler. This is what actually
 // saves the generation cost for free-trial users: 1 lesson's worth of
 // Claude/TTS calls instead of 6.
-async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = false) {
+async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = false, level = null) {
   const courseStart = Date.now();
   try {
     console.log(`[${courseId}] Generating course plan...`);
-    const { lessons, questions } = await generateCoursePlan(topic, null, pdfBuffer);
+    const { lessons, questions } = await generateCoursePlan(topic, null, pdfBuffer, level);
 
     await Course.findByIdAndUpdate(courseId, {
       lessons: lessons.map((l, i) => ({

@@ -4,10 +4,6 @@ const { reviewGeneratedCode } = require("./codeCriticService");
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// Safely extracts and parses a JSON object from a model response that may
-// contain stray text, markdown fences, or a conversational preamble
-// (e.g. "I'd be happy to help, but..."). Mirrors the same defensive parsing
-// already used in sceneService.js.
 function safeParseJson(text) {
   let clean = text.replace(/```json|```/g, "").trim();
 
@@ -22,7 +18,23 @@ function safeParseJson(text) {
   return JSON.parse(clean);
 }
 
-async function generateCoursePlan(topic, pdfText, pdfBuffer, maxAttempts = 3) {
+// Maps the level (from the pre-course chat) into a concrete instruction the
+// course planner can act on. Returns "" when no level was provided (user
+// skipped the chat), so behaviour is unchanged in that case.
+function buildLevelGuidance(level) {
+  switch (level) {
+    case "beginner":
+      return `\nLEARNER LEVEL: BEGINNER. Assume no prior knowledge. Start from first principles, define every term plainly, use simple everyday analogies, and keep math/jargon to a minimum. Build confidence gradually.`;
+    case "intermediate":
+      return `\nLEARNER LEVEL: INTERMEDIATE. Assume the learner knows the basics. Briefly recap fundamentals, then focus on deeper mechanisms, connections between ideas, and worked examples with moderate technical depth.`;
+    case "advanced":
+      return `\nLEARNER LEVEL: ADVANCED. Assume strong existing knowledge. Skip the basics, move quickly, and focus on nuance, edge cases, rigorous detail, and higher-level synthesis. Use precise technical language freely.`;
+    default:
+      return "";
+  }
+}
+
+async function generateCoursePlan(topic, pdfText, pdfBuffer, level = null, maxAttempts = 3) {
   const jsonSchema = `
 {
   "lessons": [
@@ -44,19 +56,20 @@ async function generateCoursePlan(topic, pdfText, pdfBuffer, maxAttempts = 3) {
   ]
 }`;
 
+  const levelGuidance = buildLevelGuidance(level);
+
   const rules = `
 Rules:
 - All content specific to the topic, never generic
 - Exactly 4 keyPoints per lesson
 - 20 questions distributed across the 6 lessons
 - "correct" is the 0-based index
-- Pure JSON only, no backticks
+- Pure JSON only, no backticks${levelGuidance}
 - CRITICAL: Respond with ONLY the JSON object. No commentary, no acknowledgment, no clarifying questions — even if the input is unusually long, looks like a document rather than a short topic, or seems ambiguous. If the input is long or document-like, identify its single most central subject and build the course plan around that. Never refuse and never ask a follow-up question — always produce the JSON.`;
 
   let messages;
 
   if (pdfBuffer) {
-    // Send the PDF directly to Claude — handles images, equations, and diagrams
     messages = [
       {
         role: "user",
@@ -83,7 +96,6 @@ ${rules}`,
       },
     ];
   } else {
-    // Text topic or pre-extracted PDF text
     const context = pdfText
       ? `The student uploaded course material:\n\n${pdfText.slice(0, 6000)}`
       : `The student wants to learn about: ${topic}`;
@@ -135,11 +147,6 @@ ${rules}
   );
 }
 
-// Static rules block, cached across all 6 lesson-code calls per course.
-// Now includes a complete worked example, not just abstract rules — a
-// single correctly-formed example scene anchors the model's actual output
-// pattern far more reliably than rules alone, which is one of the most
-// effective levers for reducing error rates in code generation specifically.
 const CODE_GEN_STATIC_RULES = `
 You are an expert Remotion motion-graphics developer.
 
@@ -163,6 +170,13 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
    - BAD: Array.from({length: n}, (_, i) => interpolate(frame, [0, d], arr[i])) — arr[i] might be undefined.
    - GOOD: interpolate(frame, [0, 30], [0, 1])
    - GOOD: interpolate(frame, [0, 15, 30], [0, 1, 0])
+   - CLAMP TO STOP RUNAWAY MOTION — this is critical for visual quality:
+     By default interpolate KEEPS EXTRAPOLATING past the input range, so a value meant to stop at frame 30 keeps growing/moving forever and elements fly OFF-SCREEN. ALWAYS add { extrapolateLeft: "clamp", extrapolateRight: "clamp" } to any interpolate whose output should settle and stay put (scale, position, size, translateX/Y, width, height, radius).
+     - BAD: interpolate(frame, [0, 30], [0, 1.5]) — keeps scaling past 1.5, element grows until it leaves the screen.
+     - GOOD: interpolate(frame, [0, 30], [0, 1.5], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) — grows to 1.5 then HOLDS.
+     - GOOD for slide-in that stays put: interpolate(frame, [0, 20], [-200, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })
+   - KEEP THINGS ON SCREEN: any element's final scale must stay roughly ≤ 1.5, and final x/y positions must keep it fully within a 1920x1080 frame. Never animate position or size toward a value that would push the element past the screen edges.
+   - For INTENTIONAL continuous motion (rotation, orbiting, pulsing), do NOT use interpolate — use bounded periodic math instead: Math.sin(frame / k) and Math.cos(frame / k) oscillate forever between -1 and 1 so they never run away. transform: rotate uses (frame * speed) % 360 to loop cleanly. This is how you get endless motion that never leaves the screen.
    - NEVER use Easing — it is not available in this environment.
    - When computing ranges with Array.from or .map, ALWAYS hardcode both arrays or verify lengths match BEFORE calling interpolate.
 9. The sum of all durationInFrames MUST equal exactly the total given below.
@@ -183,7 +197,8 @@ function TitleCard({ text }: { text: string }) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const scale = spring({ frame, fps, config: { damping: 12 } });
-  const opacity = interpolate(frame, [0, 15], [0, 1]);
+  // Clamped so opacity settles at 1 and never overshoots.
+  const opacity = interpolate(frame, [0, 15], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
 
   return (
     <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", backgroundColor: "#1e293b" }}>
@@ -210,13 +225,11 @@ export const LessonExample = () => {
 };
 \`\`\`
 
-Notice in the example: every interpolate() call has exactly 3 arguments with literal arrays ([0, 15], [0, 1]) of matching length, the Audio tag's src is a plain string passed directly, durationInFrames values are plain integer literals, and helper components live above the main exported component. Follow this exact shape.
+Notice in the example: every interpolate() call has exactly 3 arguments with literal arrays ([0, 15], [0, 1]) of matching length, position/scale animations are CLAMPED so they settle instead of running off screen, the Audio tag's src is a plain string passed directly, durationInFrames values are plain integer literals, and helper components live above the main exported component. Follow this exact shape.
 
 Begin with imports, then any helper components, then the main component. Make sure the final line closes the component cleanly.
 `;
 
-// The per-call portion — lesson title + the exact scene table + total frames.
-// This part DOES change every call, so it stays as a normal (uncached) block.
 function buildPerLessonContent(lesson, componentName, scenes, totalFrames) {
   const sceneTable = scenes
     .map(
@@ -239,19 +252,6 @@ ${sceneTable}
 `;
 }
 
-// Generates the synced Remotion TSX code for ONE lesson using measured scenes.
-// Runs on Claude Sonnet — the model that has actually produced reliable,
-// high-quality animation code in this pipeline (Haiku, GLM-5.2, and GPT-4.1
-// were all tried for this specific task and underperformed). The static
-// rules block is marked cacheable so repeated calls (one per lesson, 6 per
-// course) are billed at a fraction of normal input price for that
-// unchanging portion.
-//
-// temperature is set to 0.4 (down from the API default of 1.0) — lower
-// temperature trades away some creative variation between scenes in
-// exchange for more consistent, rule-following output, which directly
-// reduces the rate of rule-violation errors (interpolate misuse, wrong
-// import, etc.) this whole pipeline has been fighting.
 async function generateLessonCode(
   lesson,
   componentName,
@@ -314,15 +314,8 @@ async function generateLessonCode(
         .replace(/```tsx|```typescript|```ts|```jsx|```/g, "")
         .trim();
 
-      // validateGeneratedCode now also runs semantic checks (interpolate
-      // shape, forbidden imports, duration-sum auto-fix) and may return a
-      // CORRECTED version of the code (e.g. a small duration drift fixed
-      // on the last scene) — always use the returned value, not the raw one.
       const validatedCode = validateGeneratedCode(code, componentName, totalFrames);
 
-      // Optional qualitative review — off by default (ENABLE_CODE_CRITIC).
-      // Never blocks: this only logs a warning, since the code already
-      // passed real structural/syntax validation above.
       const review = await reviewGeneratedCode(validatedCode, lesson);
       if (!review.skipped && review.ok === false) {
         console.warn(

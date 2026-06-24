@@ -41,11 +41,13 @@ export interface CourseFromAPI {
 // ── Start course generation — returns courseId immediately ───────────────────
 export async function startCourseGeneration(
   topic: string,
-  file?: File | null
+  file?: File | null,
+  level?: "beginner" | "intermediate" | "advanced" | null
 ): Promise<{ courseId: string; status: string }> {
   const formData = new FormData();
   if (topic) formData.append("topic", topic);
   if (file) formData.append("file", file);
+  if (level) formData.append("level", level);
 
   const res = await fetch(`${BASE_URL}/api/course/generate`, {
     method: "POST",
