@@ -7,24 +7,16 @@ const WHOP_API_KEY = process.env.WHOP_API_KEY;
 const WHOP_PLAN_ID = process.env.WHOP_PLAN_ID;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
-// Whop gives secrets as "ws_..." but standardwebhooks (used internally by
-// @whop/sdk) requires the format "whsec_<base64>". We transform it once at
-// startup so every webhook call is ready to go.
-function buildWebhookSecret(raw) {
+// Per Whop's own docs example, the SDK wants the raw "ws_..." secret
+// base64-encoded as a whole string (like JS btoa), and the constructor
+// option is named `webhookKey` — NOT `webhookSecret`.
+// https://docs.whop.com/developer/guides/webhooks
+function buildWebhookKey(raw) {
   if (!raw) throw new Error("WHOP_WEBHOOK_SECRET is not set");
-  if (raw.startsWith("whsec_")) return raw;
-
-  const hex = raw.startsWith("ws_") ? raw.slice(3) : raw;
-
-  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) {
-    throw new Error(`WHOP_WEBHOOK_SECRET doesn't look like valid hex: ${raw}`);
-  }
-
-  const bytes = Buffer.from(hex, "hex");
-  return "whsec_" + bytes.toString("base64");
+  return Buffer.from(raw, "utf8").toString("base64");
 }
 
-const WHOP_WEBHOOK_SECRET = buildWebhookSecret(process.env.WHOP_WEBHOOK_SECRET);
+const WHOP_WEBHOOK_KEY = buildWebhookKey(process.env.WHOP_WEBHOOK_SECRET);
 
 // POST /api/payment/checkout
 exports.createCheckout = async (req, res) => {
@@ -39,7 +31,6 @@ exports.createCheckout = async (req, res) => {
 
     console.log("Whop checkout session response:", JSON.stringify(session));
 
-    // purchase_url confirmed from your real log output
     const checkoutUrl = session.purchase_url;
     if (!checkoutUrl) {
       console.error("No purchase_url in Whop response:", session);
@@ -73,13 +64,12 @@ exports.getCredits = async (req, res) => {
 // POST /api/payment/webhook/whop
 exports.whopWebhookHandler = async (req, res) => {
   // Always respond 200 quickly so Whop doesn't retry unnecessarily.
-  // We do the real work after sending the response.
   res.status(200).send("OK");
 
   try {
     const client = new Whop({
       apiKey: WHOP_API_KEY,
-      webhookSecret: WHOP_WEBHOOK_SECRET,
+      webhookKey: WHOP_WEBHOOK_KEY, // <-- correct option name, was `webhookSecret`
     });
 
     const rawBody = req.body.toString("utf8");
@@ -119,7 +109,6 @@ exports.whopWebhookHandler = async (req, res) => {
       return;
     }
 
-    // Idempotency check — skip if we already processed this payment
     const paymentId = payload?.id;
     if (paymentId) {
       const alreadyProcessed = await User.findOne({ processedWebhooks: paymentId });
