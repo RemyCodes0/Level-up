@@ -24,6 +24,22 @@ app.use(cors({
     : true,
   credentials: true,
 }));
+
+// ──────────────────────────────────────────────────────────────────────────
+// IMPORTANT: paymentRoutes is mounted BEFORE express.json().
+// It contains the Whop webhook endpoint, which uses express.raw() internally
+// to get the untouched request body for signature verification. If
+// express.json() ran first (as it did before this fix), it would consume
+// and parse the body for every route — including this one — leaving
+// express.raw() with nothing to read and causing webhook signature
+// verification to fail with "No matching signature found".
+//
+// Every other router below still gets JSON parsing normally, since
+// express.json() is registered right after this line and applies globally
+// to all routes that haven't already consumed the body.
+// ──────────────────────────────────────────────────────────────────────────
+app.use('/api/payment', paymentRoutes);
+
 app.use(express.json());
 
 app.use('/api/auth', authRoutes);
@@ -31,7 +47,6 @@ app.use('/api/tutor', tutorRoutes);
 app.use('/api/book/', bookRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/course', courseRoutes);
-app.use('/api/payment', paymentRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/export', exportRoutes)
 // app.use('/api', checkoutRouter);
