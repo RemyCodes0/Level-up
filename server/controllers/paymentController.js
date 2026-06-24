@@ -12,8 +12,9 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 // startup so every webhook call is ready to go.
 function buildWebhookSecret(raw) {
   if (!raw) throw new Error("WHOP_WEBHOOK_SECRET is not set");
-  if (raw.startsWith("whsec_")) return raw; // already in the right format
-  return "whsec_" + Buffer.from(raw).toString("base64");
+  if (raw.startsWith("whsec_")) return raw;
+  if (raw.startsWith("ws_")) return "whsec_" + raw.slice(3); // strip "ws_", keep the hex
+  return "whsec_" + raw;
 }
 
 const WHOP_WEBHOOK_SECRET = buildWebhookSecret(process.env.WHOP_WEBHOOK_SECRET);
