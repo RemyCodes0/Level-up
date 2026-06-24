@@ -125,7 +125,7 @@ exports.whopWebhookHandler = async (req, res) => {
       Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v])
     );
 
-    const webhookData = whopsdk.webhooks.unwrap(rawBody, { headers });
+    const webhookData = client.webhooks.unwrap(rawBody, { headers });
 
     // Log every incoming event's type/action while we're still figuring out
     // which exact event Whop fires for a completed one-time purchase —
