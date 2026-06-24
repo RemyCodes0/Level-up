@@ -13,8 +13,15 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 function buildWebhookSecret(raw) {
   if (!raw) throw new Error("WHOP_WEBHOOK_SECRET is not set");
   if (raw.startsWith("whsec_")) return raw;
-  if (raw.startsWith("ws_")) return "whsec_" + raw.slice(3); // strip "ws_", keep the hex
-  return "whsec_" + raw;
+
+  const hex = raw.startsWith("ws_") ? raw.slice(3) : raw;
+
+  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) {
+    throw new Error(`WHOP_WEBHOOK_SECRET doesn't look like valid hex: ${raw}`);
+  }
+
+  const bytes = Buffer.from(hex, "hex");
+  return "whsec_" + bytes.toString("base64");
 }
 
 const WHOP_WEBHOOK_SECRET = buildWebhookSecret(process.env.WHOP_WEBHOOK_SECRET);
