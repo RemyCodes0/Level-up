@@ -1,166 +1,160 @@
-const crypto = require("crypto");
+// controllers/paymentController.js
+//
+// Whop integration. Two pieces:
+//   1. createCheckout — calls Whop's REST API to create a checkout session
+//      tied to our specific plan, tagging it with our internal userId via
+//      metadata so the webhook knows who to credit.
+//   2. whopWebhookHandler — listens for payment.succeeded, verifies the
+//      webhook signature using Whop's own SDK, and adds 1 credit to the
+//      right user's account.
+//
+// IMPORTANT — things I could not verify without live API access and that
+// YOU need to confirm on your first real test:
+//   - The exact field name Whop returns for the checkout URL in the
+//     create-checkout-session response (I'm guessing `purchase_url` based
+//     on common patterns in their docs, but log the full response on your
+//     first test and adjust CHECKOUT_URL_FIELD below if it's named
+//     differently, e.g. `checkout_url` or `url`).
+//   - The exact path to metadata inside the payment.succeeded webhook
+//     payload (I'm reading webhookData.data.metadata?.userId based on the
+//     webhook examples shown in Whop's docs, but confirm this on your
+//     first real test purchase).
+
 const User = require("../models/User");
 
-const DODO_API_KEY = process.env.DODO_API_KEY;
-const DODO_WEBHOOK_SECRET = process.env.DODO_WEBHOOK_SECRET;
-const DODO_PRODUCT_ID = process.env.DODO_PRODUCT_ID;
-const CLIENT_URL = process.env.CLIENT_URL || "https://levelup-snowy.vercel.app";
+const WHOP_API_KEY = process.env.WHOP_API_KEY;
+const WHOP_PLAN_ID = process.env.WHOP_PLAN_ID; // the plan_... ID for the $4.99 course credit
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
-// ── Fetch with timeout + retry (handles transient ETIMEDOUT/network blips) ──
-async function fetchWithRetry(url, options, { timeoutMs = 25000, maxRetries = 4 } = {}) {
-  let lastErr;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(url, { ...options, signal: controller.signal });
-      clearTimeout(timer);
-      return response;
-    } catch (err) {
-      clearTimeout(timer);
-      lastErr = err;
-      const isTimeout = err.name === "AbortError" || err.cause?.code === "ETIMEDOUT" || err.cause?.code === "UND_ERR_CONNECT_TIMEOUT";
-      console.error(`[checkout] attempt ${attempt}/${maxRetries} failed (${isTimeout ? "timeout" : err.message})`);
-      if (attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, attempt * 1500)); // 1.5s, 3s, 4.5s backoff
-      }
-    }
-  }
-  throw lastErr;
-}
+// Guessed field name for the checkout URL in Whop's response — VERIFY on
+// your first test (see note above) and update this if needed.
+const CHECKOUT_URL_FIELD = "purchase_url";
 
-// ── Create a Dodo checkout session ───────────────────────────────────────────
-async function createCheckout(req, res) {
+// POST /api/payment/checkout — creates a Whop checkout session for the
+// current user and returns the URL to redirect them to.
+exports.createCheckout = async (req, res) => {
   try {
-    const user = req.user;
-    const quantity = Math.min(Math.max(parseInt(req.body.quantity) || 1, 1), 10); // clamp 1-10
+    // Using the official @whop/sdk package instead of a hand-constructed
+    // fetch URL — the previous version guessed at the exact endpoint path
+    // and host, which is the more likely root cause of the 401 "no
+    // permission" error (a wrong route can come back as a permission
+    // error rather than a clean 404). The SDK handles routing internally,
+    // removing that guesswork entirely.
+    //
+    // NOTE: I could not verify the exact method name on the installed SDK
+    // without live package access. Based on Whop's own Pipedream
+    // integration example, it's likely `createCheckoutSession` directly on
+    // the client. If your editor's autocomplete shows a different method
+    // name on `whopsdk` (e.g. nested under `whopsdk.checkoutSessions.create`),
+    // use that instead — check your installed @whop/sdk's type definitions.
+    // FIXED based on real diagnostic output: there is no "WhopServerSdk"
+    // export — the package exports "Whop" (and the module itself is
+    // directly callable), following the same pattern as OpenAI's SDK.
+    // VERIFY the exact checkout-creation method name yourself using your
+    // editor's autocomplete on `client.` — I can't confirm that part
+    // without live access to the type definitions, only the constructor
+    // shape, which the diagnostic output confirmed.
+    const { Whop } = require("@whop/sdk");
+    const client = new Whop({ apiKey: WHOP_API_KEY });
 
-    const response = await fetchWithRetry("https://test.dodopayments.com/payments", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${DODO_API_KEY}`,
-      },
-      body: JSON.stringify({
-        billing: {
-          city: "N/A",
-          country: "US",
-          state: "N/A",
-          street: "N/A",
-          zipcode: "00000",
-        },
-        customer: {
-          email: user.email,
-          name: user.name,
-          create_new_customer: false,
-        },
-        product_cart: [
-          {
-            product_id: DODO_PRODUCT_ID,
-            quantity,
-          },
-        ],
-        metadata: {
-          userId: user._id.toString(),
-          quantity: quantity.toString(),
-        },
-        payment_link: true,
-        return_url: `${CLIENT_URL}/ai_tutor?payment=success`,
-      }),
+    // FIXED based on real diagnostic output: there is no createCheckoutSession
+    // method or checkoutSessions resource at all. The actual resource is
+    // "checkoutConfigurations", confirmed directly from the installed
+    // package's prototype methods (list, create, retrieve).
+    const session = await client.checkoutConfigurations.create({
+      planId: WHOP_PLAN_ID,
+      metadata: { userId: req.user._id.toString() },
+      redirectUrl: `${FRONTEND_URL}/ai_tutor?payment=success`,
     });
 
-    const data = await response.json();
+    // Log the full response on your first real test — this tells us the
+    // actual shape of what the SDK returns, since I can't verify it without
+    // live access. Look for whatever field holds the checkout URL.
+    console.log("Whop checkout session response:", JSON.stringify(session));
 
-    if (!response.ok) {
-      console.error("Dodo checkout error:", data);
-      return res.status(500).json({ error: "Failed to create checkout" });
+    const checkoutUrl = session[CHECKOUT_URL_FIELD] || session.url || session.checkout_url;
+    if (!checkoutUrl) {
+      console.error(
+        `No checkout URL found under "${CHECKOUT_URL_FIELD}", "url", or "checkout_url" — check the logged response above for the real field name.`
+      );
+      return res.status(502).json({ message: "Checkout session created but no URL returned" });
     }
 
-    res.json({ checkoutUrl: data.payment_link });
+    res.json({ checkoutUrl });
   } catch (err) {
-    console.error("createCheckout error:", err);
-    const isTimeout = err.name === "AbortError" || err.cause?.code === "ETIMEDOUT" || err.cause?.code === "UND_ERR_CONNECT_TIMEOUT";
-    res.status(isTimeout ? 504 : 500).json({
-      error: isTimeout ? "checkout_timeout" : "checkout_failed",
-      message: isTimeout
-        ? "Payment provider took too long to respond. Please try again in a moment."
-        : "Failed to create checkout",
-    });
+    console.error("Whop checkout creation failed:", err?.message || err);
+    return res.status(502).json({ message: "Failed to create checkout session" });
   }
-}
+};
 
-// ── Verify Dodo webhook signature ─────────────────────────────────────────────
-function verifyWebhookSignature(payload, headers) {
-  const webhookId = headers["webhook-id"];
-  const webhookTimestamp = headers["webhook-timestamp"];
-  const webhookSignature = headers["webhook-signature"];
-
-  if (!webhookId || !webhookTimestamp || !webhookSignature) return false;
-
-  const signedContent = `${webhookId}.${webhookTimestamp}.${payload}`;
-  const secretBytes = Buffer.from(DODO_WEBHOOK_SECRET.replace("whsec_", ""), "base64");
-  const hmac = crypto.createHmac("sha256", secretBytes);
-  const computedSignature = hmac.update(signedContent).digest("base64");
-
-  const signatures = webhookSignature.split(" ");
-  return signatures.some((sig) => {
-    const sigValue = sig.split(",")[1];
-    return sigValue === computedSignature;
-  });
-}
-
-// ── Handle Dodo webhook ───────────────────────────────────────────────────────
-async function handleWebhook(req, res) {
-  const rawBody = req.rawBody;
-
-  if (!verifyWebhookSignature(rawBody, req.headers)) {
-    console.warn("[webhook] Invalid signature");
-    return res.status(401).json({ error: "Invalid signature" });
-  }
-
-  let event;
-  try {
-    event = JSON.parse(rawBody);
-  } catch {
-    return res.status(400).json({ error: "Invalid JSON" });
-  }
-
-  console.log("[webhook] Event received:", event.type);
-
-  if (event.type === "payment.succeeded") {
-    const userId = event.data?.metadata?.userId;
-    const quantity = parseInt(event.data?.metadata?.quantity) || 1;
-
-    if (!userId) {
-      console.warn("[webhook] No userId in metadata");
-      return res.status(200).json({ received: true });
-    }
-
-    try {
-      await User.findByIdAndUpdate(userId, {
-        $inc: { courseCredits: quantity },
-      });
-      console.log(`[webhook] Added ${quantity} credit(s) to user ${userId}`);
-    } catch (err) {
-      console.error("[webhook] Failed to add credits:", err);
-    }
-  }
-
-  res.status(200).json({ received: true });
-}
-
-// ── Get current user's credit balance ────────────────────────────────────────
-async function getCredits(req, res) {
+// GET /api/payment/credits — unchanged from before, returns the user's
+// current credit/free-trial status.
+exports.getCredits = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select("courseCredits freeTrialUsed");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
     res.json({
-      courseCredits: user.courseCredits,
-      freeTrialUsed: user.freeTrialUsed,
-      canGenerate: !user.freeTrialUsed || user.courseCredits > 0,
+      courseCredits: user.courseCredits ?? 0,
+      freeTrialUsed: !!user.freeTrialUsed,
+      canGenerate: !user.freeTrialUsed || (user.courseCredits ?? 0) > 0,
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to get credits" });
+    console.error("getCredits error:", err);
+    res.status(500).json({ message: "Failed to fetch credits" });
   }
-}
+};
 
-module.exports = { createCheckout, handleWebhook, getCredits };
+// POST /api/payment/webhook/whop — Whop calls this when a payment event
+// happens. Must receive the RAW request body (not pre-parsed JSON) for
+// signature verification to work — see the express.raw() middleware note
+// in payment.routes.js.
+exports.whopWebhookHandler = async (req, res) => {
+  try {
+    // Using Whop's own SDK for signature verification rather than hand-
+    // rolling it, since this is the exact pattern shown in their official
+    // docs and getting webhook verification wrong is a real security risk.
+    // npm install @whop/sdk
+    // Same fix as createCheckout above — "WhopServerSdk" doesn't exist,
+    // the real export is "Whop".
+    const { Whop } = require("@whop/sdk");
+    const client = new Whop({ apiKey: WHOP_API_KEY, webhookSecret: process.env.WHOP_WEBHOOK_SECRET });
+
+    const rawBody = req.body.toString("utf8");
+    const headers = Object.fromEntries(
+      Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v])
+    );
+
+    const webhookData = whopsdk.webhooks.unwrap(rawBody, { headers });
+
+    // Log every incoming event's type/action while we're still figuring out
+    // which exact event Whop fires for a completed one-time purchase —
+    // check your Render logs after a real test purchase to see what shows
+    // up here, then we can narrow the condition below to match it exactly.
+    console.log("Whop webhook received:", webhookData.type || webhookData.action, JSON.stringify(webhookData.data));
+
+    if (
+      webhookData.type === "payment.succeeded" ||
+      webhookData.action === "payment.succeeded" ||
+      webhookData.type === "invoice_paid" ||
+      webhookData.action === "invoice_paid" ||
+      webhookData.type === "membership_activated" ||
+      webhookData.action === "membership_activated"
+    ) {
+      const payload = webhookData.data;
+      const userId = payload?.metadata?.userId;
+
+      if (!userId) {
+        console.warn("payment.succeeded webhook had no userId in metadata — cannot credit anyone:", payload);
+      } else {
+        await User.findByIdAndUpdate(userId, { $inc: { courseCredits: 1 } });
+        console.log(`Credited 1 course credit to user ${userId} via Whop payment ${payload.id}`);
+      }
+    }
+
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("whopWebhookHandler error:", err);
+    res.status(200).send("Received");
+  }
+};

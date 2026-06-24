@@ -13,7 +13,7 @@ const lessonSchema = new mongoose.Schema({
   totalFrames: Number, // total duration in frames (sum of all scene durations)
   status: {
     type: String,
-    enum: ["rendering", "ready", "failed"],
+    enum: ["rendering", "ready", "failed", "locked"],
     default: "rendering",
   },
   // Set when status is "failed" — the actual error message from the last
@@ -42,6 +42,14 @@ const courseSchema = new mongoose.Schema(
       index: true,
     },
     topic: String,
+    // True if this course was generated using the user's free trial.
+    // While true, only lesson 1 gets built — lessons 2-6 stay "locked"
+    // until the user buys credits and unlocks the rest of THIS course
+    // (see unlockRemainingLessonsHandler). Flips to false once unlocked.
+    isFreeTrialCourse: {
+      type: Boolean,
+      default: false,
+    },
     status: {
       type: String,
       enum: ["generating", "ready", "failed"],

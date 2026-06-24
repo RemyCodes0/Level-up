@@ -7,6 +7,7 @@ const {
   getShowcaseCoursesHandler,
   retryLessonHandler,
   deleteCourseHandler,
+  unlockRemainingLessonsHandler,
 } = require("../controllers/courseController");
 
 // TODO: import YOUR existing auth middleware here.
@@ -26,6 +27,7 @@ router.get("/showcase", getShowcaseCoursesHandler);
 // All other course routes require a logged-in user (so req.user exists)
 router.post("/generate", protect, checkCredits, upload.single("file"), generateCourseHandler);
 router.post("/:courseId/retry/:lessonIndex", protect, retryLessonHandler);
+router.post("/:courseId/unlock", protect, unlockRemainingLessonsHandler);
 router.get("/status/:courseId", protect, getCourseStatusHandler);
 router.get("/list", protect, listCoursesHandler);
 router.delete("/:courseId", protect, deleteCourseHandler);

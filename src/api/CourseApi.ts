@@ -17,7 +17,7 @@ export interface LessonFromAPI {
   // Browser-compiled player fields
   code: string | null;
   totalFrames: number | null;
-  status: "rendering" | "ready" | "failed";
+  status: "rendering" | "ready" | "failed" | "locked";
   error?: string | null;
 }
 
@@ -95,6 +95,21 @@ export async function retryLesson(courseId: string, lessonIndex: number): Promis
     headers: { ...authHeaders() },
   });
   if (!res.ok) throw new Error("Failed to retry lesson");
+}
+
+// ── Unlock the rest of a free-trial course (costs 1 credit) ─────────────────
+// Throws an error with a "no_credits" message if the user doesn't have a
+// credit available — the caller should catch this and prompt them to buy one.
+export async function unlockCourse(courseId: string): Promise<{ ok: true; message: string }> {
+  const res = await fetch(`${BASE_URL}/api/course/${courseId}/unlock`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.message || data.error || "Failed to unlock course");
+  }
+  return data;
 }
 
 // ── Fetch the curated public showcase courses (no auth required) ────────────

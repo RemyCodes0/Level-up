@@ -29,6 +29,7 @@ async function generateCourseHandler(req, res) {
       userId: req.user._id,
       topic: topic || req.file?.originalname,
       status: "generating",
+      isFreeTrialCourse: !!req.usingFreeTrial,
       lessons: [],
       questions: [],
     });
@@ -41,7 +42,7 @@ async function generateCourseHandler(req, res) {
     }
 
     res.json({ courseId: course._id, status: "generating" });
-    processCourse(course._id.toString(), topic, pdfBuffer);
+    processCourse(course._id.toString(), topic, pdfBuffer, !!req.usingFreeTrial);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to start course generation" });
@@ -158,31 +159,50 @@ async function buildLesson(courseId, lesson) {
 }
 
 
+// Builds a list of lessons 2 at a time, in order — shared by processCourse
+// (the normal path) and unlockRemainingLessonsHandler (resuming a
+// free-trial course after the user buys credits), so the pairing logic
+// only lives in one place.
+async function buildLessonsInPairs(courseId, lessons) {
+  for (let i = 0; i < lessons.length; i += 2) {
+    const batch = lessons.slice(i, i + 2);
+    await Promise.allSettled(batch.map((l) => buildLesson(courseId, l)));
+  }
+}
+
 // ── Orchestrates the whole course ────────────────────────────────────────────
-async function processCourse(courseId, topic, pdfBuffer) {
+// isFreeTrialCourse: if true, ONLY lesson 1 is built — lessons 2-6 are left
+// in "locked" status (no AI calls made for them at all) until the user buys
+// credits and calls unlockRemainingLessonsHandler. This is what actually
+// saves the generation cost for free-trial users: 1 lesson's worth of
+// Claude/TTS calls instead of 6.
+async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = false) {
   const courseStart = Date.now();
   try {
     console.log(`[${courseId}] Generating course plan...`);
     const { lessons, questions } = await generateCoursePlan(topic, null, pdfBuffer);
 
     await Course.findByIdAndUpdate(courseId, {
-      lessons: lessons.map((l) => ({
+      lessons: lessons.map((l, i) => ({
         ...l,
-        status: "rendering",
+        // Lesson 1 always renders. For free-trial courses, lessons 2-6
+        // start "locked" instead of "rendering" — no generation work is
+        // queued for them at all until the course is unlocked.
+        status: isFreeTrialCourse && i > 0 ? "locked" : "rendering",
         code: null,
         totalFrames: null,
       })),
       questions,
     });
 
-    // All 6 lessons build in pairs of 2, from the start — [1,2], [3,4], [5,6].
-    // 3 sequential stages total instead of 4 (lesson 1 alone + 3 batches),
-    // so the whole course finishes sooner. Trade-off: lesson 1 now shares
-    // resources with lesson 2 while generating, so it takes a bit longer
-    // to become watchable than it did when it had the API/CPU to itself.
-    for (let i = 0; i < lessons.length; i += 2) {
-      const batch = lessons.slice(i, i + 2);
-      await Promise.allSettled(batch.map((l) => buildLesson(courseId, l)));
+    if (isFreeTrialCourse) {
+      // Only build lesson 1 — lessons 2-6 stay locked, costing nothing,
+      // until the user unlocks them via unlockRemainingLessonsHandler.
+      await buildLesson(courseId, lessons[0]);
+    } else {
+      // Paid course (or an unlocked former free-trial course) — build all
+      // 6 lessons in pairs of 2, as before.
+      await buildLessonsInPairs(courseId, lessons);
     }
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
@@ -341,6 +361,75 @@ async function retryLessonHandler(req, res) {
   }
 }
 
+// ── Unlock the rest of a free-trial course ──────────────────────────────────
+// Called after the user buys credits and wants to continue a course that
+// was capped at lesson 1. Costs 1 credit (same price as any other course),
+// then builds lessons 2-6 in pairs, same as a normal paid course would.
+async function unlockRemainingLessonsHandler(req, res) {
+  try {
+    const { courseId } = req.params;
+
+    const course = await Course.findOne({ _id: courseId, userId: req.user._id });
+    if (!course) return res.status(404).json({ error: "Course not found" });
+
+    if (!course.isFreeTrialCourse) {
+      return res.status(400).json({ error: "This course isn't locked — nothing to unlock" });
+    }
+
+    const stillLocked = course.lessons.some((l) => l.status === "locked");
+    if (!stillLocked) {
+      return res.status(400).json({ error: "This course has already been unlocked" });
+    }
+
+    const user = await User.findById(req.user._id).select("courseCredits");
+    if (!user || user.courseCredits < 1) {
+      return res.status(402).json({
+        error: "no_credits",
+        message: "You need at least 1 course credit to unlock the rest of this course.",
+      });
+    }
+
+    // Deduct the credit and flip the course out of free-trial mode BEFORE
+    // responding, so a double-click can't unlock twice on the same credit.
+    await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
+    await Course.findByIdAndUpdate(courseId, { isFreeTrialCourse: false });
+
+    // Mark lessons 2-6 as rendering so the frontend shows the loading state
+    // immediately, instead of waiting for the first background update.
+    const lockedLessons = course.lessons
+      .map((l, i) => ({ ...l.toObject(), index: i }))
+      .filter((l) => l.status === "locked");
+
+    await Promise.all(
+      lockedLessons.map((l) =>
+        Course.findByIdAndUpdate(courseId, {
+          $set: { [`lessons.${l.index}.status`]: "rendering" },
+        })
+      )
+    );
+
+    res.json({ ok: true, message: "Unlocking the rest of this course" });
+
+    // Build the unlocked lessons in the background, same pairing logic as
+    // a normal paid course.
+    const lessonsToBuild = lockedLessons.map((l) => ({
+      lessonNumber: l.lessonNumber,
+      title: l.title,
+      description: l.description,
+      keyPoints: l.keyPoints,
+    }));
+
+    buildLessonsInPairs(courseId, lessonsToBuild)
+      .then(() => Course.findByIdAndUpdate(courseId, { status: "ready" }))
+      .catch((err) => {
+        console.error(`[${courseId}] Unlock build failed:`, err.message);
+      });
+  } catch (err) {
+    console.error("unlockRemainingLessonsHandler error:", err);
+    res.status(500).json({ error: "Failed to unlock course" });
+  }
+}
+
 module.exports = {
   generateCourseHandler,
   getCourseStatusHandler,
@@ -348,4 +437,5 @@ module.exports = {
   deleteCourseHandler,
   getShowcaseCoursesHandler,
   retryLessonHandler,
+  unlockRemainingLessonsHandler,
 };
