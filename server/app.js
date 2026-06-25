@@ -20,7 +20,7 @@ const app = express();
 
 app.use(cors({
   origin: process.env.NODE_ENV === "production"
-    ? ["https://levelup-snowy.vercel.app"]
+    ? ["https://levelup-snowy.vercel.app", "https://leveluppedu.app/"]
     : true,
   credentials: true,
 }));
