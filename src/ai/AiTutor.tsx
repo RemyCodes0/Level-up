@@ -1229,13 +1229,13 @@ export default function AILearningPage() {
                 <VideoPlayer lesson={lessons[activeLesson]} onComplete={() => markComplete(lessons[activeLesson].id)} onRetry={() => handleRetryLesson(activeLesson)} retrying={retryingLesson === activeLesson} courseId={activeHistoryId} lessonNumber={activeLesson + 1} />
                 <div className="flex items-center justify-between gap-2 pt-2">
                   <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className="text-xs sm:text-sm px-3 sm:px-4 shrink-0"><ChevronLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
-                  {activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
+                  {/* {activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
                     <DownloadLessonButton
                       courseId={activeHistoryId}
                       lessonNumber={activeLesson + 1}
                       lessonTitle={lessons[activeLesson]?.title}
                     />
-                  )}
+                  )} */}
                   {activeLesson < lessons.length - 1 ? (
                     lessonStatuses[activeLesson + 1] === "locked" ? (
                       <Button
