@@ -89,21 +89,28 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
 
       // interpolate() requires 3 args minimum, and Remotion supports a
       // legitimate optional 4th argument: an options object like
-      // { extrapolateLeft: "clamp", extrapolateRight: "clamp" }. Only
-      // reject calls with fewer than 3 args, more than 4, or where a 4th
-      // argument exists but isn't a plain object literal (which would mean
-      // it's not the options pattern at all).
+      // { extrapolateLeft: "clamp", extrapolateRight: "clamp" }. That object
+      // can be written inline OR passed as a variable/constant (a very common
+      // pattern when the same clamp options are reused many times, e.g.
+      // `const clamp = {...}; interpolate(f, [0,1], [0,1], clamp)`). Accept
+      // an inline object, an identifier, or a member expression (e.g.
+      // OPTS.clamp). Only reject things that clearly can't be an options
+      // object, like a number or string literal.
       if (node.arguments.length < 3 || node.arguments.length > 4) {
         interpolateErrors.push(
           `interpolate() called with ${node.arguments.length} argument(s) — expected 3, or 4 with an options object${loc}`
         );
         return;
       }
-      if (node.arguments.length === 4 && node.arguments[3].type !== "ObjectExpression") {
-        interpolateErrors.push(
-          `interpolate()'s 4th argument must be a plain options object (e.g. { extrapolateLeft: "clamp" })${loc}`
-        );
-        return;
+      if (node.arguments.length === 4) {
+        const fourth = node.arguments[3];
+        const okFourthArgTypes = ["ObjectExpression", "Identifier", "MemberExpression"];
+        if (!okFourthArgTypes.includes(fourth.type)) {
+          interpolateErrors.push(
+            `interpolate()'s 4th argument must be an options object (e.g. { extrapolateLeft: "clamp" }) or a variable holding one${loc}`
+          );
+          return;
+        }
       }
 
       const [, inputRange, outputRange] = node.arguments;

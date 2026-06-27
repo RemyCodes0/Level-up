@@ -225,7 +225,12 @@ export const LessonExample = () => {
 };
 \`\`\`
 
-Notice in the example: every interpolate() call has exactly 3 arguments with literal arrays ([0, 15], [0, 1]) of matching length, position/scale animations are CLAMPED so they settle instead of running off screen, the Audio tag's src is a plain string passed directly, durationInFrames values are plain integer literals, and helper components live above the main exported component. Follow this exact shape.
+Notice in the example: every interpolate() call has 3 arguments (value, input range, output range) — and optionally a 4th options object for clamping — with the input/output as literal arrays of matching length; position/scale animations are CLAMPED so they settle instead of running off screen; the Audio tag's src is a plain string passed directly; durationInFrames values are plain integer literals; and helper components live above the main exported component. Follow this exact shape.
+
+TIP — to avoid repeating the clamp object on every call, you MAY define it once and reuse it:
+const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
+// then: interpolate(frame, [0, 30], [0, 1.5], CLAMP)
+Passing CLAMP (a variable) as the 4th argument is fully allowed and encouraged.
 
 Begin with imports, then any helper components, then the main component. Make sure the final line closes the component cleanly.
 `;

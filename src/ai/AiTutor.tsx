@@ -945,10 +945,33 @@ export default function AILearningPage() {
     setUnlockingCourse(true);
     try {
       await unlockCourse(activeHistoryId);
-      // Mark every "locked" lesson as "generating" immediately so the UI
-      // updates right away instead of waiting for the first poll tick.
+
+      // FIX 1 — credit counter not dropping: unlockCourse only returns
+      // { ok, message }, not the new balance, so re-fetch credits explicitly
+      // right away instead of waiting for a page reload.
+      fetchCredits();
+
+      // Optimistically flip locked lessons to "generating" so the UI doesn't
+      // sit on stale "locked" state while we wait for the server.
       setLessonStatuses((prev) => prev.map((s) => s === "locked" ? "generating" : s));
       if (pollCancelRef.current) pollCancelRef.current();
+
+      // FIX 2 — lessons 2-6 only appearing after refresh: fetch the course
+      // status ONCE immediately, instead of waiting for pollCourse's first
+      // internal tick (which can take several seconds). The backend has
+      // already unlocked and started generating; this pulls that fresh state
+      // into the UI right now rather than on the next poll cycle or reload.
+      try {
+        const course = await getCourseStatus(activeHistoryId);
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
+        if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
+        if (course.questions?.length) setQuizQuestions(course.questions);
+      } catch (statusErr) {
+        console.error("Failed to fetch course status right after unlock:", statusErr);
+        // Not fatal — the poll loop below will pick it up shortly.
+      }
+
+      // Keep polling as a backup / to track ongoing lesson generation.
       pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
         setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
         if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));

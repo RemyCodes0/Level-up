@@ -394,8 +394,13 @@ async function unlockRemainingLessonsHandler(req, res) {
 
     // Deduct the credit and flip the course out of free-trial mode BEFORE
     // responding, so a double-click can't unlock twice on the same credit.
+    // Also set status back to "generating": the course was "ready" after
+    // lesson 1, but now lessons 2-6 are about to build, and the frontend's
+    // pollCourse STOPS polling when status === "ready". Without flipping this
+    // back to "generating", polling would quit immediately and the user
+    // would have to refresh to see lessons 2-6 appear.
     await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
-    await Course.findByIdAndUpdate(courseId, { isFreeTrialCourse: false });
+    await Course.findByIdAndUpdate(courseId, { isFreeTrialCourse: false, status: "generating" });
 
     // Mark lessons 2-6 as rendering so the frontend shows the loading state
     // immediately, instead of waiting for the first background update.
