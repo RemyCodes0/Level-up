@@ -240,7 +240,7 @@ export default function LandingPage() {
           </div>
           <div className="flex items-center gap-3">
             <button onClick={() => navigate("/login")} className="text-sm font-medium hidden sm:inline" style={{ color: MUTE }}>Log in</button>
-            <button onClick={() => navigate("/signup")} className="text-sm font-semibold px-4 py-2 rounded-lg transition-transform hover:scale-[1.03]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+            <button onClick={() => navigate("/ai_tutor")} className="text-sm font-semibold px-4 py-2 rounded-lg transition-transform hover:scale-[1.03]" style={{ backgroundColor: CORAL, color: "#fff" }}>
               Start free
             </button>
           </div>
@@ -255,16 +255,16 @@ export default function LandingPage() {
               <Sparkles className="h-3 w-3" /> The first lesson is always free
             </div>
             <h1 className="text-4xl sm:text-6xl font-bold leading-[1.05] mb-6" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
-              Learn anything as a course you can <span style={{ color: CORAL }}>watch.</span>
+              Stop cramming. Learn visually. <span style={{ color: CORAL }}>watch.</span>
             </h1>
             <p className="text-lg leading-relaxed mb-8 max-w-md" style={{ color: MUTE }}>
               Type a topic or upload your notes. Level Up renders six narrated, animated video lessons and a readiness quiz — the kind of course you'd wish someone had made for you, built in minutes.
             </p>
             <div className="flex flex-wrap items-center gap-4">
-              <button onClick={() => navigate("/signup")} className="flex items-center gap-2 text-sm font-semibold px-6 py-3.5 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+              <button onClick={() => navigate("/ai_tutor")} className="flex items-center gap-2 text-sm font-semibold px-6 py-3.5 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
                 Generate your first lesson <ArrowRight className="h-4 w-4" />
               </button>
-              <a href="#demo" className="flex items-center gap-2 text-sm font-medium px-5 py-3.5 rounded-xl border transition-colors" style={{ borderColor: HAIR, color: BEAM }}>
+              <a onClick={() => navigate("/ai_showcase")} className="flex items-center gap-2 text-sm font-medium px-5 py-3.5 rounded-xl border transition-colors" style={{ borderColor: HAIR, color: BEAM }}>
                 <Play className="h-4 w-4" /> See a live demo
               </a>
             </div>
@@ -300,9 +300,9 @@ export default function LandingPage() {
           <div className="hidden sm:block absolute left-0 right-0 top-[22px] h-px" style={{ backgroundColor: HAIR }} />
           <div className="grid sm:grid-cols-3 gap-10 sm:gap-6 relative">
             {[
-              { icon: <Upload className="h-4 w-4" />, t: "0:00", title: "Type a topic or upload a PDF", body: "A sentence, lecture slides, or a full textbook chapter — Level Up builds the course around your exact material." },
-              { icon: <Wand2 className="h-4 w-4" />, t: "0:05", title: "Watch it render", body: "Six animated, narrated lessons assemble in minutes. Lesson one plays while the rest keep building." },
-              { icon: <Trophy className="h-4 w-4" />, t: "0:12", title: "Score your readiness", body: "A 20-question quiz breaks down your strengths and the exact topics worth another pass." },
+              { icon: <Upload className="h-4 w-4" />, title: "Type a topic or upload a PDF", body: "A sentence, lecture slides, or a full textbook chapter — Level Up builds the course around your exact material." },
+              { icon: <Wand2 className="h-4 w-4" />, title: "Watch it render", body: "Six animated, narrated lessons assemble in minutes. Lesson one plays while the rest keep building." },
+              { icon: <Trophy className="h-4 w-4" />, title: "Score your readiness", body: "A 20-question quiz breaks down your strengths and the exact topics worth another pass." },
             ].map((s, i) => (
               <div key={i}>
                 <div className="flex items-center gap-2 mb-4">
