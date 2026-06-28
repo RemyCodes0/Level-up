@@ -6,11 +6,8 @@ import {
   Sparkles, ArrowRight, Check, Play, Upload, Wand2, Trophy,
   X, Quote, Plus, Minus, Clock, Zap, ChevronRight,
 } from "lucide-react";
+import VideoShowcaseSection from "./VideoShowcaseSection";
 
-// ── Design tokens: "The Cutting Room" ───────────────────────────────────────
-// Your product renders knowledge into timed, narrated, scored video, so the
-// whole page is a projector-lit editing suite. Not generic dark-mode: warmer,
-// with a projector-beam cream and a film-scrubber motif throughout.
 const STAGE = "#15131F";
 const STAGE_2 = "#1F1B2E";
 const BEAM = "#F6F1E7";
@@ -39,53 +36,6 @@ function usePrefersReducedMotion() {
   return reduce;
 }
 
-// ── Signature: a live "render" that scrubs through a generated lesson ────────
-function RenderStage({ label }: { label: string }) {
-  const reduce = usePrefersReducedMotion();
-  const [frame, setFrame] = useState(reduce ? 64 : 0);
-  useEffect(() => {
-    if (reduce) return;
-    let raf: number;
-    const tick = () => { setFrame((f) => f + 1); raf = requestAnimationFrame(tick); };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [reduce]);
-
-  const angle = frame * 1.4;
-  const rad = (angle * Math.PI) / 180;
-  const ox = Math.cos(rad) * 58;
-  const oy = Math.sin(rad) * 58;
-  const pulse = 1 + Math.sin(frame / 16) * 0.09;
-  const total = 3600;
-  const pos = frame % total;
-  const secs = Math.floor(pos / 30);
-  const playhead = (pos / total) * 100;
-
-  return (
-    <div className="relative rounded-2xl overflow-hidden border" style={{ borderColor: HAIR, backgroundColor: STAGE_2, aspectRatio: "16/10" }}>
-      <div className="absolute inset-0" style={{ background: "radial-gradient(120% 90% at 50% 30%, rgba(255,194,75,0.10), transparent 60%)" }} />
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <div className="relative" style={{ width: 150, height: 150 }}>
-          <div className="absolute rounded-full" style={{ top: 53, left: 53, width: 44, height: 44, backgroundColor: CORAL, transform: `scale(${pulse})`, boxShadow: `0 0 30px ${CORAL}55` }} />
-          <div className="absolute rounded-full" style={{ top: 75, left: 75, width: 18, height: 18, marginTop: -9, marginLeft: -9, backgroundColor: AMBER, transform: `translate(${ox}px, ${oy}px)` }} />
-        </div>
-        <p className="mt-5 text-sm font-medium px-6 text-center" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{label}</p>
-      </div>
-      <div className="absolute bottom-0 left-0 right-0 p-3">
-        <div className="relative h-1 rounded-full mb-2" style={{ backgroundColor: "rgba(246,241,231,0.15)" }}>
-          <div className="absolute top-0 left-0 h-1 rounded-full" style={{ width: `${playhead}%`, backgroundColor: CORAL }} />
-          <div className="absolute -top-1 h-3 w-3 rounded-full" style={{ left: `calc(${playhead}% - 6px)`, backgroundColor: BEAM }} />
-        </div>
-        <div className="flex items-center justify-between text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "rgba(246,241,231,0.55)" }}>
-          <span>00:{String(secs).padStart(2, "0")} / 02:00</span>
-          <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: PHOSPHOR }} /> rendering live</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Interactive demo: type a topic, watch the course outline assemble ───────
 function InteractiveDemo() {
   const [topic, setTopic] = useState("");
   const [building, setBuilding] = useState(false);
@@ -247,9 +197,9 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* Hero */}
-      <section ref={hero.ref} className="max-w-6xl mx-auto px-4 sm:px-6 pt-16 sm:pt-24 pb-16">
-        <div className="grid lg:grid-cols-2 gap-12 items-center">
+      {/* ── Hero: text only, centered, no grid ── */}
+      <section ref={hero.ref} className="max-w-6xl mx-auto px-4 sm:px-6 pt-16 sm:pt-24 pb-10">
+        <div className="max-w-3xl mx-auto text-center">
           <div className={`transition-all duration-700 ${hero.seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
             <div className="inline-flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full mb-6" style={{ backgroundColor: "rgba(255,92,73,0.13)", color: CORAL }}>
               <Sparkles className="h-3 w-3" /> The first lesson is always free
@@ -257,26 +207,28 @@ export default function LandingPage() {
             <h1 className="text-4xl sm:text-6xl font-bold leading-[1.05] mb-6" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
               Stop cramming. Learn visually. <span style={{ color: CORAL }}>watch.</span>
             </h1>
-            <p className="text-lg leading-relaxed mb-8 max-w-md" style={{ color: MUTE }}>
+            <p className="text-lg leading-relaxed mb-8 max-w-xl mx-auto" style={{ color: MUTE }}>
               Type a topic or upload your notes. Level Up renders six narrated, animated video lessons and a readiness quiz — the kind of course you'd wish someone had made for you, built in minutes.
             </p>
-            <div className="flex flex-wrap items-center gap-4">
+            <div className="flex flex-wrap items-center justify-center gap-4">
               <button onClick={() => navigate("/ai_tutor")} className="flex items-center gap-2 text-sm font-semibold px-6 py-3.5 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
                 Generate your first lesson <ArrowRight className="h-4 w-4" />
               </button>
-              <a onClick={() => navigate("/ai_showcase")} className="flex items-center gap-2 text-sm font-medium px-5 py-3.5 rounded-xl border transition-colors" style={{ borderColor: HAIR, color: BEAM }}>
+              <a onClick={() => navigate("/ai_showcase")} className="flex items-center gap-2 text-sm font-medium px-5 py-3.5 rounded-xl border transition-colors cursor-pointer" style={{ borderColor: HAIR, color: BEAM }}>
                 <Play className="h-4 w-4" /> See a live demo
               </a>
             </div>
-            <div className="flex items-center gap-6 mt-8 text-xs" style={{ color: MUTE }}>
+            <div className="flex items-center justify-center gap-6 mt-8 text-xs" style={{ color: MUTE }}>
               <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" style={{ color: PHOSPHOR }} /> No card for lesson one</span>
               <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" style={{ color: PHOSPHOR }} /> No subscription</span>
             </div>
           </div>
-          <div className={`transition-all duration-700 delay-150 ${hero.seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
-            <RenderStage label="Angular velocity stays constant" />
-          </div>
         </div>
+      </section>
+
+      {/* ── Full-width showcase ── */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 pb-16">
+        <VideoShowcaseSection />
       </section>
 
       {/* Marquee strip */}
@@ -307,7 +259,6 @@ export default function LandingPage() {
               <div key={i}>
                 <div className="flex items-center gap-2 mb-4">
                   <div className="w-11 h-11 rounded-full flex items-center justify-center shrink-0 relative z-10 border" style={{ backgroundColor: STAGE_2, borderColor: HAIR, color: CORAL }}>{s.icon}</div>
-                  <span className="text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: MUTE }}>{s.t}</span>
                 </div>
                 <h3 className="text-lg font-semibold mb-1.5" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{s.title}</h3>
                 <p className="text-sm leading-relaxed" style={{ color: MUTE }}>{s.body}</p>
@@ -448,34 +399,3 @@ export default function LandingPage() {
     </div>
   );
 }
-// import Navbar from "./Navbar";
-// import HeroSection from "./HeroSection";
-// import VideoShowcaseSection from "./VideoShowcaseSection";
-// import HowItWorksSection from "./HowItWorksSection";
-// import FeaturesSection from "./FeaturesSection";
-// import TargetUsersSection from "./TargetUsersSection";
-// import ShowcaseSection from "./ShowcaseSection";
-// import TestimonialsSection from "./TestimonialsSection";
-// import CTASection from "./CTASection";
-// import Footer from "./Footer";
-
-// const Index = () => { 
-//   return (
-//     <div className="min-h-screen" style={{ background: "hsl(var(--surface))" }}>
-//       <Navbar />
-//       <main>
-//         <HeroSection />
-//         <VideoShowcaseSection />
-//         <HowItWorksSection />
-//         <FeaturesSection />
-//         <TargetUsersSection />
-//         <ShowcaseSection />
-//         <TestimonialsSection />
-//         <CTASection />
-//       </main>
-//       <Footer />
-//     </div>
-//   );
-// };
-
-// export default Index;

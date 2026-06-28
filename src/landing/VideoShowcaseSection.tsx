@@ -580,7 +580,7 @@ function BrowserMockup({ currentStep, screenKey }: { currentStep: number; screen
           <div style={{ flex: 1, background: "rgba(255,255,255,0.07)", borderRadius: "6px", padding: "4px 12px", display: "flex", alignItems: "center", gap: "6px" }}>
             <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10B981", flexShrink: 0 }} />
             <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.50)", fontFamily: "monospace" }}>
-              app.levelupai.com
+              leveluppedu/ai_tutor
             </span>
           </div>
           {/* Tab area */}
@@ -647,24 +647,11 @@ export default function VideoShowcaseSection() {
   const step = STEPS[currentStep - 1];
 
   return (
-    <section className="py-24 px-6 relative overflow-hidden" style={{ background: "hsl(var(--surface))" }}>
+     <div>
       {/* Background */}
-      <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(ellipse 70% 50% at 50% 50%, rgba(78,84,200,0.07) 0%, transparent 70%)" }} />
-      <div className="orb opacity-10 pointer-events-none" style={{ width: "350px", height: "350px", background: "#8B5CF6", top: "5%", left: "-8%", borderRadius: "50%" }} />
-      <div className="orb opacity-10 pointer-events-none" style={{ width: "280px", height: "280px", background: "#06B6D4", bottom: "5%", right: "-5%", borderRadius: "50%", animationDelay: "4s" }} />
-
+      
       <div className="max-w-[1100px] mx-auto relative z-10">
-        {/* Section header */}
-        <div className="text-center mb-12">
-          <div className="pill-cyan mb-4 mx-auto w-fit">SEE HOW IT WORKS</div>
-          <h2 className="section-heading">
-            Watch the experience{" "}
-            <span className="gradient-text-static">come to life</span>
-          </h2>
-          <p className="text-[hsl(var(--text-subtle))] mt-4 max-w-[480px] mx-auto" style={{ fontSize: "16px", lineHeight: "24px" }}>
-            From topic to mastery — every step of the Level Up AI experience, animated in real time.
-          </p>
-        </div>
+      
 
         {/* Step pills */}
         <div className="flex flex-wrap items-center justify-center gap-2 mb-8">
@@ -767,6 +754,6 @@ export default function VideoShowcaseSection() {
           ))}
         </div>
       </div>
-    </section>
+     </div>
   );
 }
