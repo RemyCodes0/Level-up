@@ -1,495 +1,481 @@
-import { Button } from "@/components/ui/button"
-import { Helmet } from "react-helmet-async"
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Navbar } from "@/components/navbar/Navbar"
-import { 
-  BookOpen, 
-  Clock, 
-  DollarSign, 
-  Star, 
-  Users, 
-  CheckCircle2, 
-  ArrowRight, 
-  GraduationCap,
-  TrendingUp,
-  Award,
-  Sparkles,
-  Zap,
-  Shield
-} from "lucide-react"
-import { useEffect } from "react"
-import { useNavigate } from "react-router-dom"
-import { motion } from "framer-motion"
+"use client";
 
-export default function HomePage() {
-  const user = JSON.parse(localStorage.getItem("user") || "null") 
-  const router = useNavigate()
-  
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  Sparkles, ArrowRight, Check, Play, Upload, Wand2, Trophy,
+  X, Quote, Plus, Minus, Clock, Zap, ChevronRight,
+} from "lucide-react";
+
+// ── Design tokens: "The Cutting Room" ───────────────────────────────────────
+// Your product renders knowledge into timed, narrated, scored video, so the
+// whole page is a projector-lit editing suite. Not generic dark-mode: warmer,
+// with a projector-beam cream and a film-scrubber motif throughout.
+const STAGE = "#15131F";
+const STAGE_2 = "#1F1B2E";
+const BEAM = "#F6F1E7";
+const CORAL = "#FF5C49";
+const PHOSPHOR = "#3DE0A0";
+const AMBER = "#FFC24B";
+const MUTE = "#9A95AC";
+const HAIR = "rgba(246,241,231,0.10)";
+
+function useInView<T extends HTMLElement>(threshold = 0.15) {
+  const ref = useRef<T>(null);
+  const [seen, setSeen] = useState(false);
   useEffect(() => {
-    if (user) {
-      router("/dashboard")
-    }
-  }, [user])
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) setSeen(true); }, { threshold });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [threshold]);
+  return { ref, seen };
+}
 
-  const features = [
-    {
-      icon: DollarSign,
-      title: "Affordable Rates",
-      description: "Student-friendly pricing starting at $10/hour. Get quality tutoring without breaking the bank.",
-      gradient: "from-emerald-500 to-teal-600",
-      iconBg: "bg-emerald-100",
-      iconColor: "text-emerald-600"
-    },
-    {
-      icon: Users,
-      title: "Verified Tutors",
-      description: "All tutors are verified AUB students who have excelled in their subjects and passed our screening.",
-      gradient: "from-blue-500 to-indigo-600",
-      iconBg: "bg-blue-100",
-      iconColor: "text-blue-600"
-    },
-    {
-      icon: Clock,
-      title: "Flexible Scheduling",
-      description: "Book sessions that fit your schedule. Meet on campus or online based on your preference.",
-      gradient: "from-purple-500 to-pink-600",
-      iconBg: "bg-purple-100",
-      iconColor: "text-purple-600"
-    },
-    {
-      icon: BookOpen,
-      title: "Wide Subject Range",
-      description: "From Computer Science to Biology, find tutors for all your courses across different majors.",
-      gradient: "from-orange-500 to-red-600",
-      iconBg: "bg-orange-100",
-      iconColor: "text-orange-600"
-    },
-    {
-      icon: Star,
-      title: "Rated & Reviewed",
-      description: "Read reviews from other students to find the perfect tutor match for your learning style.",
-      gradient: "from-amber-500 to-yellow-600",
-      iconBg: "bg-amber-100",
-      iconColor: "text-amber-600"
-    },
-    {
-      icon: CheckCircle2,
-      title: "Easy Booking",
-      description: "Simple, hassle-free booking process. Find, book, and pay for sessions all in one place.",
-      gradient: "from-cyan-500 to-blue-600",
-      iconBg: "bg-cyan-100",
-      iconColor: "text-cyan-600"
-    },
-  ]
+function usePrefersReducedMotion() {
+  const [reduce, setReduce] = useState(false);
+  useEffect(() => { setReduce(window.matchMedia("(prefers-reduced-motion: reduce)").matches); }, []);
+  return reduce;
+}
 
-  const steps = [
-    {
-      number: 1,
-      title: "Browse Tutors",
-      description: "Search for tutors by subject, rating, or availability. View their profiles, rates, and reviews from other students.",
-      icon: Users,
-      gradient: "from-blue-500 to-indigo-600"
-    },
-    {
-      number: 2,
-      title: "Book a Session",
-      description: "Choose a time that works for you and book your session. Specify your learning goals and any topics you want to cover.",
-      icon: Calendar,
-      gradient: "from-purple-500 to-pink-600"
-    },
-    {
-      number: 3,
-      title: "Learn & Grow",
-      description: "Meet with your tutor on campus or online. After the session, leave a review to help other students find great tutors.",
-      icon: TrendingUp,
-      gradient: "from-emerald-500 to-teal-600"
-    },
-  ]
+// ── Signature: a live "render" that scrubs through a generated lesson ────────
+function RenderStage({ label }: { label: string }) {
+  const reduce = usePrefersReducedMotion();
+  const [frame, setFrame] = useState(reduce ? 64 : 0);
+  useEffect(() => {
+    if (reduce) return;
+    let raf: number;
+    const tick = () => { setFrame((f) => f + 1); raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [reduce]);
 
-  const stats = [
-    { label: "Active Students", value: "500+", icon: Users },
-    { label: "Expert Tutors", value: "100+", icon: Award },
-    { label: "Sessions Completed", value: "2000+", icon: CheckCircle2 },
-    { label: "Subjects Covered", value: "50+", icon: BookOpen },
-  ]
+  const angle = frame * 1.4;
+  const rad = (angle * Math.PI) / 180;
+  const ox = Math.cos(rad) * 58;
+  const oy = Math.sin(rad) * 58;
+  const pulse = 1 + Math.sin(frame / 16) * 0.09;
+  const total = 3600;
+  const pos = frame % total;
+  const secs = Math.floor(pos / 30);
+  const playhead = (pos / total) * 100;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background via-blue-50/30 to-purple-50/30">
-         <Helmet>
-        <title>Level Up: AUB Peer Tutoring App</title>
-        <meta name="description" content="Connect with verified AUB peer tutors for affordable one-on-one tutoring sessions. Find tutors for calculus, physics, biology, computer science and more at the American University of Beirut." />
-        <meta name="keywords" content="AUB tutoring, peer tutoring AUB, American University Beirut tutor, AUB student tutor, calculus tutor AUB, physics tutor AUB, affordable tutoring Beirut" />
-        <meta property="og:title" content="Level Up | Peer Tutoring for AUB Students" />
-        <meta property="og:description" content="Find affordable, verified peer tutors at AUB. Book sessions for any subject, anytime." />
-        <meta property="og:type" content="website" />
-        <meta property="og:url" content="https://levelup-snowy.vercel.app/" />
-        <link rel="canonical" href="https://levelup-snowy.vercel.app/" />
-      </Helmet>
-      <Navbar />
-
-      {/* Hero Section */}
-      <section className="relative overflow-hidden">
-        {/* Animated Background Elements */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-20 left-10 w-72 h-72 bg-blue-400/20 rounded-full blur-3xl animate-pulse"></div>
-          <div className="absolute bottom-20 right-10 w-96 h-96 bg-purple-400/20 rounded-full blur-3xl animate-pulse delay-1000"></div>
+    <div className="relative rounded-2xl overflow-hidden border" style={{ borderColor: HAIR, backgroundColor: STAGE_2, aspectRatio: "16/10" }}>
+      <div className="absolute inset-0" style={{ background: "radial-gradient(120% 90% at 50% 30%, rgba(255,194,75,0.10), transparent 60%)" }} />
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <div className="relative" style={{ width: 150, height: 150 }}>
+          <div className="absolute rounded-full" style={{ top: 53, left: 53, width: 44, height: 44, backgroundColor: CORAL, transform: `scale(${pulse})`, boxShadow: `0 0 30px ${CORAL}55` }} />
+          <div className="absolute rounded-full" style={{ top: 75, left: 75, width: 18, height: 18, marginTop: -9, marginLeft: -9, backgroundColor: AMBER, transform: `translate(${ox}px, ${oy}px)` }} />
         </div>
+        <p className="mt-5 text-sm font-medium px-6 text-center" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{label}</p>
+      </div>
+      <div className="absolute bottom-0 left-0 right-0 p-3">
+        <div className="relative h-1 rounded-full mb-2" style={{ backgroundColor: "rgba(246,241,231,0.15)" }}>
+          <div className="absolute top-0 left-0 h-1 rounded-full" style={{ width: `${playhead}%`, backgroundColor: CORAL }} />
+          <div className="absolute -top-1 h-3 w-3 rounded-full" style={{ left: `calc(${playhead}% - 6px)`, backgroundColor: BEAM }} />
+        </div>
+        <div className="flex items-center justify-between text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: "rgba(246,241,231,0.55)" }}>
+          <span>00:{String(secs).padStart(2, "0")} / 02:00</span>
+          <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: PHOSPHOR }} /> rendering live</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-        <div className="container relative mx-auto px-4 py-20 md:py-32">
-          <div className="max-w-5xl mx-auto text-center space-y-8">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6 }}
-            >
-              <Badge variant="secondary" className="text-sm px-6 py-2 mb-6 bg-gradient-to-r from-blue-100 to-purple-100 border-0">
-                <Sparkles className="h-3.5 w-3.5 mr-2 text-blue-600" />
-                Peer-to-Peer Learning at AUB
-              </Badge>
-            </motion.div>
+// ── Interactive demo: type a topic, watch the course outline assemble ───────
+function InteractiveDemo() {
+  const [topic, setTopic] = useState("");
+  const [building, setBuilding] = useState(false);
+  const [builtFor, setBuiltFor] = useState<string | null>(null);
+  const reduce = usePrefersReducedMotion();
 
-            <motion.h1
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.1 }}
-              className="text-5xl md:text-7xl font-bold tracking-tight text-balance"
-            >
-              <span className="bg-gradient-to-r from-gray-900 via-blue-800 to-purple-800 bg-clip-text text-transparent">
-                Learn from Your Peers,
-              </span>
-              <br />
-              <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                Excel in Your Studies
-              </span>
-            </motion.h1>
+  const lessonTitles = (t: string) => [
+    `What ${t} actually means`,
+    `The core mechanics of ${t}`,
+    `${t} in the real world`,
+    `Common mistakes with ${t}`,
+    `Working through ${t} problems`,
+    `Putting ${t} together`,
+  ];
 
-            <motion.p
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.2 }}
-              className="text-lg md:text-xl text-gray-600 text-balance max-w-3xl mx-auto leading-relaxed"
-            >
-              Connect with verified AUB student tutors for affordable, convenient, and effective one-on-one tutoring sessions.
-            </motion.p>
+  const run = () => {
+    const t = topic.trim();
+    if (!t) return;
+    setBuilding(true);
+    setBuiltFor(null);
+    setTimeout(() => { setBuilding(false); setBuiltFor(t); }, reduce ? 0 : 1100);
+  };
 
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.3 }}
-              className="flex flex-col sm:flex-row gap-4 justify-center pt-4"
-            >
-              <a href="/tutors">
-                <Button size="lg" className="text-base px-8 h-14 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all group">
-                  Find a Tutor
-                  <ArrowRight className="ml-2 h-5 w-5 group-hover:translate-x-1 transition-transform" />
-                </Button>
+  const examples = ["Photosynthesis", "The French Revolution", "Neural networks", "Supply & demand"];
+  const shown = builtFor || (building ? topic.trim() : "");
+
+  return (
+    <div className="rounded-2xl border overflow-hidden" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
+      <div className="p-5 sm:p-6 border-b" style={{ borderColor: HAIR }}>
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: "rgba(255,92,73,0.15)", color: CORAL }}>
+            <Wand2 className="h-3.5 w-3.5" />
+          </div>
+          <span className="text-xs font-medium uppercase tracking-widest" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>Try it — no signup</span>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") run(); }}
+            placeholder="Type anything you want to learn…"
+            className="flex-1 px-4 h-12 rounded-xl text-sm outline-none border"
+            style={{ backgroundColor: STAGE, borderColor: HAIR, color: BEAM }}
+          />
+          <button
+            onClick={run}
+            disabled={!topic.trim() || building}
+            className="h-12 px-5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] disabled:opacity-40 shrink-0"
+            style={{ backgroundColor: CORAL, color: "#fff" }}
+          >
+            {building ? "Building…" : <>Build my course <ChevronRight className="h-4 w-4" /></>}
+          </button>
+        </div>
+        {!topic && !builtFor && (
+          <div className="flex flex-wrap gap-2 mt-3">
+            {examples.map((ex) => (
+              <button key={ex} onClick={() => setTopic(ex)} className="text-xs px-3 py-1.5 rounded-full border transition-colors" style={{ borderColor: HAIR, color: MUTE }}>
+                {ex}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {shown && (
+        <div className="p-5 sm:p-6">
+          <p className="text-xs mb-4" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>
+            {building ? "// assembling 6 lessons…" : `// course outline for "${shown}"`}
+          </p>
+          <div className="space-y-2">
+            {lessonTitles(shown).map((title, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-3 p-3 rounded-lg border transition-all"
+                style={{ borderColor: HAIR, backgroundColor: STAGE, opacity: building ? 0.35 : 1, transitionDelay: reduce ? "0ms" : `${i * 90}ms` }}
+              >
+                <span className="text-xs w-6 shrink-0" style={{ fontFamily: "'JetBrains Mono', monospace", color: i === 0 ? PHOSPHOR : MUTE }}>
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span className="text-sm flex-1 truncate" style={{ color: BEAM }}>{title}</span>
+                {i === 0 ? (
+                  <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(61,224,160,0.15)", color: PHOSPHOR }}>free</span>
+                ) : (
+                  <Clock className="h-3.5 w-3.5 shrink-0" style={{ color: MUTE }} />
+                )}
+              </div>
+            ))}
+          </div>
+          {builtFor && (
+            <p className="text-xs mt-4 text-center" style={{ color: MUTE }}>
+              This is just the outline. The real thing animates and narrates every lesson.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FaqItem({ q, a }: { q: string; a: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-b" style={{ borderColor: HAIR }}>
+      <button onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between gap-4 py-5 text-left">
+        <span className="text-sm sm:text-base font-medium" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{q}</span>
+        {open ? <Minus className="h-4 w-4 shrink-0" style={{ color: CORAL }} /> : <Plus className="h-4 w-4 shrink-0" style={{ color: MUTE }} />}
+      </button>
+      {open && <p className="text-sm leading-relaxed pb-5 pr-8" style={{ color: MUTE }}>{a}</p>}
+    </div>
+  );
+}
+
+export default function LandingPage() {
+  const navigate = useNavigate();
+  const hero = useInView<HTMLDivElement>();
+  const demo = useInView<HTMLDivElement>();
+
+  const testimonials = [
+    { quote: "I uploaded my organic chem slides the night before an exam and had six lessons that actually made the reactions move. The quiz caught two topics I'd have walked in blind on.", name: "Amara O.", role: "Pre-med undergrad" },
+    { quote: "I teach myself things constantly and reading docs is slow. Typing a topic and getting a narrated, animated explainer in minutes is genuinely how I want to learn now.", name: "Daniel K.", role: "Self-taught developer" },
+    { quote: "The free first lesson sold me — I could see exactly what I was paying for before spending anything. Bought three courses the same week.", name: "Priya R.", role: "Grad student" },
+  ];
+
+  const faqs = [
+    { q: "How long does a course take to generate?", a: "Your first lesson is usually ready in about five minutes. The remaining lessons keep building in the background while you watch, so you're never stuck waiting for the whole thing." },
+    { q: "What can I make a course about?", a: "Anything you can describe in a sentence, or anything in a PDF you upload — lecture slides, a textbook chapter, your own notes. The course is built specifically around that material." },
+    { q: "Is the first lesson really free?", a: "Yes. Every course's first lesson generates free, with no card required, so you can see exactly what you'd get before paying for the rest." },
+    { q: "Do I need a subscription?", a: "No. You buy a course only when you want one. There's no recurring charge — one price, one course, whenever you need it." },
+    { q: "What's actually in a course?", a: "Six animated video lessons with synced narration, plus a 20-question quiz that scores your readiness and breaks down what to review." },
+  ];
+
+  return (
+    <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif" }} className="min-h-screen">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        ::selection { background: ${CORAL}; color: #fff; }
+        html { scroll-behavior: smooth; }
+      `}</style>
+
+      {/* Nav */}
+      <nav className="sticky top-0 z-40 backdrop-blur-md border-b" style={{ backgroundColor: "rgba(21,19,31,0.8)", borderColor: HAIR }}>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <img src="/logo.png" alt="Level Up" className="h-7 w-7 rounded-lg object-cover" />
+            <span className="font-semibold text-sm" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>Level Up</span>
+          </div>
+          <div className="hidden md:flex items-center gap-7 text-sm" style={{ color: MUTE }}>
+            <a href="#how" className="hover:opacity-80">How it works</a>
+            <a href="#compare" className="hover:opacity-80">Why it's different</a>
+            <a href="#pricing" className="hover:opacity-80">Pricing</a>
+            <a href="#faq" className="hover:opacity-80">FAQ</a>
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={() => navigate("/login")} className="text-sm font-medium hidden sm:inline" style={{ color: MUTE }}>Log in</button>
+            <button onClick={() => navigate("/signup")} className="text-sm font-semibold px-4 py-2 rounded-lg transition-transform hover:scale-[1.03]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+              Start free
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {/* Hero */}
+      <section ref={hero.ref} className="max-w-6xl mx-auto px-4 sm:px-6 pt-16 sm:pt-24 pb-16">
+        <div className="grid lg:grid-cols-2 gap-12 items-center">
+          <div className={`transition-all duration-700 ${hero.seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
+            <div className="inline-flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full mb-6" style={{ backgroundColor: "rgba(255,92,73,0.13)", color: CORAL }}>
+              <Sparkles className="h-3 w-3" /> The first lesson is always free
+            </div>
+            <h1 className="text-4xl sm:text-6xl font-bold leading-[1.05] mb-6" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+              Learn anything as a course you can <span style={{ color: CORAL }}>watch.</span>
+            </h1>
+            <p className="text-lg leading-relaxed mb-8 max-w-md" style={{ color: MUTE }}>
+              Type a topic or upload your notes. Level Up renders six narrated, animated video lessons and a readiness quiz — the kind of course you'd wish someone had made for you, built in minutes.
+            </p>
+            <div className="flex flex-wrap items-center gap-4">
+              <button onClick={() => navigate("/signup")} className="flex items-center gap-2 text-sm font-semibold px-6 py-3.5 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+                Generate your first lesson <ArrowRight className="h-4 w-4" />
+              </button>
+              <a href="#demo" className="flex items-center gap-2 text-sm font-medium px-5 py-3.5 rounded-xl border transition-colors" style={{ borderColor: HAIR, color: BEAM }}>
+                <Play className="h-4 w-4" /> See a live demo
               </a>
-              <a href="/signup">
-                <Button size="lg" variant="outline" className="text-base px-8 h-14 border-2 hover:bg-gray-50">
-                  <GraduationCap className="mr-2 h-5 w-5" />
-                  Become a Tutor
-                </Button>
-              </a>
-            </motion.div>
+            </div>
+            <div className="flex items-center gap-6 mt-8 text-xs" style={{ color: MUTE }}>
+              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" style={{ color: PHOSPHOR }} /> No card for lesson one</span>
+              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" style={{ color: PHOSPHOR }} /> No subscription</span>
+            </div>
+          </div>
+          <div className={`transition-all duration-700 delay-150 ${hero.seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
+            <RenderStage label="Angular velocity stays constant" />
+          </div>
+        </div>
+      </section>
 
-            {/* Stats Bar */}
-            {/* <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.4 }}
-              className="grid grid-cols-2 md:grid-cols-4 gap-6 pt-12 max-w-4xl mx-auto"
-            >
-              {stats.map((stat, index) => (
-                <div key={index} className="text-center">
-                  <div className="flex items-center justify-center mb-2">
-                    <stat.icon className="h-5 w-5 text-blue-600" />
-                  </div>
-                  <div className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                    {stat.value}
-                  </div>
-                  <div className="text-sm text-gray-600 mt-1">{stat.label}</div>
+      {/* Marquee strip */}
+      <div className="border-y overflow-hidden" style={{ borderColor: HAIR }}>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex flex-wrap items-center justify-center gap-x-8 gap-y-2 text-xs" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>
+          <span>6 animated lessons</span><span style={{ color: CORAL }}>/</span>
+          <span>synced narration</span><span style={{ color: CORAL }}>/</span>
+          <span>20-question quiz</span><span style={{ color: CORAL }}>/</span>
+          <span>topic or PDF</span><span style={{ color: CORAL }}>/</span>
+          <span>ready in ~5 min</span>
+        </div>
+      </div>
+
+      {/* How it works */}
+      <section id="how" className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
+        <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>How it works</p>
+        <h2 className="text-3xl sm:text-4xl font-bold mb-14 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+          A finished course on a single timeline.
+        </h2>
+        <div className="relative">
+          <div className="hidden sm:block absolute left-0 right-0 top-[22px] h-px" style={{ backgroundColor: HAIR }} />
+          <div className="grid sm:grid-cols-3 gap-10 sm:gap-6 relative">
+            {[
+              { icon: <Upload className="h-4 w-4" />, t: "0:00", title: "Type a topic or upload a PDF", body: "A sentence, lecture slides, or a full textbook chapter — Level Up builds the course around your exact material." },
+              { icon: <Wand2 className="h-4 w-4" />, t: "0:05", title: "Watch it render", body: "Six animated, narrated lessons assemble in minutes. Lesson one plays while the rest keep building." },
+              { icon: <Trophy className="h-4 w-4" />, t: "0:12", title: "Score your readiness", body: "A 20-question quiz breaks down your strengths and the exact topics worth another pass." },
+            ].map((s, i) => (
+              <div key={i}>
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="w-11 h-11 rounded-full flex items-center justify-center shrink-0 relative z-10 border" style={{ backgroundColor: STAGE_2, borderColor: HAIR, color: CORAL }}>{s.icon}</div>
+                  <span className="text-xs" style={{ fontFamily: "'JetBrains Mono', monospace", color: MUTE }}>{s.t}</span>
+                </div>
+                <h3 className="text-lg font-semibold mb-1.5" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{s.title}</h3>
+                <p className="text-sm leading-relaxed" style={{ color: MUTE }}>{s.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Interactive demo */}
+      <section id="demo" ref={demo.ref} className="max-w-3xl mx-auto px-4 sm:px-6 py-20">
+        <div className="text-center mb-10">
+          <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>Live demo</p>
+          <h2 className="text-3xl sm:text-4xl font-bold mb-3" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>See what you'd get.</h2>
+          <p className="text-sm" style={{ color: MUTE }}>Type a topic and watch the course outline assemble — no account needed.</p>
+        </div>
+        <div className={`transition-all duration-700 ${demo.seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
+          <InteractiveDemo />
+        </div>
+      </section>
+
+      {/* Comparison */}
+      <section id="compare" className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
+        <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>Why it's different</p>
+        <h2 className="text-3xl sm:text-4xl font-bold mb-12 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+          Most studying is reading. This is watching.
+        </h2>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="rounded-2xl p-7 border" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
+            <p className="text-xs uppercase tracking-widest mb-5" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>The old way</p>
+            <div className="space-y-3.5">
+              {["Re-reading dense notes hoping it sticks", "Generic videos that never match your exact material", "No idea what you've actually mastered", "Hours to find, watch, and piece together sources"].map((t) => (
+                <div key={t} className="flex items-start gap-3 text-sm" style={{ color: MUTE }}>
+                  <X className="h-4 w-4 mt-0.5 shrink-0 opacity-60" /> {t}
                 </div>
               ))}
-            </motion.div> */}
+            </div>
+          </div>
+          <div className="rounded-2xl p-7 border" style={{ borderColor: "rgba(61,224,160,0.3)", backgroundColor: "rgba(61,224,160,0.04)" }}>
+            <p className="text-xs uppercase tracking-widest mb-5" style={{ color: PHOSPHOR, fontFamily: "'JetBrains Mono', monospace" }}>With Level Up</p>
+            <div className="space-y-3.5">
+              {["Animated lessons that show the concept moving", "Built from your topic or your own uploaded notes", "A quiz that scores exactly what to review", "A full course in minutes, not an afternoon"].map((t) => (
+                <div key={t} className="flex items-start gap-3 text-sm" style={{ color: BEAM }}>
+                  <Check className="h-4 w-4 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </section>
 
-      {/* Features Section */}
-      <section className="container mx-auto px-4 py-20 md:py-32">
-        <div className="max-w-6xl mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-            className="text-center mb-16"
-          >
-            <Badge variant="outline" className="mb-4 px-4 py-1 text-blue-600 border-blue-200">
-              <Zap className="h-3.5 w-3.5 mr-2" />
-              Features
-            </Badge>
-            <h2 className="text-4xl md:text-5xl font-bold mb-4 bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
-              Why Choose Level Up?
-            </h2>
-            <p className="text-lg md:text-xl text-gray-600 text-balance max-w-2xl mx-auto">
-              Peer tutoring designed specifically for AUB students
-            </p>
-          </motion.div>
-
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {features.map((feature, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.5, delay: index * 0.1 }}
-              >
-                <Card className="relative overflow-hidden border-0 shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-2 group h-full">
-                  <div className={`absolute inset-0 bg-gradient-to-br ${feature.gradient} opacity-0 group-hover:opacity-5 transition-opacity duration-300`} />
-                  <div className={`absolute top-0 left-0 w-1 h-full bg-gradient-to-b ${feature.gradient}`} />
-                  
-                  <CardHeader className="p-6">
-                    <div className={`${feature.iconBg} p-3 rounded-xl w-fit mb-4 group-hover:scale-110 transition-transform duration-300`}>
-                      <feature.icon className={`h-6 w-6 ${feature.iconColor}`} />
-                    </div>
-                    <CardTitle className="text-xl mb-2">{feature.title}</CardTitle>
-                    <CardDescription className="text-base leading-relaxed">
-                      {feature.description}
-                    </CardDescription>
-                  </CardHeader>
-                </Card>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* How It Works Section */}
-      <section className="container mx-auto px-4 py-20 md:py-32 bg-gradient-to-b from-blue-50/50 to-purple-50/50 rounded-3xl">
-        <div className="max-w-5xl mx-auto">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-            className="text-center mb-16"
-          >
-            <Badge variant="outline" className="mb-4 px-4 py-1 text-purple-600 border-purple-200">
-              <Shield className="h-3.5 w-3.5 mr-2" />
-              Simple Process
-            </Badge>
-            <h2 className="text-4xl md:text-5xl font-bold mb-4 bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
-              How It Works
-            </h2>
-            <p className="text-lg md:text-xl text-gray-600">Get started in three simple steps</p>
-          </motion.div>
-
-          <div className="space-y-8">
-            {steps.map((step, index) => (
-              <motion.div
-                key={index}
-                initial={{ opacity: 0, x: -20 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.5, delay: index * 0.2 }}
-                className="relative"
-              >
-                <Card className="border-0 shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden group">
-                  <div className={`absolute inset-0 bg-gradient-to-br ${step.gradient} opacity-0 group-hover:opacity-5 transition-opacity duration-300`} />
-                  
-                  <div className="flex flex-col md:flex-row gap-6 items-start p-8">
-                    <div className={`relative flex-shrink-0 w-16 h-16 rounded-2xl bg-gradient-to-br ${step.gradient} flex items-center justify-center text-white text-2xl font-bold shadow-lg group-hover:scale-110 transition-transform duration-300`}>
-                      {step.number}
-                      <div className="absolute inset-0 rounded-2xl bg-white opacity-0 group-hover:opacity-20 transition-opacity duration-300"></div>
-                    </div>
-                    
-                    <div className="flex-1">
-                      <h3 className="text-2xl font-bold mb-3 text-gray-900">{step.title}</h3>
-                      <p className="text-gray-600 leading-relaxed text-lg">
-                        {step.description}
-                      </p>
-                    </div>
-
-                    <div className={`hidden md:block p-4 rounded-xl bg-gradient-to-br ${step.gradient} bg-opacity-10`}>
-                      <step.icon className="h-8 w-8 text-gray-700" />
-                    </div>
-                  </div>
-                </Card>
-
-                {/* Connector Line */}
-                {index < steps.length - 1 && (
-                  <div className="hidden md:block absolute left-8 top-full h-8 w-0.5 bg-gradient-to-b from-gray-300 to-transparent"></div>
-                )}
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className="container mx-auto px-4 py-20 md:py-32">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.6 }}
-        >
-          <Card className="relative overflow-hidden border-0 shadow-2xl">
-            <div className="absolute inset-0 bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600"></div>
-            <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMzLjMxNCAwIDYgMi42ODYgNiA2cy0yLjY4NiA2LTYgNi02LTIuNjg2LTYtNiAyLjY4Ni02IDYtNnptMCAyYy0yLjIxIDAtNCAxLjc5LTQgNHMxLjc5IDQgNCA0IDQtMS43OSA0LTQtMS43OS00LTQtNHoiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iLjA1Ii8+PC9nPjwvc3ZnPg==')] opacity-30"></div>
-            
-            <CardHeader className="relative max-w-4xl mx-auto text-center space-y-6 py-16 md:py-24 px-6">
-              <Sparkles className="h-12 w-12 text-white/90 mx-auto mb-4" />
-              <h2 className="text-4xl md:text-5xl font-bold text-white text-balance">
-                Ready to Level Up Your Learning?
-              </h2>
-              <p className="text-xl text-white/90 text-balance max-w-2xl mx-auto leading-relaxed">
-                Join hundreds of AUB students already improving their grades through peer tutoring.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center pt-6">
-                <a href="/signup">
-                  <Button size="lg" variant="secondary" className="text-base px-8 h-14 bg-white text-blue-600 hover:bg-gray-100 shadow-lg hover:shadow-xl transition-all font-semibold">
-                    Get Started Free
-                    <ArrowRight className="ml-2 h-5 w-5" />
-                  </Button>
-                </a>
-                <a href="/tutors">
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    className="text-base px-8 h-14 bg-transparent border-2 border-white text-white hover:bg-white hover:text-blue-600 transition-all font-semibold"
-                  >
-                    <Users className="mr-2 h-5 w-5" />
-                    Browse Tutors
-                  </Button>
-                </a>
+      {/* Testimonials */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
+        <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>What learners say</p>
+        <h2 className="text-3xl sm:text-4xl font-bold mb-12 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+          Built for the way people actually study.
+        </h2>
+        <div className="grid md:grid-cols-3 gap-4">
+          {testimonials.map((t, i) => (
+            <div key={i} className="rounded-2xl p-6 border flex flex-col" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
+              <Quote className="h-5 w-5 mb-4" style={{ color: CORAL }} />
+              <p className="text-sm leading-relaxed flex-1 mb-5" style={{ color: BEAM }}>{t.quote}</p>
+              <div>
+                <p className="text-sm font-semibold" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{t.name}</p>
+                <p className="text-xs" style={{ color: MUTE }}>{t.role}</p>
               </div>
-            </CardHeader>
-          </Card>
-        </motion.div>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs mt-6 text-center" style={{ color: MUTE }}>Illustrative of early learner feedback.</p>
+      </section>
+
+      {/* Pricing */}
+      <section id="pricing" className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
+        <div className="max-w-md mx-auto rounded-2xl p-8 text-center border" style={{ backgroundColor: STAGE_2, borderColor: "rgba(255,92,73,0.3)" }}>
+          <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>Simple pricing</p>
+          <div className="flex items-end justify-center gap-1 mb-1">
+            <span className="text-6xl font-bold" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>$4.99</span>
+          </div>
+          <p className="text-sm mb-7" style={{ color: MUTE }}>per course — six lessons, narration, and a full quiz</p>
+          <div className="space-y-3 text-left mb-8">
+            {["First lesson of every course, free", "No subscription — pay per course, when you want one", "Upload a PDF or type any topic", "Keep every course you make"].map((t) => (
+              <div key={t} className="flex items-start gap-2.5 text-sm" style={{ color: BEAM }}>
+                <Check className="h-4 w-4 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t}
+              </div>
+            ))}
+          </div>
+          <button onClick={() => navigate("/signup")} className="w-full text-sm font-semibold py-3.5 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+            Start your free lesson
+          </button>
+          <p className="text-xs mt-4" style={{ color: MUTE }}>No card required to begin.</p>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section id="faq" className="max-w-3xl mx-auto px-4 sm:px-6 py-20">
+        <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>Questions</p>
+        <h2 className="text-3xl sm:text-4xl font-bold mb-10" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+          Everything you might be wondering.
+        </h2>
+        <div>{faqs.map((f, i) => <FaqItem key={i} q={f.q} a={f.a} />)}</div>
+      </section>
+
+      {/* Final CTA */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
+        <div className="rounded-3xl p-10 sm:p-16 text-center relative overflow-hidden border" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
+          <div className="absolute inset-0" style={{ background: "radial-gradient(100% 100% at 50% 0%, rgba(255,92,73,0.12), transparent 55%)" }} />
+          <div className="relative">
+            <Zap className="h-8 w-8 mx-auto mb-5" style={{ color: AMBER }} />
+            <h2 className="text-3xl sm:text-5xl font-bold mb-4 max-w-2xl mx-auto leading-[1.08]" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+              Your first lesson is one topic away.
+            </h2>
+            <p className="text-base mb-8 max-w-md mx-auto" style={{ color: MUTE }}>
+              Type what you want to learn and watch it become a course. Free to start, no card needed.
+            </p>
+            <button onClick={() => navigate("/signup")} className="inline-flex items-center gap-2 text-sm font-semibold px-7 py-4 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+              Get started free <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
       </section>
 
       {/* Footer */}
-      <footer className="border-t bg-gradient-to-b from-gray-50 to-gray-100 py-16">
-        <div className="container mx-auto px-4">
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-12 mb-12">
-            <div>
-              <div className="flex items-center gap-3 font-bold text-xl mb-4">
-                <div className="bg-gradient-to-r from-blue-600 to-purple-600 overflow-hidden p-2 rounded-xl shadow-lg">
-                  <img src="/logo.png" alt="Level Up" className="h-10 w-10 object-cover rounded-lg" />
-                </div>
-                <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                  Level Up
-                </span>
-              </div>
-              <p className="text-sm text-gray-600 leading-relaxed">
-                Peer tutoring platform for AUB students. Empowering academic excellence through collaborative learning.
-              </p>
-              <div className="flex gap-3 mt-4">
-                <Badge variant="outline" className="text-xs">Trusted by 500+ students</Badge>
-              </div>
-            </div>
-
-            <div>
-              <h4 className="font-semibold mb-4 text-gray-900">Platform</h4>
-              <ul className="space-y-3 text-sm">
-                <li>
-                  <a href="/tutors" className="text-gray-600 hover:text-blue-600 transition-colors flex items-center gap-2 group">
-                    <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                    Find Tutors
-                  </a>
-                </li>
-                <li>
-                  <a href="/become-tutor" className="text-gray-600 hover:text-blue-600 transition-colors flex items-center gap-2 group">
-                    <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                    Become a Tutor
-                  </a>
-                </li>
-                <li>
-                  <a href="/how-it-works" className="text-gray-600 hover:text-blue-600 transition-colors flex items-center gap-2 group">
-                    <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                    How It Works
-                  </a>
-                </li>
-              </ul>
-            </div>
-
-            <div>
-              <h4 className="font-semibold mb-4 text-gray-900">Support</h4>
-              <ul className="space-y-3 text-sm">
-                <li>
-                  <a href="/faq" className="text-gray-600 hover:text-blue-600 transition-colors flex items-center gap-2 group">
-                    <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                    FAQ
-                  </a>
-                </li>
-                <li>
-                  <a href="/contact" className="text-gray-600 hover:text-blue-600 transition-colors flex items-center gap-2 group">
-                    <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                    Contact Us
-                  </a>
-                </li>
-                <li>
-                  <a href="/safety" className="text-gray-600 hover:text-blue-600 transition-colors flex items-center gap-2 group">
-                    <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                    Safety Guidelines
-                  </a>
-                </li>
-              </ul>
-            </div>
-
-            <div>
-              <h4 className="font-semibold mb-4 text-gray-900">Legal</h4>
-              <ul className="space-y-3 text-sm">
-                <li>
-                  <a href="/terms" className="text-gray-600 hover:text-blue-600 transition-colors flex items-center gap-2 group">
-                    <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                    Terms of Service
-                  </a>
-                </li>
-                <li>
-                  <a href="/privacy" className="text-gray-600 hover:text-blue-600 transition-colors flex items-center gap-2 group">
-                    <ChevronRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
-                    Privacy Policy
-                  </a>
-                </li>
-              </ul>
-            </div>
+      <footer className="border-t" style={{ borderColor: HAIR }}>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <img src="/logo.png" alt="Level Up" className="h-5 w-5 rounded object-cover" />
+            <span className="text-sm font-medium" style={{ color: MUTE }}>Level Up</span>
           </div>
-
-          <div className="border-t pt-8">
-            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-              <p className="text-sm text-gray-600">
-                &copy; 2025 Level Up. All rights reserved.
-              </p>
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <span>Made with</span>
-                <span className="text-red-500">❤️</span>
-                <span>for AUB Students</span>
-              </div>
-            </div>
+          <div className="flex items-center gap-6 text-xs" style={{ color: MUTE }}>
+            <a href="/terms" className="hover:opacity-80">Terms</a>
+            <a href="/privacy" className="hover:opacity-80">Privacy</a>
+            <a href="/refund-policy" className="hover:opacity-80">Refunds</a>
+            <a href="/login" className="hover:opacity-80">Log in</a>
           </div>
         </div>
       </footer>
     </div>
-  )
+  );
 }
+// import Navbar from "./Navbar";
+// import HeroSection from "./HeroSection";
+// import VideoShowcaseSection from "./VideoShowcaseSection";
+// import HowItWorksSection from "./HowItWorksSection";
+// import FeaturesSection from "./FeaturesSection";
+// import TargetUsersSection from "./TargetUsersSection";
+// import ShowcaseSection from "./ShowcaseSection";
+// import TestimonialsSection from "./TestimonialsSection";
+// import CTASection from "./CTASection";
+// import Footer from "./Footer";
 
-function ChevronRight({ className }) {
-  return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-    </svg>
-  )
-}
+// const Index = () => { 
+//   return (
+//     <div className="min-h-screen" style={{ background: "hsl(var(--surface))" }}>
+//       <Navbar />
+//       <main>
+//         <HeroSection />
+//         <VideoShowcaseSection />
+//         <HowItWorksSection />
+//         <FeaturesSection />
+//         <TargetUsersSection />
+//         <ShowcaseSection />
+//         <TestimonialsSection />
+//         <CTASection />
+//       </main>
+//       <Footer />
+//     </div>
+//   );
+// };
 
-function Calendar({ className }) {
-  return (
-    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-    </svg>
-  )
-}
+// export default Index;

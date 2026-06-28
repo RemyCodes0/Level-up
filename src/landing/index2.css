@@ -1,0 +1,274 @@
+@layer base {
+  :root {
+    /* === LEVEL UP AI DESIGN TOKENS === */
+
+    /* Surfaces */
+    --surface: 246 47% 8%;          /* #0D0C1A */
+    --surface-raised: 246 40% 12%;  /* #13112B */
+
+    /* Brand Colors */
+    --brand-indigo: 237 55% 54%;    /* #4E54C8 */
+    --brand-violet: 262 83% 64%;    /* #8B5CF6 */
+    --brand-cyan: 189 94% 43%;      /* #06B6D4 */
+
+    /* Foreground */
+    --text-default: 248 100% 98%;   /* #F4F3FF */
+    --text-subtle: 248 16% 44%;     /* #605E80 */
+
+    /* shadcn compat */
+    --background: var(--surface);
+    --foreground: var(--text-default);
+    --card: var(--surface-raised);
+    --card-foreground: var(--text-default);
+    --popover: var(--surface-raised);
+    --popover-foreground: var(--text-default);
+    --primary: var(--brand-indigo);
+    --primary-foreground: var(--text-default);
+    --secondary: var(--surface-raised);
+    --secondary-foreground: var(--text-default);
+    --muted: var(--surface-raised);
+    --muted-foreground: var(--text-subtle);
+    --accent: var(--brand-violet);
+    --accent-foreground: var(--text-default);
+    --destructive: 0 84% 60%;
+    --destructive-foreground: var(--text-default);
+    --border: 262 30% 22%;
+    --input: 262 30% 22%;
+    --ring: var(--brand-violet);
+    --radius: 0.75rem;
+    --sidebar-background: var(--surface-raised);
+    --sidebar-foreground: var(--text-default);
+    --sidebar-primary: var(--brand-indigo);
+    --sidebar-primary-foreground: var(--text-default);
+    --sidebar-accent: var(--brand-violet);
+    --sidebar-accent-foreground: var(--text-default);
+    --sidebar-border: 262 30% 22%;
+    --sidebar-ring: var(--brand-violet);
+  }
+}
+
+@layer base {
+  
+
+  html, body, #root {
+    width: 100%;
+    min-height: 100%;
+    background-color: hsl(var(--surface));
+    color: hsl(var(--text-default));
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  
+}
+
+/* ==================== ANIMATIONS ==================== */
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 12px rgba(6, 182, 212, 0.20); }
+  50% { box-shadow: 0 0 28px rgba(6, 182, 212, 0.55); }
+}
+
+@keyframes levitate {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(32px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes orbFloat {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(15px, -20px) scale(1.05); }
+  66% { transform: translate(-10px, 10px) scale(0.97); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes typewriterBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ==================== UTILITY CLASSES ==================== */
+
+.gradient-text {
+  background: linear-gradient(135deg, #8B5CF6 0%, #06B6D4 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: gradientShift 4s ease infinite;
+}
+
+.gradient-text-static {
+  background: linear-gradient(135deg, #8B5CF6 0%, #06B6D4 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-bg {
+  background: linear-gradient(135deg, #4E54C8 0%, #8B5CF6 60%, #06B6D4 100%);
+  background-size: 200% 200%;
+  animation: gradientShift 4s ease infinite;
+}
+
+.glass-card {
+  background: rgba(30, 22, 102, 0.35);
+  border: 1px solid rgba(139, 92, 246, 0.20);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.glass-card-hover {
+  transition: all 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.glass-card-hover:hover {
+  border-color: rgba(139, 92, 246, 0.45);
+  box-shadow: 0 8px 40px rgba(78, 84, 200, 0.25);
+  transform: translateY(-4px);
+}
+
+.glow-violet {
+  box-shadow: 0 0 24px rgba(139, 92, 246, 0.35);
+}
+
+.glow-cyan {
+  box-shadow: 0 0 24px rgba(6, 182, 212, 0.35);
+}
+
+.pill-cyan {
+  background: rgba(6, 182, 212, 0.10);
+  border: 1px solid rgba(6, 182, 212, 0.30);
+  color: #06B6D4;
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  padding: 4px 14px;
+  display: inline-flex;
+  align-items: center;
+  animation: glowPulse 3s ease-in-out infinite;
+}
+
+.pill-violet {
+  background: rgba(139, 92, 246, 0.10);
+  border: 1px solid rgba(139, 92, 246, 0.30);
+  color: #8B5CF6;
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.10em;
+  padding: 4px 14px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tag-cyan {
+  background: rgba(6, 182, 212, 0.10);
+  border: 1px solid rgba(6, 182, 212, 0.25);
+  color: #06B6D4;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 2px 8px;
+  display: inline-block;
+}
+
+.section-heading {
+  font-size: clamp(32px, 5vw, 48px);
+  font-weight: 700;
+  line-height: 1.15;
+  color: hsl(var(--text-default));
+}
+
+.section-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  color: #06B6D4;
+  text-transform: uppercase;
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(60px);
+  animation: orbFloat 8s ease-in-out infinite;
+}
+
+.levitate {
+  animation: levitate 4s ease-in-out infinite;
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.6s ease-out both;
+}
+
+.scroll-reveal {
+  opacity: 0;
+  transform: translateY(32px);
+  transition: opacity 0.5s ease-out, transform 0.5s ease-out;
+}
+
+.scroll-reveal.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Navbar scroll effect */
+.nav-scrolled {
+  background: rgba(13, 12, 26, 0.85) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(139, 92, 246, 0.20) !important;
+}
+
+/* Focus ring */
+*:focus-visible {
+  outline: 2px solid #8B5CF6;
+  outline-offset: 3px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: hsl(var(--surface));
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.35);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.60);
+}
