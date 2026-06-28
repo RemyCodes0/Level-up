@@ -205,7 +205,8 @@ export default function LandingPage() {
               <Sparkles className="h-3 w-3" /> The first lesson is always free
             </div>
             <h1 className="text-4xl sm:text-6xl font-bold leading-[1.05] mb-6" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
-              Stop cramming. Learn visually. <span style={{ color: CORAL }}>watch.</span>
+              Stop cramming. <br />
+                <span style={{ color: CORAL }}>Learn visually.</span>
             </h1>
             <p className="text-lg leading-relaxed mb-8 max-w-xl mx-auto" style={{ color: MUTE }}>
               Type a topic or upload your notes. Level Up renders six narrated, animated video lessons and a readiness quiz — the kind of course you'd wish someone had made for you, built in minutes.
