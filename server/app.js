@@ -50,6 +50,7 @@ app.use('/api/course', courseRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/export', exportRoutes)
 app.use('/api/assessment', require('./routes/assessment'))
+app.use('/api/admin', require('./routes/admin'));
 // app.use('/api', checkoutRouter);
 
 // Serve audio files for browser playback at /audio/*

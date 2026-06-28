@@ -27,6 +27,7 @@ import Analytics from "./Analytics";
 import AILearningPage from './ai/AiTutor'
 import ShowcasePage from './showcase/ShowCase'
 import VerifyEmailPage from './signup/Verifyemailpage'
+import AdminDashboard from './ai/AdminDashboard'
 function App() {
 
 
@@ -46,6 +47,7 @@ function App() {
       <Route path="/tutors" element={<TutorsPage/>}/>
       <Route path="/ai_tutor" element={<AILearningPage/>}/>
       <Route path="/ai_showcase" element={<ShowcasePage/>}/>
+      <Route path="/ai_admin" element={<AdminDashboard/>}/>
       <Route path="/bookings" element={<BookingsPage/>}/>
       <Route path="/tutor/dashboard" element={<TutorDashboardPage/>}/>
       <Route path="/tutor/earnings" element={<TutorEarningsPage/>}/>
