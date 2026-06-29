@@ -6,6 +6,23 @@ import {
   Target, BarChart3, TrendingUp, Star,
 } from "lucide-react";
 
+// Detects small screens so the showcase can drop the desktop-only sidebars
+// (which are far too wide for a phone) and show just the main content panel —
+// the part that actually demonstrates each step.
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth < breakpoint : false
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    setIsMobile(mq.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 
 
 // ─── Step definitions ────────────────────────────────────────────────────────
@@ -560,7 +577,7 @@ function ResultsScreen({ active }: { active: boolean }) {
 
 // ─── Browser mockup wrapper ───────────────────────────────────────────────────
 
-function BrowserMockup({ currentStep, screenKey }: { currentStep: number; screenKey: number }) {
+function BrowserMockup({ currentStep, screenKey, isMobile }: { currentStep: number; screenKey: number; isMobile: boolean }) {
   return (
     <div style={{ position: "relative", width: "100%", maxWidth: "920px", margin: "0 auto" }}>
       {/* Outer glow */}
@@ -577,9 +594,9 @@ function BrowserMockup({ currentStep, screenKey }: { currentStep: number; screen
             ))}
           </div>
           {/* URL bar */}
-          <div style={{ flex: 1, background: "rgba(255,255,255,0.07)", borderRadius: "6px", padding: "4px 12px", display: "flex", alignItems: "center", gap: "6px" }}>
+          <div style={{ flex: 1, background: "rgba(255,255,255,0.07)", borderRadius: "6px", padding: "4px 12px", display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
             <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#10B981", flexShrink: 0 }} />
-            <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.50)", fontFamily: "monospace" }}>
+            <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.50)", fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               leveluppedu/ai_tutor
             </span>
           </div>
@@ -594,14 +611,17 @@ function BrowserMockup({ currentStep, screenKey }: { currentStep: number; screen
         {/* App content */}
         <div
           key={screenKey}
-          style={{ display: "flex", height: "420px", background: "#fff", animation: "fadeIn 0.35s ease-out both" }}
+          style={{ display: "flex", height: isMobile ? "440px" : "420px", background: "#fff", animation: "fadeIn 0.35s ease-out both" }}
         >
-          <AppSidebar step={currentStep} />
+          {/* Sidebars are desktop-only — far too wide for a phone. On mobile we
+              show just the main content panel, which is what actually
+              demonstrates each step. */}
+          {!isMobile && <AppSidebar step={currentStep} />}
           {currentStep === 1 ? (
             <InputScreen active={true} />
           ) : (
             <>
-              <CourseNav activeLesson={currentStep === 3 ? -1 : 5} quizActive={currentStep === 3} />
+              {!isMobile && <CourseNav activeLesson={currentStep === 3 ? -1 : 5} quizActive={currentStep === 3} />}
               {currentStep === 2 && <LessonScreen active={true} />}
               {currentStep === 3 && <QuizScreen active={true} />}
               {currentStep === 4 && <ResultsScreen active={true} />}
@@ -616,6 +636,7 @@ function BrowserMockup({ currentStep, screenKey }: { currentStep: number; screen
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export default function VideoShowcaseSection() {
+  const isMobile = useIsMobile();
   const [currentStep, setCurrentStep] = useState(1);
   const [screenKey, setScreenKey] = useState(0);
   const [autoPlay, setAutoPlay] = useState(true);
@@ -650,18 +671,21 @@ export default function VideoShowcaseSection() {
      <div>
       {/* Background */}
       
-      <div className="max-w-[1100px] mx-auto relative z-10">
+      <div className="max-w-[1100px] mx-auto relative z-10 px-4 sm:px-0">
       
 
         {/* Step pills */}
-        <div className="flex flex-wrap items-center justify-center gap-2 mb-8">
+        <div
+          className="flex items-center justify-start sm:justify-center gap-2 mb-8 overflow-x-auto sm:flex-wrap sm:overflow-visible pb-2 sm:pb-0"
+          style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+        >
           {STEPS.map((s) => {
             const isActive = s.id === currentStep;
             return (
               <button
                 key={s.id}
                 onClick={() => { setAutoPlay(false); goToStep(s.id); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-full transition-all duration-200"
+                className="flex items-center gap-2 px-4 py-2 rounded-full transition-all duration-200 shrink-0"
                 style={{
                   background: isActive ? "linear-gradient(135deg,#6366F1,#8B5CF6)" : "rgba(255,255,255,0.05)",
                   border: isActive ? "1px solid rgba(99,102,241,0.50)" : "1px solid rgba(255,255,255,0.10)",
@@ -699,7 +723,7 @@ export default function VideoShowcaseSection() {
           {/* Pause/play */}
           <button
             onClick={() => setAutoPlay((a) => !a)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-full transition-all duration-200"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-full transition-all duration-200 shrink-0"
             style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.40)", fontSize: "11px" }}
           >
             {autoPlay ? <Pause style={{ width: "11px", height: "11px" }} /> : <Play style={{ width: "11px", height: "11px" }} />}
@@ -708,7 +732,7 @@ export default function VideoShowcaseSection() {
         </div>
 
         {/* Browser mockup */}
-        <BrowserMockup currentStep={currentStep} screenKey={screenKey} />
+        <BrowserMockup currentStep={currentStep} screenKey={screenKey} isMobile={isMobile} />
 
         {/* Step description + nav */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-8">
