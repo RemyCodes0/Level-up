@@ -51,6 +51,7 @@ app.use('/api/feedback', feedbackRoutes);
 app.use('/api/export', exportRoutes)
 app.use('/api/assessment', require('./routes/assessment'))
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/showcase', require('./routes/showcase'));
 // app.use('/api', checkoutRouter);
 
 // Serve audio files for browser playback at /audio/*
@@ -68,7 +69,7 @@ app.get('/sitemap.xml', async (req, res) => {
   try {
     const smStream = new SitemapStream({
       hostname: 'https://levelup-snowy.vercel.app'
-    });
+    });app.use('/api/showcase', require('./routes/showcase'));
 
     smStream.write({ url: '/', changefreq: 'daily', priority: 1.0 });
     smStream.write({ url: '/tutors', changefreq: 'daily', priority: 0.9 });
