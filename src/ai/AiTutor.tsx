@@ -426,7 +426,7 @@ function VideoPlayer({ lesson, onComplete, onRetry, retrying, courseId, lessonNu
   }
   return (
     <div className="space-y-4">
-      <DynamicPlayer code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} onEnded={onComplete} onRetry={onRetry} retrying={retrying} />
+      <DynamicPlayer key={`lesson-${lessonNumber}`} code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} onEnded={onComplete} onRetry={onRetry} retrying={retrying} />
       <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
         <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
         <ul className="space-y-2">
@@ -1218,16 +1218,16 @@ export default function AILearningPage() {
 
         <main className="flex-1 overflow-y-auto">
           <div className="px-4 sm:px-6 py-6 sm:py-8">
-            {failureBanner && (
+            {failureBanner && failureBanner.lessonIndex === activeLesson && (
               <div className="mb-4 flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-3 sm:px-4 py-3">
                 <XCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-red-700">
-                    "{failureBanner.title}" failed to generate
+                    This lesson couldn't be generated
                   </p>
-                  {failureBanner.error && (
-                    <p className="text-xs text-red-500 mt-0.5 break-words">{failureBanner.error}</p>
-                  )}
+                  <p className="text-xs text-red-500 mt-0.5">
+                    Something went wrong while building this video. You can try again — it usually works on a retry.
+                  </p>
                   <button
                     onClick={() => {
                       handleRetryLesson(failureBanner.lessonIndex);
@@ -1252,13 +1252,13 @@ export default function AILearningPage() {
                 <VideoPlayer lesson={lessons[activeLesson]} onComplete={() => markComplete(lessons[activeLesson].id)} onRetry={() => handleRetryLesson(activeLesson)} retrying={retryingLesson === activeLesson} courseId={activeHistoryId} lessonNumber={activeLesson + 1} />
                 <div className="flex items-center justify-between gap-2 pt-2">
                   <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className="text-xs sm:text-sm px-3 sm:px-4 shrink-0"><ChevronLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
-                  {/* {activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
+                  {activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
                     <DownloadLessonButton
                       courseId={activeHistoryId}
                       lessonNumber={activeLesson + 1}
                       lessonTitle={lessons[activeLesson]?.title}
                     />
-                  )} */}
+                  )}
                   {activeLesson < lessons.length - 1 ? (
                     lessonStatuses[activeLesson + 1] === "locked" ? (
                       <Button
