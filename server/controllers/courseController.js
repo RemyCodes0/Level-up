@@ -10,9 +10,48 @@ const { generateAllSceneAudio } = require("../services/ttsService");
 const Course = require("../models/Course");
 const GenerationLog = require("../models/GenerationLog");
 const User = require("../models/User");
+const sendEmail = require("../services/emailService");
 
 // Audio dir — for cleanup when a course is deleted
 const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
+
+// Where to send the "someone generated a course" notification. Falls back to
+// your own address if a dedicated env var isn't set, same pattern as the
+// feedback notifications.
+const COURSE_NOTIFICATION_EMAIL =
+  process.env.COURSE_NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "tuyishimechristophe84@gmail.com";
+
+// Fires a "new course generation started" email. Non-blocking and never
+// throws into the caller — a notification failure should never affect course
+// generation itself, same reasoning as the feedback controller's email call.
+function notifyCourseGenerated({ course, user, isFreeTrialCourse }) {
+  const kind = isFreeTrialCourse ? "Free trial" : "Paid";
+  sendEmail({
+    to: COURSE_NOTIFICATION_EMAIL,
+    subject: `New course generated — ${course.topic || "Untitled"} (${kind})`,
+    text: [
+      `A new course was just started.`,
+      ``,
+      `Topic: ${course.topic || "Untitled"}`,
+      `Type: ${kind}`,
+      `User: ${user?.name || "Unknown"} (${user?.email || "no email"})`,
+      `Course ID: ${course._id}`,
+      `Started: ${new Date().toISOString()}`,
+    ].join("\n"),
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #1e293b; margin: 0 0 16px;">New course generated</h2>
+        <table style="width: 100%; font-size: 14px; color: #334155; border-collapse: collapse;">
+          <tr><td style="padding: 6px 0; color: #94a3b8; width: 80px;">Topic</td><td style="padding: 6px 0; font-weight: 600;">${course.topic || "Untitled"}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Type</td><td style="padding: 6px 0;">${kind}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">User</td><td style="padding: 6px 0;">${user?.name || "Unknown"} (${user?.email || "no email"})</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Course ID</td><td style="padding: 6px 0; font-family: monospace; font-size: 12px;">${course._id}</td></tr>
+        </table>
+        <p style="margin-top: 16px; color: #94a3b8; font-size: 11px;">${new Date().toISOString()}</p>
+      </div>
+    `,
+  }).catch((err) => console.error("Failed to send course-generated notification email:", err.message));
+}
 
 // ── Entry point: client calls this to start course generation ────────────────
 async function generateCourseHandler(req, res) {
@@ -43,6 +82,10 @@ async function generateCourseHandler(req, res) {
     } else {
       await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
     }
+
+    // Fire-and-forget notification — doesn't block the response or affect
+    // generation if it fails.
+    notifyCourseGenerated({ course, user: req.user, isFreeTrialCourse: !!req.usingFreeTrial });
 
     res.json({ courseId: course._id, status: "generating" });
     processCourse(course._id.toString(), topic, pdfBuffer, !!req.usingFreeTrial, level);
