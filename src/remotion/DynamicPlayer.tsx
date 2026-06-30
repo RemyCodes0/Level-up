@@ -19,6 +19,8 @@ interface DynamicPlayerProps {
 const FPS = 30;
 const SKIP_SECONDS = 10;
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+// How long controls stay visible after the last tap/move, while playing.
+const AUTO_HIDE_MS = 3000;
 
 // Pulls every audio URL out of the lesson's generated code (each scene has
 // its own <Audio src="..."/> tag) so they can all be prefetched up front.
@@ -35,10 +37,15 @@ function formatTime(frame: number, fps: number): string {
 }
 
 // ── Custom control bar ──────────────────────────────────────────────────────
-// Rendered as a SIBLING of <Player>, not a child — per Remotion's own
-// best-practices guidance, this means frequently-changing state (the
-// playhead position, ticking every frame) only re-renders this lightweight
-// bar, not the much heavier <Player> itself.
+// Rendered as an OVERLAY on top of the video (inside the same fullscreen
+// container as the Player — see DynamicPlayer below), so it's:
+//   1. Still reachable while in fullscreen, since it's now a descendant of
+//      whatever element actually gets fullscreened, instead of a sibling
+//      sitting outside it (which was the bug: fullscreening just the
+//      Player left the controls behind, invisible).
+//   2. Tap/click anywhere on the video reveals it via the `visible` prop
+//      controlled by the parent, then auto-hides after a few seconds while
+//      playing — the standard video-player pattern.
 function VideoControls({
   playerRef,
   durationInFrames,
@@ -47,6 +54,9 @@ function VideoControls({
   setPlaybackRate,
   loop,
   setLoop,
+  visible,
+  isFullscreen,
+  onToggleFullscreen,
 }: {
   playerRef: React.RefObject<PlayerRef | null>;
   durationInFrames: number;
@@ -55,14 +65,16 @@ function VideoControls({
   setPlaybackRate: (r: number) => void;
   loop: boolean;
   setLoop: (l: boolean) => void;
+  visible: boolean;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
-  const [fullscreen, setFullscreen] = useState(false);
-  const [fullscreenSupported, setFullscreenSupported] = useState(false);
   const [seeking, setSeeking] = useState(false);
+  const [fullscreenSupported, setFullscreenSupported] = useState(false);
 
   useEffect(() => {
     // Feature-detect Fullscreen API support — notably absent on iOS Safari
@@ -80,20 +92,15 @@ function VideoControls({
     const onFrameUpdate = (e: { detail: { frame: number } }) => {
       if (!seeking) setCurrentFrame(e.detail.frame);
     };
-    const onFullscreenChange = (e: { detail: { isFullscreen: boolean } }) => {
-      setFullscreen(e.detail.isFullscreen);
-    };
 
     player.addEventListener("play", onPlay);
     player.addEventListener("pause", onPause);
     player.addEventListener("frameupdate", onFrameUpdate as any);
-    player.addEventListener("fullscreenchange", onFullscreenChange as any);
 
     return () => {
       player.removeEventListener("play", onPlay);
       player.removeEventListener("pause", onPause);
       player.removeEventListener("frameupdate", onFrameUpdate as any);
-      player.removeEventListener("fullscreenchange", onFullscreenChange as any);
     };
   }, [playerRef, seeking]);
 
@@ -143,13 +150,6 @@ function VideoControls({
     if (v > 0 && muted) { player.unmute(); setMuted(false); }
   }, [playerRef, muted]);
 
-  const toggleFullscreen = useCallback(() => {
-    const player = playerRef.current;
-    if (!player) return;
-    if (player.isFullscreen()) player.exitFullscreen();
-    else player.requestFullscreen();
-  }, [playerRef]);
-
   const handleSeekInput = useCallback((frame: number) => {
     setSeeking(true);
     setCurrentFrame(frame);
@@ -161,7 +161,20 @@ function VideoControls({
   }, [playerRef]);
 
   return (
-    <div className="bg-slate-900 rounded-b-xl px-3 sm:px-4 py-2.5 select-none">
+    <div
+      // Overlay positioning + a gradient so controls stay legible against
+      // bright video content underneath, rather than a solid bar. Hidden
+      // via opacity/pointer-events (not unmounted) so it doesn't lose focus
+      // or re-trigger effects every time it shows/hides.
+      className={`absolute bottom-0 left-0 right-0 px-3 sm:px-4 pt-8 pb-2.5 select-none transition-opacity duration-200 ${
+        visible ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+      }`}
+      style={{ background: "linear-gradient(to top, rgba(15,23,42,0.92), rgba(15,23,42,0.5) 60%, transparent)" }}
+      // Stop taps on the control bar itself from bubbling up to the
+      // container's "toggle controls visibility" handler — otherwise
+      // tapping a button would immediately hide the bar again.
+      onClick={(e) => e.stopPropagation()}
+    >
       {/* Seek bar */}
       <input
         type="range"
@@ -243,10 +256,12 @@ function VideoControls({
 
         {/* Fullscreen — hidden entirely where the browser doesn't support it
             (notably all iOS browsers, a WebKit/Apple platform limitation
-            with no available workaround). */}
+            with no available workaround). Fullscreen is now handled by the
+            parent on the WHOLE container (player + this control bar), so
+            controls stay visible and reachable while fullscreen. */}
         {fullscreenSupported && (
-          <button onClick={toggleFullscreen} className="p-1.5 text-white/70 hover:text-white transition-colors" aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
-            {fullscreen ? <Minimize2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" /> : <Maximize2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
+          <button onClick={onToggleFullscreen} className="p-1.5 text-white/70 hover:text-white transition-colors" aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
+            {isFullscreen ? <Minimize2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" /> : <Maximize2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
           </button>
         )}
       </div>
@@ -262,9 +277,73 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   retrying,
 }) => {
   const playerRef = useRef<PlayerRef>(null);
+  // Wraps BOTH the Player and the controls overlay — this is the element we
+  // actually fullscreen, so the controls (a descendant, not a sibling) stay
+  // visible and tappable once fullscreen is active. This is the core fix:
+  // previously only the Player itself was fullscreened, leaving the
+  // controls bar behind outside the fullscreened element.
+  const containerRef = useRef<HTMLDivElement>(null);
   const { Component, error } = useCompilation(code);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [loop, setLoop] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Tracks fullscreen state by watching the actual document, since we now
+  // fullscreen containerRef directly (via requestFullscreen/exitFullscreen)
+  // rather than relying on the Player's own internal fullscreen handling.
+  useEffect(() => {
+    const handler = () => {
+      setIsFullscreen(document.fullscreenElement === containerRef.current);
+    };
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (document.fullscreenElement === el) {
+      document.exitFullscreen();
+    } else {
+      el.requestFullscreen().catch((err) => {
+        console.error("Failed to enter fullscreen:", err);
+      });
+    }
+  }, []);
+
+  // Auto-hide logic: any tap/move shows controls and resets a 3s timer.
+  // While paused, controls always stay visible (no point hiding them on a
+  // still frame the user is presumably about to interact with).
+  const showControls = useCallback(() => {
+    setControlsVisible(true);
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    if (isPlaying) {
+      hideTimerRef.current = setTimeout(() => setControlsVisible(false), AUTO_HIDE_MS);
+    }
+  }, [isPlaying]);
+
+  useEffect(() => {
+    return () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); };
+  }, []);
+
+  // Track play/pause at this level too (separate from VideoControls' own
+  // tracking) purely to drive the auto-hide timer above.
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+    const onPlay = () => { setIsPlaying(true); showControls(); };
+    const onPause = () => { setIsPlaying(false); setControlsVisible(true); if (hideTimerRef.current) clearTimeout(hideTimerRef.current); };
+    player.addEventListener("play", onPlay);
+    player.addEventListener("pause", onPause);
+    return () => {
+      player.removeEventListener("play", onPlay);
+      player.removeEventListener("pause", onPause);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Component]);
 
   // Prefetches every scene's audio file as soon as the lesson loads —
   // before the user even presses play. Without this, each scene's <Audio>
@@ -345,7 +424,14 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   }
 
   return (
-    <div>
+    <div
+      ref={containerRef}
+      className="relative rounded-xl overflow-hidden bg-slate-900"
+      style={!isFullscreen ? { aspectRatio: "16/9" } : undefined}
+      onMouseMove={showControls}
+      onTouchStart={showControls}
+      onClick={showControls}
+    >
       <Player
         ref={playerRef}
         component={Component}
@@ -353,12 +439,11 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         fps={FPS}
         compositionWidth={1920}
         compositionHeight={1080}
-        style={{ width: "100%", aspectRatio: "16/9", borderRadius: "12px 12px 0 0" }}
+        style={{ width: "100%", height: "100%" }}
         playbackRate={playbackRate}
         loop={loop}
         controls={false}
         clickToPlay
-        doubleClickToFullscreen
       />
       <VideoControls
         playerRef={playerRef}
@@ -368,6 +453,9 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         setPlaybackRate={setPlaybackRate}
         loop={loop}
         setLoop={setLoop}
+        visible={controlsVisible}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={toggleFullscreen}
       />
     </div>
   );
