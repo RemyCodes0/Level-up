@@ -1319,7 +1319,7 @@ export default function AILearningPage() {
             )}
           </div>
         </main>
-      </div>
+      </div> 
     </div>
   );
 }
