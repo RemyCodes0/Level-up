@@ -274,7 +274,7 @@ async function generateLessonCode(
       );
 
       const stream = await client.messages.create({
-        model: "claude-sonnet-4-6",
+        model: "claude-sonnet-5",
         max_tokens: 25000,
         temperature: 0.4,
         stream: true,
