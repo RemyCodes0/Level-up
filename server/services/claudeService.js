@@ -276,7 +276,7 @@ async function generateLessonCode(
       const stream = await client.messages.create({
         model: "claude-sonnet-5",
         max_tokens: 25000,
-        temperature: 0.4,
+        // temperature is deprecated on claude-sonnet-4-5 and newer models — removed.
         stream: true,
         messages: [
           {
