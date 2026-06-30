@@ -17,6 +17,7 @@ import {
 import type { CourseFromAPI } from "../api/CourseApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
+import { DownloadLessonButton } from "../components/DownloadLessonButton";
 import {
   FileText, Play, CheckCircle, Circle, Lock, Brain, Sparkles,
   ChevronRight, ChevronLeft, Clock, BarChart2, BookOpen, AlertCircle,
@@ -27,6 +28,15 @@ import {
 import { useNavigate } from "react-router-dom";
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
+
+// The local Remotion-render export (download MP4) feature requires a
+// headless Chrome with system libraries that aren't installed on our
+// current Render hosting — it works fine in local dev, but fails in
+// production. Rather than ship a broken button, it's gated behind this env
+// var so it only renders when explicitly enabled (e.g. in your local
+// .env: VITE_ENABLE_DOWNLOAD=true). Unset or any other value keeps it
+// hidden, which is the correct default for production.
+const DOWNLOAD_ENABLED = import.meta.env.VITE_ENABLE_DOWNLOAD === "true";
 
 function useIsMobile(breakpoint = 768) {
   const [isMobile, setIsMobile] = useState(
@@ -1251,6 +1261,13 @@ export default function AILearningPage() {
                 <VideoPlayer lesson={lessons[activeLesson]} onComplete={() => markComplete(lessons[activeLesson].id)} onRetry={() => handleRetryLesson(activeLesson)} retrying={retryingLesson === activeLesson} courseId={activeHistoryId} lessonNumber={activeLesson + 1} />
                 <div className="flex items-center justify-between gap-2 pt-2">
                   <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className="text-xs sm:text-sm px-3 sm:px-4 shrink-0"><ChevronLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
+                  {DOWNLOAD_ENABLED && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
+                    <DownloadLessonButton
+                      courseId={activeHistoryId}
+                      lessonNumber={activeLesson + 1}
+                      lessonTitle={lessons[activeLesson]?.title}
+                    />
+                  )}
                   {activeLesson < lessons.length - 1 ? (
                     lessonStatuses[activeLesson + 1] === "locked" ? (
                       <Button

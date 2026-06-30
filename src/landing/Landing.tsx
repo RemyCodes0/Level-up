@@ -30,7 +30,6 @@ function useInView<T extends HTMLElement>(threshold = 0.15) {
   }, [threshold]);
   return { ref, seen };
 }
-
 function usePrefersReducedMotion() {
   const [reduce, setReduce] = useState(false);
   useEffect(() => { setReduce(window.matchMedia("(prefers-reduced-motion: reduce)").matches); }, []);
@@ -405,13 +404,13 @@ export default function LandingPage() {
             <span className="text-sm font-medium" style={{ color: MUTE }}>Level Up</span>
           </div>
           <div className="flex items-center gap-6 text-xs" style={{ color: MUTE }}>
-            <a href="/terms" className="hover:opacity-80">Terms</a>
-            <a href="/privacy" className="hover:opacity-80">Privacy</a>
-            <a href="/refund-policy" className="hover:opacity-80">Refunds</a>
+            <a href="/terms.html" className="hover:opacity-80">Terms</a>
+            <a href="/privacy-policy.html" className="hover:opacity-80">Privacy</a>
+            <a href="/refund-policy.html" className="hover:opacity-80">Refunds</a>
             <a href="/login" className="hover:opacity-80">Log in</a>
           </div>
         </div>
       </footer>
-    </div>
+    </div> 
   );
 }
