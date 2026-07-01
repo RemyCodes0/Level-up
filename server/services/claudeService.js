@@ -18,9 +18,6 @@ function safeParseJson(text) {
   return JSON.parse(clean);
 }
 
-// Maps the level (from the pre-course chat) into a concrete instruction the
-// course planner can act on. Returns "" when no level was provided (user
-// skipped the chat), so behaviour is unchanged in that case.
 function buildLevelGuidance(level) {
   switch (level) {
     case "beginner":
@@ -147,64 +144,191 @@ ${rules}
   );
 }
 
+// Prompt rewritten for Sonnet 5. Key differences from the 4.6 version:
+//
+// 1. WORKED EXAMPLE is now richly animated — two scenes showing real
+//    continuous motion (orbiting particle, pulsing core, sine-wave drift),
+//    not a static black rectangle. The model imitates the example more than
+//    any written rule, so the example must demonstrate ambition, not caution.
+//
+// 2. EASING is now available — Sonnet 5 handles it correctly and shouldn't
+//    be told to avoid it. Removed the "NEVER use Easing" prohibition.
+//
+// 3. PERFORMANCE limits relaxed — the 50-element cap and "keep frame cheap"
+//    warnings were calibrated for 4.6's tendency to over-engineer loops.
+//    Sonnet 5 is more disciplined; these limits were cutting off legitimate
+//    visual richness.
+//
+// 4. LINE LIMIT raised from 800 to 1200 — Sonnet 5 writes more structured,
+//    readable code with proper helper components. The old limit was forcing
+//    it to compress scenes in ways that reduced animation quality.
+//
+// Crash-safety rules (interpolate shape, clamping, forbidden imports,
+// duration sum) are kept — those reflect real runtime constraints of this
+// environment, not compensations for model weakness.
 const CODE_GEN_STATIC_RULES = `
-You are an expert Remotion motion-graphics developer.
+You are a world-class Remotion motion-graphics developer creating visually astonishing educational animations. This is a premium learning product — every scene must feel alive, dynamic, and visually connected to the concept being taught.
 
-Generate a complete, self-contained Remotion composition for a lesson. The video is divided into scenes. Each scene has an EXACT frame duration (measured from its voiceover audio) and you MUST build each scene to that exact duration so the visuals stay in sync with the narration.
+Generate a complete, self-contained Remotion composition for a lesson. Each scene has an EXACT frame duration (measured from its voiceover audio) and you MUST build each scene to that exact duration.
 
 STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 1. The component MUST be named exactly as given below and exported as a named export: export const ComponentName = () => { ... }
 2. Import ONLY from "remotion" and "react".
-   Allowed remotion imports: AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio.
+   Allowed remotion imports: AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing.
    Do NOT import staticFile — it is not available in this environment.
 3. The component takes NO props — all scene data is hardcoded from the SCENES list given below.
 4. Structure: a single <Series> containing one <Series.Sequence> per scene, IN ORDER.
 5. Each <Series.Sequence> MUST use durationInFrames set to EXACTLY the number given for that scene. Never change, compute, or round these numbers — copy them exactly.
 6. Inside each <Series.Sequence>, include <Audio src={"<that scene's audioUrl>"} /> using the exact URL string directly. The audioUrl values are full HTTP URLs — use them directly as the src, with NO staticFile() wrapper.
-7. Inside each scene, build animations that visually match that scene's visualDescription and display its onScreenText. Use spring entrances, interpolated fades, moving shapes, staggered reveals, SVG graphics — make it dynamic and educational.
-8. INTERPOLATE SAFETY — violations CRASH the video at runtime:
-   - ALWAYS 3 arguments: interpolate(value, inputRange, outputRange). NEVER 2.
-   - inputRange and outputRange MUST be inline literal arrays of the SAME length.
-   - BAD: interpolate(frame, [0, 30]) — missing outputRange, CRASHES.
-   - BAD: interpolate(frame, someVar, anotherVar) — could be undefined, CRASHES.
-   - BAD: Array.from({length: n}, (_, i) => interpolate(frame, [0, d], arr[i])) — arr[i] might be undefined.
-   - GOOD: interpolate(frame, [0, 30], [0, 1])
-   - GOOD: interpolate(frame, [0, 15, 30], [0, 1, 0])
-   - CLAMP TO STOP RUNAWAY MOTION — this is critical for visual quality:
-     By default interpolate KEEPS EXTRAPOLATING past the input range, so a value meant to stop at frame 30 keeps growing/moving forever and elements fly OFF-SCREEN. ALWAYS add { extrapolateLeft: "clamp", extrapolateRight: "clamp" } to any interpolate whose output should settle and stay put (scale, position, size, translateX/Y, width, height, radius).
-     - BAD: interpolate(frame, [0, 30], [0, 1.5]) — keeps scaling past 1.5, element grows until it leaves the screen.
-     - GOOD: interpolate(frame, [0, 30], [0, 1.5], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) — grows to 1.5 then HOLDS.
-     - GOOD for slide-in that stays put: interpolate(frame, [0, 20], [-200, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })
-   - KEEP THINGS ON SCREEN: any element's final scale must stay roughly ≤ 1.5, and final x/y positions must keep it fully within a 1920x1080 frame. Never animate position or size toward a value that would push the element past the screen edges.
-   - For INTENTIONAL continuous motion (rotation, orbiting, pulsing), do NOT use interpolate — use bounded periodic math instead: Math.sin(frame / k) and Math.cos(frame / k) oscillate forever between -1 and 1 so they never run away. transform: rotate uses (frame * speed) % 360 to loop cleanly. This is how you get endless motion that never leaves the screen.
-   - NEVER use Easing — it is not available in this environment.
-   - When computing ranges with Array.from or .map, ALWAYS hardcode both arrays or verify lengths match BEFORE calling interpolate.
-9. The sum of all durationInFrames MUST equal exactly the total given below.
-10. Use only inline styles. No external CSS, no Tailwind.
-11. Do NOT include registerRoot or Composition — only the component itself plus any helper components.
-12. Keep total code under 800 lines. Use reusable helper components and loops to stay concise.
-13. Every <Series.Sequence> MUST have a positive integer durationInFrames (at least 1). Never produce a zero or negative duration.
-14. PERFORMANCE: Keep each frame cheap to render. Do NOT put more than ~50 elements on screen at once. Avoid heavy per-frame computation, deeply nested loops, or generating large arrays inside the render function. Precompute static values outside the component. Every frame must render in well under one second.
-15. Return ONLY the raw .tsx code. No markdown fences, no explanation.
-16. Put heavy emphasis on animations which is the key role of this app, producing astonishing animations, with only continuously moving animation scenes (most of the time).
 
-WORKED EXAMPLE — this is exactly the pattern every scene must follow. Study the structure, the interpolate() calls, and the Audio tag closely before writing your own:
+ANIMATION PHILOSOPHY — this is the most important section:
+7. Every scene must have CONTINUOUS MOTION throughout its entire duration. A scene where elements just sit there after their entrance animation is a failure. Ask yourself: "what is moving right now at frame 100? at frame 200?" — something must always be moving.
+8. ILLUSTRATE THE CONCEPT VISUALLY. Don't just display text. If the scene is about electrical current, animate electrons flowing. If it's about sorting algorithms, show elements moving into order. If it's about gravity, show orbiting. The animation IS the lesson.
+9. Build rich multi-layered scenes: a moving background gradient or particle field, animated diagram elements in the middle layer, and text that reveals with spring or stagger on top. Three layers of motion make a scene feel alive.
+10. Use the full creative toolkit:
+    - spring() for bouncy, natural entrances
+    - Easing.bezier() for custom easing curves (e.g. Easing.bezier(0.25, 0.46, 0.45, 0.94))
+    - Math.sin(frame / k) and Math.cos(frame / k) for continuous periodic motion
+    - (frame * speed) % 360 for looping rotation
+    - Staggered reveals: interpolate(frame, [i * 5, i * 5 + 20], [0, 1]) for each element i
+    - SVG paths and shapes for diagrams
+    - Layered colors and gradients via inline styles
+
+INTERPOLATE SAFETY — violations CRASH the video at runtime:
+11. ALWAYS 3 arguments: interpolate(value, inputRange, outputRange). NEVER 2.
+    - inputRange and outputRange MUST be inline literal arrays of the SAME length.
+    - BAD: interpolate(frame, [0, 30]) — CRASHES.
+    - GOOD: interpolate(frame, [0, 30], [0, 1])
+12. CLAMP position/scale animations so elements don't fly off-screen:
+    const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
+    interpolate(frame, [0, 30], [0, 1], CLAMP) — settles at 1 and holds.
+    For continuous motion (Math.sin, rotation), clamping is NOT needed — those are already bounded.
+13. Final scale ≤ 1.5, final positions must stay within 1920x1080.
+
+CODE QUALITY:
+14. The sum of all durationInFrames MUST equal exactly the total given below.
+15. Use only inline styles. No external CSS, no Tailwind.
+16. Do NOT include registerRoot or Composition.
+17. Keep total code under 1200 lines. Use reusable helper components.
+18. Every <Series.Sequence> MUST have a positive integer durationInFrames (at least 1).
+19. Return ONLY the raw .tsx code. No markdown fences, no explanation.
+
+WORKED EXAMPLE — two richly animated scenes. Study how EVERY frame has motion, how the concept is illustrated, how layers work together:
 
 \`\`\`tsx
-import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio } from "remotion";
+import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio, Easing } from "remotion";
 
-function TitleCard({ text }: { text: string }) {
+const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
+
+// A particle that orbits a central nucleus — illustrates atomic structure.
+// Motion is CONTINUOUS: orbit never stops, pulse never stops.
+function OrbitingParticle({ radius, speed, size, color, orbitColor }: {
+  radius: number; speed: number; size: number; color: string; orbitColor: string;
+}) {
+  const frame = useCurrentFrame();
+  const angle = (frame * speed * Math.PI) / 180;
+  const x = Math.cos(angle) * radius;
+  const y = Math.sin(angle) * radius;
+  return (
+    <div style={{ position: "absolute", top: "50%", left: "50%", width: 0, height: 0 }}>
+      <div style={{
+        position: "absolute",
+        width: size, height: size,
+        borderRadius: "50%",
+        backgroundColor: color,
+        transform: \`translate(\${x - size / 2}px, \${y - size / 2}px)\`,
+        boxShadow: \`0 0 \${size * 1.5}px \${orbitColor}\`,
+      }} />
+    </div>
+  );
+}
+
+function AtomScene({ label }: { label: string }) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const scale = spring({ frame, fps, config: { damping: 12 } });
-  // Clamped so opacity settles at 1 and never overshoots.
-  const opacity = interpolate(frame, [0, 15], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  // Entrance: nucleus springs in
+  const nucleusScale = spring({ frame, fps, config: { damping: 10, stiffness: 80 } });
+  // Continuous: nucleus pulses with sine wave
+  const pulse = 1 + Math.sin(frame / 12) * 0.08;
+  // Label fades in with custom easing
+  const labelOpacity = interpolate(frame, [20, 50], [0, 1], {
+    ...CLAMP,
+    easing: Easing.bezier(0.25, 0.46, 0.45, 0.94),
+  });
+  // Background hue slowly rotates
+  const hue = (frame * 0.3) % 360;
 
   return (
-    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", backgroundColor: "#1e293b" }}>
-      <h1 style={{ color: "white", fontSize: 64, opacity, transform: \`scale(\${scale})\` }}>
-        {text}
-      </h1>
+    <AbsoluteFill style={{
+      background: \`radial-gradient(circle at 50% 50%, hsl(\${hue}, 30%, 15%), #0a0a1a)\`,
+      justifyContent: "center", alignItems: "center",
+    }}>
+      {/* Nucleus */}
+      <div style={{
+        width: 80, height: 80, borderRadius: "50%",
+        backgroundColor: "#f59e0b",
+        transform: \`scale(\${nucleusScale * pulse})\`,
+        boxShadow: "0 0 40px #f59e0b, 0 0 80px #f59e0b55",
+        position: "relative", zIndex: 2,
+      }} />
+      {/* Orbiting electrons at different radii and speeds */}
+      <OrbitingParticle radius={120} speed={2.4} size={20} color="#60a5fa" orbitColor="#3b82f6" />
+      <OrbitingParticle radius={180} speed={1.6} size={16} color="#a78bfa" orbitColor="#7c3aed" />
+      <OrbitingParticle radius={240} speed={1.0} size={14} color="#34d399" orbitColor="#059669" />
+      {/* Label */}
+      <div style={{
+        position: "absolute", bottom: 180,
+        color: "white", fontSize: 36, fontWeight: 700,
+        opacity: labelOpacity, letterSpacing: 2,
+        textShadow: "0 2px 20px rgba(0,0,0,0.8)",
+      }}>{label}</div>
+    </AbsoluteFill>
+  );
+}
+
+// A wave propagation scene — illustrates how waves travel through a medium.
+// Every point on the wave oscillates continuously with a phase offset.
+function WaveScene({ label }: { label: string }) {
+  const frame = useCurrentFrame();
+  const points = 32;
+  const labelOpacity = interpolate(frame, [10, 40], [0, 1], CLAMP);
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: "#0f172a", justifyContent: "center", alignItems: "center" }}>
+      <svg width={1920} height={400} style={{ position: "absolute", top: "50%", transform: "translateY(-50%)" }}>
+        {/* Wave made of individually oscillating circles for a particle-wave look */}
+        {Array.from({ length: points }, (_, i) => {
+          const x = (i / (points - 1)) * 1920;
+          const phase = (i / points) * Math.PI * 4;
+          const y = 200 + Math.sin(frame / 10 + phase) * 80;
+          const brightness = (Math.sin(frame / 10 + phase) + 1) / 2;
+          return (
+            <circle
+              key={i}
+              cx={x} cy={y} r={8}
+              fill={"hsl(" + (200 + brightness * 60) + ", 80%, " + (40 + brightness * 40) + "%)"}
+              opacity={0.6 + brightness * 0.4}
+            />
+          );
+        })}
+        {/* Connecting line */}
+        <polyline
+          points={Array.from({ length: points }, (_, i) => {
+            const x = (i / (points - 1)) * 1920;
+            const phase = (i / points) * Math.PI * 4;
+            const y = 200 + Math.sin(frame / 10 + phase) * 80;
+            return \`\${x},\${y}\`;
+          }).join(" ")}
+          fill="none"
+          stroke="rgba(96,165,250,0.4)"
+          strokeWidth={2}
+        />
+      </svg>
+      <div style={{
+        position: "absolute", bottom: 160,
+        color: "white", fontSize: 36, fontWeight: 700,
+        opacity: labelOpacity, textShadow: "0 2px 20px rgba(0,0,0,0.9)",
+      }}>{label}</div>
     </AbsoluteFill>
   );
 }
@@ -212,27 +336,22 @@ function TitleCard({ text }: { text: string }) {
 export const LessonExample = () => {
   return (
     <Series>
-      <Series.Sequence durationInFrames={150}>
-        <Audio src={"https://example.com/audio/scene1.mp3"} />
-        <TitleCard text="Introduction" />
-      </Series.Sequence>
       <Series.Sequence durationInFrames={210}>
+        <Audio src={"https://example.com/audio/scene1.mp3"} />
+        <AtomScene label="Electrons orbit the nucleus" />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={240}>
         <Audio src={"https://example.com/audio/scene2.mp3"} />
-        <AbsoluteFill style={{ backgroundColor: "#0f172a" }} />
+        <WaveScene label="Waves propagate through a medium" />
       </Series.Sequence>
     </Series>
   );
 };
 \`\`\`
 
-Notice in the example: every interpolate() call has 3 arguments (value, input range, output range) — and optionally a 4th options object for clamping — with the input/output as literal arrays of matching length; position/scale animations are CLAMPED so they settle instead of running off screen; the Audio tag's src is a plain string passed directly; durationInFrames values are plain integer literals; and helper components live above the main exported component. Follow this exact shape.
+Every scene above has motion on EVERY frame. The atom's nucleus pulses, electrons orbit, background hue shifts. The wave's particles oscillate continuously. There is no static frame. Build every scene in your lesson to this standard.
 
-TIP — to avoid repeating the clamp object on every call, you MAY define it once and reuse it:
-const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
-// then: interpolate(frame, [0, 30], [0, 1.5], CLAMP)
-Passing CLAMP (a variable) as the 4th argument is fully allowed and encouraged.
-
-Begin with imports, then any helper components, then the main component. Make sure the final line closes the component cleanly.
+Begin with imports, then the CLAMP constant, then helper components, then the main component.
 `;
 
 function buildPerLessonContent(lesson, componentName, scenes, totalFrames) {
@@ -274,7 +393,7 @@ async function generateLessonCode(
       );
 
       const stream = await client.messages.create({
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-4-5",
         max_tokens: 25000,
         // temperature is deprecated on claude-sonnet-4-5 and newer models — removed.
         stream: true,

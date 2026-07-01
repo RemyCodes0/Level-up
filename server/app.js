@@ -52,6 +52,7 @@ app.use('/api/export', exportRoutes)
 app.use('/api/assessment', require('./routes/assessment'))
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/showcase', require('./routes/showcase'));
+app.use('/api/payment', require('./routes/payment'));
 // app.use('/api', checkoutRouter);
 
 // Serve audio files for browser playback at /audio/*
