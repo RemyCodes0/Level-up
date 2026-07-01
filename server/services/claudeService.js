@@ -402,10 +402,16 @@ async function generateLessonCode(
 
       const stream = await client.messages.create({
         model: "claude-sonnet-4-5",
-        // Raised from 25000 — the richer worked example (layered motion,
-        // helper components, SVG) encourages longer output, and the old
-        // ceiling was truncating mid-generation on complex lessons.
-        max_tokens: 32000,
+        // Sonnet 5 enables adaptive thinking by default, which consumes tokens
+        // from the same max_tokens budget as the code output — silently
+        // truncating the generated code before it finishes. Thinking is not
+        // useful for deterministic code generation, so we disable it
+        // explicitly. Without thinking tokens competing for budget, the full
+        // allocation goes to actual code output.
+        thinking: { type: "disabled" },
+        // Raised from 32000: Sonnet 5's new tokenizer produces ~30% more
+        // tokens for the same text, so equivalent code needs more headroom.
+        max_tokens: 48000,
         // temperature is deprecated on claude-sonnet-4-5 and newer models — removed.
         stream: true,
         messages: [
