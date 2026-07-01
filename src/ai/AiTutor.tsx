@@ -18,6 +18,11 @@ import type { CourseFromAPI } from "../api/CourseApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
+
+// Download/export requires headless Chrome + 2GB+ RAM — works locally but
+// OOMs on Render's Starter (512MB). Gate it behind an env var so it only
+// shows in local dev. Add VITE_ENABLE_DOWNLOAD=true to your local .env to enable.
+const DOWNLOAD_ENABLED = import.meta.env.VITE_ENABLE_DOWNLOAD === "true";
 import {
   FileText, Play, CheckCircle, Circle, Lock, Brain, Sparkles,
   ChevronRight, ChevronLeft, Clock, BarChart2, BookOpen, AlertCircle,
@@ -1256,7 +1261,7 @@ export default function AILearningPage() {
                 <VideoPlayer lesson={lessons[activeLesson]} onComplete={() => markComplete(lessons[activeLesson].id)} onRetry={() => handleRetryLesson(activeLesson)} retrying={retryingLesson === activeLesson} courseId={activeHistoryId} lessonNumber={activeLesson + 1} />
                 <div className="flex items-center justify-between gap-2 pt-2">
                   <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className="text-xs sm:text-sm px-3 sm:px-4 shrink-0"><ChevronLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
-                  {activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
+                  {DOWNLOAD_ENABLED && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
                     <DownloadLessonButton
                       courseId={activeHistoryId}
                       lessonNumber={activeLesson + 1}
@@ -1319,7 +1324,7 @@ export default function AILearningPage() {
             )}
           </div>
         </main>
-      </div> 
+      </div>
     </div>
   );
 }
