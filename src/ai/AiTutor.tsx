@@ -161,31 +161,42 @@ function useLessonProgress(statuses: LessonStatus[]): number[] {
   return progresses;
 }
 
-function PaywallModal({ onClose }: { onClose: () => void }) {
+function PaywallModal({ onClose, courseId, courseName }: { onClose: () => void; courseId?: string | null; courseName?: string }) {
+  const [email, setEmail] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const PRICE_PER_CREDIT = 4.99;
+  const storedUser = localStorage.getItem("user");
+  const user = storedUser ? JSON.parse(storedUser) : null;
+  const prefillEmail = user?.email || "";
 
-  const handleBuy = async () => {
+  const handleSubmit = async () => {
+    if (!email.trim()) { setError("Please enter your email so we can notify you."); return; }
     setLoading(true);
+    setError(null);
     try {
       const token = localStorage.getItem("token");
-      const res = await fetch(`${BASE_URL}/api/payment/checkout`, {
+      // Send as feedback so it lands in your admin email + Feedback collection.
+      // The waitlist flag is embedded in the message so you can filter later.
+      await fetch(`${BASE_URL}/api/feedback`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        body: JSON.stringify({
+          rating: 5,
+          message: `[WAITLIST] ${email}\n\n${feedback.trim() || "(no feedback provided)"}`,
+          courseId: courseId || undefined,
+          courseName: courseName || undefined,
+        }),
       });
-      const data = await res.json();
-      if (data.checkoutUrl) {
-        window.location.href = data.checkoutUrl;
-      } else {
-        alert(data.message || "Failed to create checkout. Please try again.");
-      }
+      setSubmitted(true);
     } catch (err) {
       console.error(err);
-      alert("Couldn't reach the payment server. Check your connection and try again.");
+      setError("Something went wrong. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -198,61 +209,78 @@ function PaywallModal({ onClose }: { onClose: () => void }) {
           <X className="h-5 w-5" />
         </button>
 
-        <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg">
-          <Zap className="h-7 w-7 text-white" />
-        </div>
-
-        <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center mb-2">
-          Get another course
-        </h2>
-        <p className="text-slate-500 text-center text-sm mb-6">
-          One course includes 6 animated lessons, voiceover narration, and a 20-question quiz.
-        </p>
-
-        <div className="bg-slate-50 rounded-xl p-4 mb-6 space-y-2">
-          {[
-            "6 AI-generated animated video lessons",
-            "Synced voiceover narration per lesson",
-            "20-question personalized quiz",
-            "Upload a PDF or type any topic",
-          ].map((item) => (
-            <div key={item} className="flex items-start gap-2 text-sm text-slate-700">
-              <CheckCircle className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
-              {item}
+        {submitted ? (
+          <div className="text-center py-4">
+            <div className="w-14 h-14 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
+              <CheckCircle className="h-7 w-7 text-emerald-500" />
             </div>
-          ))}
-        </div>
-
-        <div className="flex items-center justify-between mb-4 px-1 gap-2">
-          <span className="text-sm text-slate-500">1 course credit</span>
-          <span className="text-lg sm:text-xl font-bold text-slate-900 whitespace-nowrap">${PRICE_PER_CREDIT.toFixed(2)}</span>
-        </div>
-
-        <Button
-          onClick={handleBuy}
-          disabled={loading}
-          className="w-full h-12 text-base font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-lg"
-        >
-          {loading ? (
-            <div className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Redirecting to checkout…</span>
+            <h2 className="text-xl font-bold text-slate-900 mb-2">You're on the list!</h2>
+            <p className="text-sm text-slate-500 mb-6">
+              We'll email you at <span className="font-semibold text-slate-700">{email}</span> the moment payments go live. Thank you for your patience.
+            </p>
+            <button onClick={onClose} className="w-full py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-700 transition-colors">
+              Keep watching
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
+              <Zap className="h-7 w-7 text-amber-500" />
             </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <CreditCard className="h-4 w-4" />
-              <span>Pay ${PRICE_PER_CREDIT.toFixed(2)}</span>
-            </div>
-          )}
-        </Button>
 
-        <p className="text-xs text-slate-400 text-center mt-3">
-          Secure payment via Dodo Payments · Credits added instantly
-        </p>
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center mb-2">
+              Payments coming soon
+            </h2>
+            <p className="text-slate-500 text-center text-sm mb-1">
+              We're working on setting up our payment system. Leave your email and we'll let you know the moment you can unlock more courses.
+            </p>
+            <p className="text-slate-400 text-center text-xs mb-6">
+              Each course will be <span className="font-semibold text-slate-600">$4.99</span> — 6 animated lessons, narration, and a quiz.
+            </p>
+
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="text-xs font-semibold text-slate-600 mb-1 block">Your email <span className="text-red-400">*</span></label>
+                <input
+                  type="email"
+                  value={email || prefillEmail}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-600 mb-1 block">Feedback <span className="text-slate-400 font-normal">(optional)</span></label>
+                <textarea
+                  value={feedback}
+                  onChange={(e) => setFeedback(e.target.value)}
+                  placeholder="How's the app so far? Anything you'd love to see?"
+                  rows={3}
+                  className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                />
+              </div>
+            </div>
+
+            {error && <p className="text-xs text-red-500 mb-3">{error}</p>}
+
+            <button
+              onClick={handleSubmit}
+              disabled={loading}
+              className="w-full h-11 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+            >
+              {loading ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</> : <><MessageSquare className="h-4 w-4" /> Notify me when payments go live</>}
+            </button>
+
+            <p className="text-xs text-slate-400 text-center mt-3">
+              No spam — only one email when payments launch.
+            </p>
+          </>
+        )}
       </div>
     </div>
   );
 }
+
 const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
 import { FeedbackModal } from "../feedback/FeedBackModel";
@@ -910,7 +938,15 @@ export default function AILearningPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const markComplete = (lessonId: number) => setLessons((prev) => prev.map((l) => l.id === lessonId ? { ...l, completed: true } : l));
+  const markComplete = (lessonId: number) => {
+    setLessons((prev) => prev.map((l) => l.id === lessonId ? { ...l, completed: true } : l));
+    // Auto-show feedback modal when the user finishes lesson 1 of a free-trial
+    // course — at this point lessons 2-6 are locked, so it's a natural pause
+    // point to collect impressions before the paywall pops up.
+    if (lessonId === 1 && lessonStatuses.some((s) => s === "locked")) {
+      setTimeout(() => setShowFeedback(true), 800);
+    }
+  };
 
   useEffect(() => {
     lessonStatuses.forEach((status, i) => {
@@ -1090,7 +1126,7 @@ export default function AILearningPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
-        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} />}
+        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
           <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => { setPendingGeneration(null); setPhase("upload"); }} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
@@ -1110,7 +1146,7 @@ export default function AILearningPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
-        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} />}
+        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
           <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
@@ -1123,7 +1159,7 @@ export default function AILearningPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
-        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} />}
+        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
       <Helmet><title>AI Learning Course | Level Up</title></Helmet>
       <div className="flex h-screen relative">
         <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
