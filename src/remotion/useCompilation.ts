@@ -1,5 +1,5 @@
 import * as Babel from "@babel/standalone";
-import React, { useMemo } from "react";
+import React, { useMemo, useCallback, useRef } from "react";
 import {
   AbsoluteFill,
   useCurrentFrame,
@@ -112,6 +112,9 @@ export function useCompilation(code: string): CompilationResult {
         "Series",
         "Audio",
         "Easing",
+        "useMemo",
+        "useCallback",
+        "useRef",
         `
         "use strict";
         ${transpiled}
@@ -129,7 +132,10 @@ export function useCompilation(code: string): CompilationResult {
         Sequence,
         Series,
         BufferedAudio,
-        Easing
+        Easing,
+        useMemo,
+        useCallback,
+        useRef
       );
 
       if (typeof Component !== "function") {

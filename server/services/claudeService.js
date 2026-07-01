@@ -173,8 +173,10 @@ Generate a complete, self-contained Remotion composition for a lesson. Each scen
 
 STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 1. The component MUST be named exactly as given below and exported as a named export: export const ComponentName = () => { ... }
-2. Import ONLY from "remotion" and "react".
-   Allowed remotion imports: AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing.
+2. Import ONLY from "remotion" and "react". These are the ONLY identifiers available at runtime — using anything else (any other hook, any other remotion export, any library) will CRASH with "X is not defined":
+   From "remotion": AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing.
+   From "react": useMemo, useCallback, useRef.
+   Do NOT use useState (Remotion components must be pure functions of the current frame — no local state that changes over time).
    Do NOT import staticFile — it is not available in this environment.
 3. The component takes NO props — all scene data is hardcoded from the SCENES list given below.
 4. Structure: a single <Series> containing one <Series.Sequence> per scene, IN ORDER.
@@ -203,7 +205,14 @@ INTERPOLATE SAFETY — violations CRASH the video at runtime:
     const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
     interpolate(frame, [0, 30], [0, 1], CLAMP) — settles at 1 and holds.
     For continuous motion (Math.sin, rotation), clamping is NOT needed — those are already bounded.
-13. Final scale ≤ 1.5, final positions must stay within 1920x1080.
+13. THE 1920x1080 FRAME IS A HARD BOUNDARY. This applies to EVERY element individually, not just "the scene" as a whole:
+    - Single element: final scale ≤ 1.5, final position must stay within 1920x1080.
+    - PARTICLE FIELDS / ARRAYS of elements (e.g. a ParticleField with many particles): EVERY individual particle's x and y must be generated within safe bounds, not just the field's general area. When randomly or programmatically generating positions for N elements, constrain each one explicitly, e.g.:
+      const x = 100 + Math.random() * 1720;  // stays within [100, 1820], safely inside 1920
+      const y = 100 + Math.random() * 880;   // stays within [100, 980], safely inside 1080
+      Never generate a raw position across the full 0-1920/0-1080 range with no margin — anything near the exact edge risks clipping.
+    - ORBITING elements: the orbit's radius PLUS the orbiting element's own size must not push it past the frame edge. If content is centered at 960,540, max radius should be roughly ≤ 450 (leaves margin on a 1080-tall frame). Check this explicitly: radius + size/2 must stay well inside the smaller frame dimension's half.
+    - DRIFTING/OSCILLATING elements (Math.sin offsets added to a base position): the base position must already account for the maximum possible offset, so base ± amplitude never approaches an edge. E.g. if amplitude is 30px, keep base positions at least 60-80px from any edge.
 
 CODE QUALITY:
 14. The sum of all durationInFrames MUST equal exactly the total given below.
