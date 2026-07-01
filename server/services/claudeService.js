@@ -394,7 +394,10 @@ async function generateLessonCode(
 
       const stream = await client.messages.create({
         model: "claude-sonnet-4-5",
-        max_tokens: 25000,
+        // Raised from 25000 — the richer worked example (layered motion,
+        // helper components, SVG) encourages longer output, and the old
+        // ceiling was truncating mid-generation on complex lessons.
+        max_tokens: 32000,
         // temperature is deprecated on claude-sonnet-4-5 and newer models — removed.
         stream: true,
         messages: [

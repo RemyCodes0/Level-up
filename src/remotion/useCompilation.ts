@@ -9,6 +9,7 @@ import {
   Sequence,
   Series,
   Audio,
+  Easing,
 } from "remotion";
 
 interface CompilationResult {
@@ -110,6 +111,7 @@ export function useCompilation(code: string): CompilationResult {
         "Sequence",
         "Series",
         "Audio",
+        "Easing",
         `
         "use strict";
         ${transpiled}
@@ -126,7 +128,8 @@ export function useCompilation(code: string): CompilationResult {
         interpolate,
         Sequence,
         Series,
-        BufferedAudio
+        BufferedAudio,
+        Easing
       );
 
       if (typeof Component !== "function") {
