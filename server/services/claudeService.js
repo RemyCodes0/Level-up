@@ -173,11 +173,10 @@ Generate a complete, self-contained Remotion composition for a lesson. Each scen
 
 STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 1. The component MUST be named exactly as given below and exported as a named export: export const ComponentName = () => { ... }
-2. Import ONLY from "remotion" and "react". These are the ONLY identifiers available at runtime — using anything else (any other hook, any other remotion export, any library) will CRASH with "X is not defined":
-   From "remotion": AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing.
-   From "react": useMemo, useCallback, useRef.
-   Do NOT use useState (Remotion components must be pure functions of the current frame — no local state that changes over time).
-   Do NOT import staticFile — it is not available in this environment.
+2. Import ONLY from "remotion" and "react".
+   From "remotion": ANY named export works (AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing, Img, Video, random, interpolateColors, Loop, and any other real Remotion export) — EXCEPT staticFile, which is not available in this environment.
+   From "react": only useMemo, useCallback, useRef are available. Do NOT use useState (Remotion components must be pure functions of the current frame — no local state that changes over time) or any other React hook.
+   Do NOT import from any other library — only "remotion" and "react".
 3. The component takes NO props — all scene data is hardcoded from the SCENES list given below.
 4. Structure: a single <Series> containing one <Series.Sequence> per scene, IN ORDER.
 5. Each <Series.Sequence> MUST use durationInFrames set to EXACTLY the number given for that scene. Never change, compute, or round these numbers — copy them exactly.
