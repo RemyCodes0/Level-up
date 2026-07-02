@@ -63,10 +63,10 @@ function InteractiveDemo() {
   const shown = builtFor || (building ? topic.trim() : "");
 
   return (
-    <div className="rounded-2xl border overflow-hidden" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
-      <div className="p-5 sm:p-6 border-b" style={{ borderColor: HAIR }}>
+    <div className="rounded-2xl border overflow-hidden w-full" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
+      <div className="p-4 sm:p-6 border-b" style={{ borderColor: HAIR }}>
         <div className="flex items-center gap-2 mb-4">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: "rgba(255,92,73,0.15)", color: CORAL }}>
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: "rgba(255,92,73,0.15)", color: CORAL }}>
             <Wand2 className="h-3.5 w-3.5" />
           </div>
           <span className="text-xs font-medium uppercase tracking-widest" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>Try it — no signup</span>
@@ -77,7 +77,7 @@ function InteractiveDemo() {
             onChange={(e) => setTopic(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") run(); }}
             placeholder="Type anything you want to learn…"
-            className="flex-1 px-4 h-12 rounded-xl text-sm outline-none border"
+            className="flex-1 min-w-0 px-4 h-12 rounded-xl text-sm outline-none border"
             style={{ backgroundColor: STAGE, borderColor: HAIR, color: BEAM }}
           />
           <button
@@ -86,7 +86,7 @@ function InteractiveDemo() {
             className="h-12 px-5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] disabled:opacity-40 shrink-0"
             style={{ backgroundColor: CORAL, color: "#fff" }}
           >
-            {building ? "Building…" : <>Build my course <ChevronRight className="h-4 w-4" /></>}
+            {building ? "Building…" : <><span>Build my course</span> <ChevronRight className="h-4 w-4" /></>}
           </button>
         </div>
         {!topic && !builtFor && (
@@ -101,7 +101,7 @@ function InteractiveDemo() {
       </div>
 
       {shown && (
-        <div className="p-5 sm:p-6">
+        <div className="p-4 sm:p-6">
           <p className="text-xs mb-4" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>
             {building ? "// assembling 6 lessons…" : `// course outline for "${shown}"`}
           </p>
@@ -115,7 +115,7 @@ function InteractiveDemo() {
                 <span className="text-xs w-6 shrink-0" style={{ fontFamily: "'JetBrains Mono', monospace", color: i === 0 ? PHOSPHOR : MUTE }}>
                   {String(i + 1).padStart(2, "0")}
                 </span>
-                <span className="text-sm flex-1 truncate" style={{ color: BEAM }}>{title}</span>
+                <span className="text-sm flex-1 min-w-0 truncate" style={{ color: BEAM }}>{title}</span>
                 {i === 0 ? (
                   <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(61,224,160,0.15)", color: PHOSPHOR }}>free</span>
                 ) : (
@@ -168,75 +168,80 @@ export default function LandingPage() {
   ];
 
   return (
-    <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif" }} className="min-h-screen">
+    // overflow-x-hidden on both wrapper and root prevents horizontal scroll
+    // at any browser zoom level — the key fix for the Ctrl+/- layout issue.
+    <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif" }} className="min-h-screen w-full overflow-x-hidden">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
         ::selection { background: ${CORAL}; color: #fff; }
-        html { scroll-behavior: smooth; }
+        html { scroll-behavior: smooth; overflow-x: hidden; }
+        body { overflow-x: hidden; }
+        * { box-sizing: border-box; }
       `}</style>
 
       {/* Nav */}
-      <nav className="sticky top-0 z-40 backdrop-blur-md border-b" style={{ backgroundColor: "rgba(21,19,31,0.8)", borderColor: HAIR }}>
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+      <nav className="sticky top-0 z-40 backdrop-blur-md border-b w-full" style={{ backgroundColor: "rgba(21,19,31,0.8)", borderColor: HAIR }}>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4 min-w-0">
+          <div className="flex items-center gap-2 shrink-0">
             <img src="/logo.png" alt="Level Up" className="h-7 w-7 rounded-lg object-cover" />
             <span className="font-semibold text-sm" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>Level Up</span>
           </div>
-          <div className="hidden md:flex items-center gap-7 text-sm" style={{ color: MUTE }}>
-            <a href="#how" className="hover:opacity-80">How it works</a>
-            <a href="#compare" className="hover:opacity-80">Why it's different</a>
-            <a href="#pricing" className="hover:opacity-80">Pricing</a>
-            <a href="#faq" className="hover:opacity-80">FAQ</a>
+          <div className="hidden md:flex items-center gap-5 text-sm min-w-0 overflow-hidden" style={{ color: MUTE }}>
+            <a href="#how" className="hover:opacity-80 whitespace-nowrap">How it works</a>
+            <a href="#compare" className="hover:opacity-80 whitespace-nowrap">Why it's different</a>
+            <a href="#pricing" className="hover:opacity-80 whitespace-nowrap">Pricing</a>
+            <a href="#faq" className="hover:opacity-80 whitespace-nowrap">FAQ</a>
           </div>
-          <div className="flex items-center gap-3">
-            <button onClick={() => navigate("/login")} className="text-sm font-medium hidden sm:inline" style={{ color: MUTE }}>Log in</button>
-            <button onClick={() => navigate("/ai_tutor")} className="text-sm font-semibold px-4 py-2 rounded-lg transition-transform hover:scale-[1.03]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <button onClick={() => navigate("/login")} className="text-sm font-medium hidden sm:inline whitespace-nowrap" style={{ color: MUTE }}>Log in</button>
+            <button onClick={() => navigate("/ai_tutor")} className="text-xs sm:text-sm font-semibold px-3 sm:px-4 py-2 rounded-lg transition-transform hover:scale-[1.03] whitespace-nowrap" style={{ backgroundColor: CORAL, color: "#fff" }}>
               Start free
             </button>
           </div>
         </div>
       </nav>
 
-      {/* ── Hero: text only, centered, no grid ── */}
-      <section ref={hero.ref} className="max-w-6xl mx-auto px-4 sm:px-6 pt-16 sm:pt-24 pb-10">
+      {/* Hero */}
+      <section ref={hero.ref} className="w-full px-4 sm:px-6 pt-14 sm:pt-20 pb-10">
         <div className="max-w-3xl mx-auto text-center">
           <div className={`transition-all duration-700 ${hero.seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
             <div className="inline-flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full mb-6" style={{ backgroundColor: "rgba(255,92,73,0.13)", color: CORAL }}>
-              <Sparkles className="h-3 w-3" /> The first lesson is always free
+              <Sparkles className="h-3 w-3 shrink-0" /> The first lesson is always free
             </div>
-            <h1 className="text-4xl sm:text-6xl font-bold leading-[1.05] mb-6" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+            {/* clamp() makes the heading fluid at any zoom level */}
+            <h1 className="font-bold leading-[1.05] mb-6" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif", fontSize: "clamp(2rem, 6vw, 3.75rem)" }}>
               Stop cramming. <br />
-                <span style={{ color: CORAL }}>Learn visually.</span>
+              <span style={{ color: CORAL }}>Learn visually.</span>
             </h1>
-            <p className="text-lg leading-relaxed mb-8 max-w-xl mx-auto" style={{ color: MUTE }}>
+            <p className="leading-relaxed mb-8 max-w-xl mx-auto" style={{ color: MUTE, fontSize: "clamp(0.95rem, 2vw, 1.125rem)" }}>
               Type a topic or upload your notes. Level Up renders six narrated, animated video lessons and a readiness quiz — the kind of course you'd wish someone had made for you, built in minutes.
             </p>
-            <div className="flex flex-wrap items-center justify-center gap-4">
-              <button onClick={() => navigate("/ai_tutor")} className="flex items-center gap-2 text-sm font-semibold px-6 py-3.5 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+            <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
+              <button onClick={() => navigate("/ai_tutor")} className="flex items-center gap-2 text-sm font-semibold px-5 sm:px-6 py-3 sm:py-3.5 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
                 Generate your first lesson <ArrowRight className="h-4 w-4" />
               </button>
-              <a onClick={() => navigate("/ai_showcase")} className="flex items-center gap-2 text-sm font-medium px-5 py-3.5 rounded-xl border transition-colors cursor-pointer" style={{ borderColor: HAIR, color: BEAM }}>
+              <button onClick={() => navigate("/ai_showcase")} className="flex items-center gap-2 text-sm font-medium px-4 sm:px-5 py-3 sm:py-3.5 rounded-xl border transition-colors" style={{ borderColor: HAIR, color: BEAM }}>
                 <Play className="h-4 w-4" /> See a live demo
-              </a>
+              </button>
             </div>
-            <div className="flex items-center justify-center gap-6 mt-8 text-xs" style={{ color: MUTE }}>
-              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" style={{ color: PHOSPHOR }} /> No card for lesson one</span>
-              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5" style={{ color: PHOSPHOR }} /> No subscription</span>
+            <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 mt-8 text-xs" style={{ color: MUTE }}>
+              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 shrink-0" style={{ color: PHOSPHOR }} /> No card for lesson one</span>
+              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 shrink-0" style={{ color: PHOSPHOR }} /> No subscription</span>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ── App walkthrough — how it works, step by step ── */}
-      <section className="max-w-6xl mx-auto px-4 sm:px-6 pb-16">
+      {/* App walkthrough */}
+      <section className="w-full max-w-6xl mx-auto px-4 sm:px-6 pb-16">
         <VideoShowcaseSection />
       </section>
 
-      {/* ── Real lesson videos — actual generated output, not a mockup ── */}
-      <section className="max-w-6xl mx-auto px-4 sm:px-6 pb-16">
+      {/* Real lesson videos */}
+      <section className="w-full max-w-6xl mx-auto px-4 sm:px-6 pb-16">
         <div className="text-center mb-12">
           <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>Real lessons, real courses</p>
-          <h2 className="text-3xl sm:text-4xl font-bold mb-3 max-w-xl mx-auto" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+          <h2 className="text-2xl sm:text-4xl font-bold mb-3 max-w-xl mx-auto" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
             Not a mockup. This is what gets made.
           </h2>
           <p className="text-sm max-w-md mx-auto" style={{ color: MUTE }}>
@@ -247,8 +252,8 @@ export default function LandingPage() {
       </section>
 
       {/* Marquee strip */}
-      <div className="border-y overflow-hidden" style={{ borderColor: HAIR }}>
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex flex-wrap items-center justify-center gap-x-8 gap-y-2 text-xs" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>
+      <div className="border-y w-full overflow-hidden" style={{ borderColor: HAIR }}>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>
           <span>6 animated lessons</span><span style={{ color: CORAL }}>/</span>
           <span>synced narration</span><span style={{ color: CORAL }}>/</span>
           <span>20-question quiz</span><span style={{ color: CORAL }}>/</span>
@@ -258,14 +263,14 @@ export default function LandingPage() {
       </div>
 
       {/* How it works */}
-      <section id="how" className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
+      <section id="how" className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
         <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>How it works</p>
-        <h2 className="text-3xl sm:text-4xl font-bold mb-14 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+        <h2 className="text-2xl sm:text-4xl font-bold mb-12 sm:mb-14 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
           A finished course on a single timeline.
         </h2>
         <div className="relative">
           <div className="hidden sm:block absolute left-0 right-0 top-[22px] h-px" style={{ backgroundColor: HAIR }} />
-          <div className="grid sm:grid-cols-3 gap-10 sm:gap-6 relative">
+          <div className="grid sm:grid-cols-3 gap-8 sm:gap-6 relative">
             {[
               { icon: <Upload className="h-4 w-4" />, title: "Type a topic or upload a PDF", body: "A sentence, lecture slides, or a full textbook chapter — Level Up builds the course around your exact material." },
               { icon: <Wand2 className="h-4 w-4" />, title: "Watch it render", body: "Six animated, narrated lessons assemble in minutes. Lesson one plays while the rest keep building." },
@@ -275,7 +280,7 @@ export default function LandingPage() {
                 <div className="flex items-center gap-2 mb-4">
                   <div className="w-11 h-11 rounded-full flex items-center justify-center shrink-0 relative z-10 border" style={{ backgroundColor: STAGE_2, borderColor: HAIR, color: CORAL }}>{s.icon}</div>
                 </div>
-                <h3 className="text-lg font-semibold mb-1.5" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{s.title}</h3>
+                <h3 className="text-base sm:text-lg font-semibold mb-1.5" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{s.title}</h3>
                 <p className="text-sm leading-relaxed" style={{ color: MUTE }}>{s.body}</p>
               </div>
             ))}
@@ -284,10 +289,10 @@ export default function LandingPage() {
       </section>
 
       {/* Interactive demo */}
-      <section id="demo" ref={demo.ref} className="max-w-3xl mx-auto px-4 sm:px-6 py-20">
+      <section id="demo" ref={demo.ref} className="w-full max-w-3xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
         <div className="text-center mb-10">
           <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>Live demo</p>
-          <h2 className="text-3xl sm:text-4xl font-bold mb-3" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>See what you'd get.</h2>
+          <h2 className="text-2xl sm:text-4xl font-bold mb-3" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>See what you'd get.</h2>
           <p className="text-sm" style={{ color: MUTE }}>Type a topic and watch the course outline assemble — no account needed.</p>
         </div>
         <div className={`transition-all duration-700 ${demo.seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
@@ -296,13 +301,13 @@ export default function LandingPage() {
       </section>
 
       {/* Comparison */}
-      <section id="compare" className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
+      <section id="compare" className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
         <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>Why it's different</p>
-        <h2 className="text-3xl sm:text-4xl font-bold mb-12 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+        <h2 className="text-2xl sm:text-4xl font-bold mb-10 sm:mb-12 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
           Most studying is reading. This is watching.
         </h2>
         <div className="grid md:grid-cols-2 gap-4">
-          <div className="rounded-2xl p-7 border" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
+          <div className="rounded-2xl p-5 sm:p-7 border" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
             <p className="text-xs uppercase tracking-widest mb-5" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>The old way</p>
             <div className="space-y-3.5">
               {["Re-reading dense notes hoping it sticks", "Generic videos that never match your exact material", "No idea what you've actually mastered", "Hours to find, watch, and piece together sources"].map((t) => (
@@ -312,7 +317,7 @@ export default function LandingPage() {
               ))}
             </div>
           </div>
-          <div className="rounded-2xl p-7 border" style={{ borderColor: "rgba(61,224,160,0.3)", backgroundColor: "rgba(61,224,160,0.04)" }}>
+          <div className="rounded-2xl p-5 sm:p-7 border" style={{ borderColor: "rgba(61,224,160,0.3)", backgroundColor: "rgba(61,224,160,0.04)" }}>
             <p className="text-xs uppercase tracking-widest mb-5" style={{ color: PHOSPHOR, fontFamily: "'JetBrains Mono', monospace" }}>With Level Up</p>
             <div className="space-y-3.5">
               {["Animated lessons that show the concept moving", "Built from your topic or your own uploaded notes", "A quiz that scores exactly what to review", "A full course in minutes, not an afternoon"].map((t) => (
@@ -326,15 +331,15 @@ export default function LandingPage() {
       </section>
 
       {/* Testimonials */}
-      <section className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
+      <section className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
         <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>What learners say</p>
-        <h2 className="text-3xl sm:text-4xl font-bold mb-12 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+        <h2 className="text-2xl sm:text-4xl font-bold mb-10 sm:mb-12 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
           Built for the way people actually study.
         </h2>
         <div className="grid md:grid-cols-3 gap-4">
           {testimonials.map((t, i) => (
-            <div key={i} className="rounded-2xl p-6 border flex flex-col" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
-              <Quote className="h-5 w-5 mb-4" style={{ color: CORAL }} />
+            <div key={i} className="rounded-2xl p-5 sm:p-6 border flex flex-col" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
+              <Quote className="h-5 w-5 mb-4 shrink-0" style={{ color: CORAL }} />
               <p className="text-sm leading-relaxed flex-1 mb-5" style={{ color: BEAM }}>{t.quote}</p>
               <div>
                 <p className="text-sm font-semibold" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{t.name}</p>
@@ -347,11 +352,11 @@ export default function LandingPage() {
       </section>
 
       {/* Pricing */}
-      <section id="pricing" className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
-        <div className="max-w-md mx-auto rounded-2xl p-8 text-center border" style={{ backgroundColor: STAGE_2, borderColor: "rgba(255,92,73,0.3)" }}>
+      <section id="pricing" className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
+        <div className="max-w-md mx-auto rounded-2xl p-6 sm:p-8 text-center border" style={{ backgroundColor: STAGE_2, borderColor: "rgba(255,92,73,0.3)" }}>
           <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>Simple pricing</p>
           <div className="flex items-end justify-center gap-1 mb-1">
-            <span className="text-6xl font-bold" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>$4.99</span>
+            <span className="font-bold" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif", fontSize: "clamp(2.5rem, 8vw, 3.75rem)" }}>$4.99</span>
           </div>
           <p className="text-sm mb-7" style={{ color: MUTE }}>per course — six lessons, narration, and a full quiz</p>
           <div className="space-y-3 text-left mb-8">
@@ -369,27 +374,27 @@ export default function LandingPage() {
       </section>
 
       {/* FAQ */}
-      <section id="faq" className="max-w-3xl mx-auto px-4 sm:px-6 py-20">
+      <section id="faq" className="w-full max-w-3xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
         <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>Questions</p>
-        <h2 className="text-3xl sm:text-4xl font-bold mb-10" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+        <h2 className="text-2xl sm:text-4xl font-bold mb-10" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
           Everything you might be wondering.
         </h2>
         <div>{faqs.map((f, i) => <FaqItem key={i} q={f.q} a={f.a} />)}</div>
       </section>
 
       {/* Final CTA */}
-      <section className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
-        <div className="rounded-3xl p-10 sm:p-16 text-center relative overflow-hidden border" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
+      <section className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
+        <div className="rounded-3xl p-8 sm:p-16 text-center relative overflow-hidden border" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
           <div className="absolute inset-0" style={{ background: "radial-gradient(100% 100% at 50% 0%, rgba(255,92,73,0.12), transparent 55%)" }} />
           <div className="relative">
             <Zap className="h-8 w-8 mx-auto mb-5" style={{ color: AMBER }} />
-            <h2 className="text-3xl sm:text-5xl font-bold mb-4 max-w-2xl mx-auto leading-[1.08]" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+            <h2 className="font-bold mb-4 max-w-2xl mx-auto leading-[1.08]" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif", fontSize: "clamp(1.75rem, 5vw, 3rem)" }}>
               Your first lesson is one topic away.
             </h2>
-            <p className="text-base mb-8 max-w-md mx-auto" style={{ color: MUTE }}>
+            <p className="text-sm sm:text-base mb-8 max-w-md mx-auto" style={{ color: MUTE }}>
               Type what you want to learn and watch it become a course. Free to start, no card needed.
             </p>
-            <button onClick={() => navigate("/signup")} className="inline-flex items-center gap-2 text-sm font-semibold px-7 py-4 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+            <button onClick={() => navigate("/signup")} className="inline-flex items-center gap-2 text-sm font-semibold px-6 sm:px-7 py-3.5 sm:py-4 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
               Get started free <ArrowRight className="h-4 w-4" />
             </button>
           </div>
@@ -397,13 +402,13 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t" style={{ borderColor: HAIR }}>
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
+      <footer className="border-t w-full" style={{ borderColor: HAIR }}>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <img src="/logo.png" alt="Level Up" className="h-5 w-5 rounded object-cover" />
             <span className="text-sm font-medium" style={{ color: MUTE }}>Level Up</span>
           </div>
-          <div className="flex items-center gap-6 text-xs" style={{ color: MUTE }}>
+          <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-xs" style={{ color: MUTE }}>
             <a href="/terms.html" className="hover:opacity-80">Terms</a>
             <a href="/privacy-policy.html" className="hover:opacity-80">Privacy</a>
             <a href="/refund-policy.html" className="hover:opacity-80">Refunds</a>
@@ -411,6 +416,6 @@ export default function LandingPage() {
           </div>
         </div>
       </footer>
-    </div> 
+    </div>
   );
 }
