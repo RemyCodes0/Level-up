@@ -41,6 +41,16 @@ async function generateSceneAudio(scene, retries = 3) {
       const audioFilePath = path.join(AUDIO_DIR, fileName);
       fs.writeFileSync(audioFilePath, buffer);
 
+      // Verify the file actually landed on disk with the right size.
+      // On constrained hosts (Starter, 0.5 CPU), concurrent writeFileSync
+      // calls occasionally produce zero-byte or truncated files due to I/O
+      // contention — this catches that silently before it becomes a 404.
+      const written = fs.statSync(audioFilePath).size;
+      if (written < buffer.length * 0.9) {
+        fs.unlinkSync(audioFilePath);
+        throw new Error(`File write incomplete: wrote ${written} bytes, expected ~${buffer.length}`);
+      }
+
       const audioUrl = `${SERVER_BASE_URL}/audio/${fileName}`;
 
       console.log(`  [tts] Scene ${scene.id}: ${durationSeconds.toFixed(1)}s = ${durationInFrames} frames`);
@@ -65,11 +75,22 @@ async function generateSceneAudio(scene, retries = 3) {
   }
 }
 
-// All scenes generate in parallel
+// Generates audio for all scenes with bounded concurrency (5 at a time).
+// Fully parallel (Promise.all over 13+ scenes) causes I/O contention on
+// constrained hosts — concurrent writeFileSync calls race each other and
+// can produce truncated files. Batching keeps throughput high while
+// preventing the disk from being hammered by too many simultaneous writes.
 async function generateAllSceneAudio(scenes) {
-  console.log(`  [tts] Generating ${scenes.length} audio clips in parallel...`);
+  console.log(`  [tts] Generating ${scenes.length} audio clips (max 5 concurrent)...`);
 
-  const enriched = await Promise.all(scenes.map((scene) => generateSceneAudio(scene)));
+  const BATCH_SIZE = 5;
+  const enriched = [];
+
+  for (let i = 0; i < scenes.length; i += BATCH_SIZE) {
+    const batch = scenes.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(batch.map((scene) => generateSceneAudio(scene)));
+    enriched.push(...results);
+  }
 
   const totalFrames = enriched.reduce((sum, s) => sum + s.durationInFrames, 0);
   console.log(`  [tts] Total: ${totalFrames} frames (${(totalFrames / FPS).toFixed(1)}s)`);
