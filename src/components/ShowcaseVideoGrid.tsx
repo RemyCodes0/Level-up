@@ -17,9 +17,17 @@ interface ShowcaseVideo {
 // Generates a deterministic gradient + animation seed from the topic string
 // so each card looks visually distinct without needing to know the content.
 function topicSeed(topic: string) {
-  let hash = 0;
-  for (let i = 0; i < topic.length; i++) hash = (hash * 31 + topic.charCodeAt(i)) & 0xffffffff;
-  return Math.abs(hash);
+  // Use two independent hashes combined — the simple polynomial hash
+  // clusters many real topic strings onto the same bucket (mod 6).
+  // XOR-mixing with a second pass spreads them much more evenly.
+  let h1 = 0x811c9dc5;
+  let h2 = 0xdeadbeef;
+  for (let i = 0; i < topic.length; i++) {
+    const c = topic.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ c, 0x9e3779b9) >>> 0;
+  }
+  return Math.abs((h1 ^ h2) >>> 0);
 }
 
 // Dark, moody backgrounds — pairs with the landing page's #15131F aesthetic
@@ -34,10 +42,12 @@ const BACKGROUNDS = [
 ];
 
 // Six distinct animation styles — one per card type
-function AnimatedThumbnail({ topic }: { topic: string }) {
+function AnimatedThumbnail({ topic, index }: { topic: string; index: number }) {
   const seed = topicSeed(topic);
-  const { bg, accent } = BACKGROUNDS[seed % BACKGROUNDS.length];
-  const style = seed % 6;
+  const { bg, accent } = BACKGROUNDS[index % BACKGROUNDS.length];
+  // Use index directly for style so each card gets a different animation
+  // regardless of how similar the topic strings are.
+  const style = index % 6;
   const uid = seed.toString(36).slice(0, 6);
 
   return (
@@ -143,13 +153,16 @@ function AnimatedThumbnail({ topic }: { topic: string }) {
           {/* Rings */}
           {[70,52,36].map((size,i) => (
             <div key={i} style={{
-              position:"absolute", width:size, height:size, borderRadius:"50%",
+              position:"absolute",
+              width:size, height:size,
+              borderRadius:"50%",
               border: `1px solid ${accent}${["33","44","66"][i]}`,
               animation: `${i%2===0?`spin-slow-${uid}`:`spin-rev-${uid}`} ${8+i*3}s linear infinite`,
             }} />
           ))}
           {/* Morphing blob */}
           <div style={{
+            position:"absolute",
             width: 28, height: 28,
             background: `radial-gradient(circle, ${accent}, ${accent}88)`,
             boxShadow: `0 0 20px 4px ${accent}55`,
@@ -246,7 +259,7 @@ const CORAL = "#FF5C49";
 const MUTE = "#9A95AC";
 const HAIR = "rgba(246,241,231,0.10)";
 
-function VideoCard({ video }: { video: ShowcaseVideo }) {
+function VideoCard({ video, index }: { video: ShowcaseVideo; index: number }) {
   // The actual player (DynamicPlayer) only mounts once the visitor clicks
   // play — having 6 Remotion players all compiling and rendering at once on
   // page load would be needlessly heavy for a landing page.
@@ -262,7 +275,7 @@ function VideoCard({ video }: { video: ShowcaseVideo }) {
             onClick={() => setPlaying(true)}
             className="absolute inset-0 w-full h-full flex items-center justify-center group"
           >
-            <AnimatedThumbnail topic={video.topic} />
+            <AnimatedThumbnail topic={video.topic} index={index} />
             {/* Play button floats above the animation */}
             <div
               className="relative z-10 w-14 h-14 rounded-full flex items-center justify-center transition-transform group-hover:scale-110"
@@ -317,8 +330,8 @@ export default function ShowcaseVideoGrid() {
 
   return (
     <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {videos.map((v) => (
-        <VideoCard key={v.courseId} video={v} />
+      {videos.map((v, i) => (
+        <VideoCard key={v.courseId} video={v} index={i} />
       ))}
     </div>
   );
