@@ -170,12 +170,19 @@ export default function LandingPage() {
   return (
     // overflow-x-hidden on both wrapper and root prevents horizontal scroll
     // at any browser zoom level — the key fix for the Ctrl+/- layout issue.
-    <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif" }} className="min-h-screen w-full overflow-x-hidden">
+    <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif", minHeight: "100vh", width: "100%", maxWidth: "100vw" }} className="overflow-x-hidden">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
         ::selection { background: ${CORAL}; color: #fff; }
-        html { scroll-behavior: smooth; overflow-x: hidden; }
-        body { overflow-x: hidden; }
+        html, body, #root { 
+          margin: 0; 
+          padding: 0; 
+          width: 100%; 
+          min-height: 100vh;
+          scroll-behavior: smooth; 
+          overflow-x: hidden;
+          background-color: ${STAGE};
+        }
         * { box-sizing: border-box; }
       `}</style>
 
@@ -306,28 +313,126 @@ export default function LandingPage() {
         <h2 className="text-2xl sm:text-4xl font-bold mb-10 sm:mb-12 max-w-xl" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
           Most studying is reading. This is watching.
         </h2>
-        <div className="grid md:grid-cols-2 gap-4">
-          <div className="rounded-2xl p-5 sm:p-7 border" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
-            <p className="text-xs uppercase tracking-widest mb-5" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>The old way</p>
-            <div className="space-y-3.5">
-              {["Re-reading dense notes hoping it sticks", "Generic videos that never match your exact material", "No idea what you've actually mastered", "Hours to find, watch, and piece together sources"].map((t) => (
-                <div key={t} className="flex items-start gap-3 text-sm" style={{ color: MUTE }}>
-                  <X className="h-4 w-4 mt-0.5 shrink-0 opacity-60" /> {t}
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="rounded-2xl p-5 sm:p-7 border" style={{ borderColor: "rgba(61,224,160,0.3)", backgroundColor: "rgba(61,224,160,0.04)" }}>
-            <p className="text-xs uppercase tracking-widest mb-5" style={{ color: PHOSPHOR, fontFamily: "'JetBrains Mono', monospace" }}>With Level Up</p>
-            <div className="space-y-3.5">
-              {["Animated lessons that show the concept moving", "Built from your topic or your own uploaded notes", "A quiz that scores exactly what to review", "A full course in minutes, not an afternoon"].map((t) => (
-                <div key={t} className="flex items-start gap-3 text-sm" style={{ color: BEAM }}>
-                  <Check className="h-4 w-4 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        <svg width="100%" viewBox="0 0 680 380" role="img" aria-label="Before and after: struggling with notes vs relaxed with Level Up" style={{ borderRadius: 16, display: "block" }}>
+          <title>Before and after comparison</title>
+          <desc>Left side shows a stressed person hunched over dense textbooks. Right side shows a relaxed person watching an animated lesson on a laptop.</desc>
+          <defs>
+            <style>{`
+              @keyframes lu-sweat{0%,100%{transform:translateY(0)}50%{transform:translateY(3px)}}
+              @keyframes lu-blink{0%,90%,100%{ry:5}95%{ry:1}}
+              @keyframes lu-screen{0%,100%{opacity:.7}50%{opacity:1}}
+              @keyframes lu-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+              @keyframes lu-bob{0%,100%{transform:rotate(-1deg)}50%{transform:rotate(1deg)}}
+              @keyframes lu-stress{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
+              @keyframes lu-orbit{from{transform:rotate(0deg) translateX(18px) rotate(0deg)}to{transform:rotate(360deg) translateX(18px) rotate(-360deg)}}
+              @keyframes lu-wave{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+            `}</style>
+          </defs>
+
+          <rect width="680" height="380" fill="#15131F" rx="16"/>
+          <line x1="340" y1="0" x2="340" y2="380" stroke="rgba(246,241,231,0.08)" strokeWidth="1.5"/>
+
+          <text x="130" y="32" textAnchor="middle" fontFamily="'JetBrains Mono', monospace" fontSize="10" fill="#9A95AC" letterSpacing="0.12em">THE OLD WAY</text>
+          <text x="530" y="32" textAnchor="middle" fontFamily="'JetBrains Mono', monospace" fontSize="10" fill="#3DE0A0" letterSpacing="0.12em">WITH LEVEL UP</text>
+
+          {/* Desk surface left */}
+          <rect x="40" y="268" width="260" height="48" fill="#2a1f3d" rx="4"/>
+
+          {/* Stressed person */}
+          <g style={{ animation: "lu-stress 1.8s ease-in-out infinite", transformOrigin: "170px 200px" }}>
+            <rect x="80" y="270" width="55" height="8" fill="#3a2d5a" rx="2"/>
+            <rect x="148" y="258" width="70" height="10" fill="#3a2d5a" rx="2"/>
+            <rect x="90" y="240" width="160" height="40" fill="#1a1330" rx="3" stroke="#3a2d5a" strokeWidth="0.5"/>
+            <line x1="95" y1="248" x2="245" y2="248" stroke="#9A95AC" strokeWidth="0.4" strokeDasharray="3 3"/>
+            <line x1="95" y1="255" x2="240" y2="255" stroke="#9A95AC" strokeWidth="0.4" strokeDasharray="3 3"/>
+            <line x1="95" y1="262" x2="235" y2="262" stroke="#9A95AC" strokeWidth="0.4" strokeDasharray="3 3"/>
+            <line x1="95" y1="269" x2="220" y2="269" stroke="#9A95AC" strokeWidth="0.4" strokeDasharray="3 3"/>
+            <path d="M130 220 Q170 200 210 220" fill="#c8956a"/>
+            <ellipse cx="170" cy="220" rx="42" ry="28" fill="#c8956a"/>
+            <ellipse cx="152" cy="216" rx="6" ry="7" fill="white"/>
+            <ellipse cx="188" cy="216" rx="6" ry="7" fill="white"/>
+            <ellipse cx="153" cy="218" rx="3.5" ry="4.5" fill="#4a3020" style={{ animation: "lu-blink 3s ease-in-out infinite" }}/>
+            <ellipse cx="189" cy="218" rx="3.5" ry="4.5" fill="#4a3020" style={{ animation: "lu-blink 3s ease-in-out 0.3s infinite" }}/>
+            <path d="M158 230 Q170 225 182 230" fill="none" stroke="#8a5530" strokeWidth="1.5" strokeLinecap="round"/>
+            <path d="M148 207 Q145 199 150 195 Q170 188 190 195 Q195 199 192 207" fill="#c8956a" stroke="#a0754a" strokeWidth="1.5"/>
+            <path d="M128 215 L108 240" fill="none" stroke="#c8956a" strokeWidth="12" strokeLinecap="round"/>
+            <path d="M212 215 L235 240" fill="none" stroke="#c8956a" strokeWidth="12" strokeLinecap="round"/>
+            <path d="M108 240 L95 257" fill="none" stroke="#c8956a" strokeWidth="10" strokeLinecap="round"/>
+            <path d="M235 240 L248 257" fill="none" stroke="#c8956a" strokeWidth="10" strokeLinecap="round"/>
+            <ellipse cx="93" cy="259" rx="9" ry="6" fill="#b07850"/>
+            <ellipse cx="250" cy="259" rx="9" ry="6" fill="#b07850"/>
+            <rect x="118" y="215" width="104" height="50" fill="#7C3AED" rx="4"/>
+            <rect x="122" y="219" width="96" height="42" fill="#5b2bc2" rx="2"/>
+          </g>
+
+          {/* Sweat drops */}
+          <circle cx="145" cy="195" r="4" fill="#ef4444" opacity="0.8" style={{ animation: "lu-sweat 2s ease-in-out infinite" }}/>
+          <circle cx="135" cy="184" r="2.5" fill="#ef4444" opacity="0.6" style={{ animation: "lu-sweat 2s ease-in-out 0.3s infinite" }}/>
+          <circle cx="150" cy="176" r="1.5" fill="#ef4444" opacity="0.4" style={{ animation: "lu-sweat 2s ease-in-out 0.6s infinite" }}/>
+
+          <text x="170" y="344" textAnchor="middle" fontFamily="Inter, sans-serif" fontSize="11.5" fill="#9A95AC">Dense textbooks. No idea what stuck.</text>
+
+          {/* Desk surface right */}
+          <rect x="380" y="268" width="260" height="48" fill="#1a2535" rx="4"/>
+
+          {/* Relaxed person */}
+          <g style={{ animation: "lu-bob 3s ease-in-out infinite", transformOrigin: "530px 230px" }}>
+            {/* Laptop */}
+            <rect x="410" y="225" width="240" height="155" fill="#1a1330" rx="4" stroke="#3a2d5a" strokeWidth="0.5"/>
+            <rect x="410" y="225" width="240" height="6" fill="#2e2350" rx="4"/>
+            <rect x="416" y="227" width="4" height="2" rx="1" fill="#ef4444" opacity="0.8"/>
+            <rect x="424" y="227" width="4" height="2" rx="1" fill="#FFC24B" opacity="0.8"/>
+            <rect x="432" y="227" width="4" height="2" rx="1" fill="#3DE0A0" opacity="0.8"/>
+            <rect x="414" y="235" width="228" height="138" fill="#0d1a2b" rx="2"/>
+            <g style={{ animation: "lu-screen 2s ease-in-out infinite" }}>
+              <circle cx="528" cy="285" r="22" fill="none" stroke="#7C3AED" strokeWidth="1" opacity="0.5"/>
+              <circle cx="528" cy="285" r="14" fill="none" stroke="#3DE0A0" strokeWidth="0.8" opacity="0.6"/>
+              <circle cx="528" cy="285" r="7" fill="#7C3AED" opacity="0.7"/>
+              <g style={{ animation: "lu-orbit 2.5s linear infinite", transformOrigin: "528px 285px" }}>
+                <circle cx="528" cy="285" r="5" fill="#3DE0A0"/>
+              </g>
+              <g style={{ animation: "lu-orbit 4s linear infinite reverse", transformOrigin: "528px 285px" }}>
+                <circle cx="528" cy="267" r="3.5" fill="#FF5C49"/>
+              </g>
+            </g>
+            <rect x="420" y="348" width="228" height="4" rx="2" fill="#2a2050"/>
+            <rect x="420" y="348" width="120" height="4" rx="2" fill="#3DE0A0" opacity="0.6"/>
+            <rect x="570" y="346" width="18" height="8" rx="2" fill="#FF5C49" opacity="0.9"/>
+            <text x="426" y="244" fontFamily="'JetBrains Mono', monospace" fontSize="8" fill="#3DE0A0" opacity="0.7">LESSON 3 — ELECTROMAGNETIC WAVES</text>
+
+            {/* Person head + body */}
+            <ellipse cx="530" cy="218" rx="42" ry="26" fill="#d4956a"/>
+            <ellipse cx="514" cy="215" rx="6" ry="6.5" fill="white"/>
+            <ellipse cx="546" cy="215" rx="6" ry="6.5" fill="white"/>
+            <ellipse cx="515" cy="216" rx="3.5" ry="4" fill="#3d2510" style={{ animation: "lu-blink 4s ease-in-out 0.5s infinite" }}/>
+            <ellipse cx="547" cy="216" rx="3.5" ry="4" fill="#3d2510" style={{ animation: "lu-blink 4s ease-in-out 0.8s infinite" }}/>
+            <path d="M516 228 Q530 237 544 228" fill="none" stroke="#8a4520" strokeWidth="1.8" strokeLinecap="round"/>
+            <path d="M522 231 Q530 237 538 231" fill="#d47060"/>
+            <path d="M508 207 Q505 199 510 195 Q530 187 550 195 Q555 199 552 207" fill="#d4956a" stroke="#b07845" strokeWidth="1.5"/>
+          </g>
+
+          {/* Arms on laptop */}
+          <path d="M490 215 L468 237" fill="none" stroke="#d4956a" strokeWidth="12" strokeLinecap="round"/>
+          <path d="M570 215 L592 237" fill="none" stroke="#d4956a" strokeWidth="12" strokeLinecap="round"/>
+          <path d="M468 237 L458 260" fill="none" stroke="#d4956a" strokeWidth="10" strokeLinecap="round"/>
+          <path d="M592 237 L602 260" fill="none" stroke="#d4956a" strokeWidth="10" strokeLinecap="round"/>
+          <ellipse cx="456" cy="262" rx="9" ry="6" fill="#b87040"/>
+          <ellipse cx="604" cy="262" rx="9" ry="6" fill="#b87040"/>
+
+          {/* Floating UI elements */}
+          <g style={{ animation: "lu-float 2s ease-in-out infinite" }}>
+            <path d="M556 178 L566 168 L572 175 L576 162 L582 170 L588 160" fill="none" stroke="#3DE0A0" strokeWidth="1.5" strokeLinecap="round"/>
+          </g>
+          <g style={{ animation: "lu-float 2s ease-in-out 0.4s infinite" }}>
+            <circle cx="600" cy="165" r="8" fill="none" stroke="#7C3AED" strokeWidth="1.2"/>
+            <circle cx="600" cy="165" r="3" fill="#7C3AED" opacity="0.6"/>
+          </g>
+          <g style={{ animation: "lu-float 2s ease-in-out 0.8s infinite" }}>
+            <rect x="545" y="155" width="8" height="8" rx="2" fill="none" stroke="#FF5C49" strokeWidth="1.2"/>
+          </g>
+
+          <text x="530" y="344" textAnchor="middle" fontFamily="Inter, sans-serif" fontSize="11.5" fill="#F6F1E7" opacity="0.7">Watching, learning, actually getting it.</text>
+        </svg>
       </section>
 
       {/* Testimonials */}
