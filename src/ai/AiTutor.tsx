@@ -1160,7 +1160,53 @@ export default function AILearningPage() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
-      <Helmet><title>AI Learning Course | Level Up</title></Helmet>
+      <Helmet>
+        {/* ── Primary ── */}
+        <title>{fileName ? `${fileName.replace(/\.(pdf|pptx)$/i, "")} — Level Up AI` : "Your AI Course — Level Up AI"}</title>
+        <meta name="description" content="Generate personalized animated video courses from any topic or PDF. Six narrated lessons and a 20-question readiness quiz, ready in minutes." />
+        <meta name="robots" content="noindex, nofollow" />
+        <link rel="canonical" href="https://leveluppedu.app/ai_tutor" />
+
+        {/* ── Open Graph ── */}
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="Level Up AI" />
+        <meta property="og:title" content="Level Up AI — Generate Your Course" />
+        <meta property="og:description" content="Type a topic or upload your notes. Get 6 animated lessons with narration and a quiz in minutes." />
+        <meta property="og:url" content="https://leveluppedu.app/ai_tutor" />
+        <meta property="og:image" content="https://leveluppedu.app/logo.png" />
+
+        {/* ── Twitter/X ── */}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="Level Up AI — Generate Your Course" />
+        <meta name="twitter:description" content="Type a topic or upload your notes. Get 6 animated lessons with narration and a quiz in minutes." />
+        <meta name="twitter:image" content="https://leveluppedu.app/logo.png" />
+
+        {/* ── Structured Data: WebApplication ── */}
+        <script type="application/ld+json">{JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "WebApplication",
+          "name": "Level Up AI",
+          "url": "https://leveluppedu.app",
+          "description": "AI-powered platform that generates personalized animated video courses from any topic or PDF.",
+          "applicationCategory": "EducationApplication",
+          "operatingSystem": "Web",
+          "offers": {
+            "@type": "Offer",
+            "price": "4.99",
+            "priceCurrency": "USD",
+            "description": "1 full course — 6 animated lessons, narration, and a 20-question quiz"
+          },
+          "publisher": {
+            "@type": "Organization",
+            "name": "Level Up AI",
+            "url": "https://leveluppedu.app",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "https://leveluppedu.app/logo.png"
+            }
+          }
+        })}</script>
+      </Helmet>
       <div className="flex h-screen relative">
         <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
         {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
