@@ -8,7 +8,7 @@ const allCourses = [
     lessons: 12,
     learners: "1,240",
     rating: 4.9,
-    gradient: "from-[#4E54C8] via-[#8B5CF6] to-[#06B6D4]",
+    gradient: "linear-gradient(135deg, #4E54C8, #8B5CF6, #06B6D4)",
     animation: "quantum",
   },
   {
@@ -17,7 +17,7 @@ const allCourses = [
     lessons: 18,
     learners: "3,820",
     rating: 4.8,
-    gradient: "from-[#8B5CF6] via-[#C084FC] to-[#4E54C8]",
+    gradient: "linear-gradient(135deg, #8B5CF6, #C084FC, #4E54C8)",
     animation: "columns",
   },
   {
@@ -26,7 +26,7 @@ const allCourses = [
     lessons: 24,
     learners: "5,601",
     rating: 4.9,
-    gradient: "from-[#06B6D4] via-[#4E54C8] to-[#8B5CF6]",
+    gradient: "linear-gradient(135deg, #06B6D4, #4E54C8, #8B5CF6)",
     animation: "neural",
   },
   {
@@ -35,7 +35,7 @@ const allCourses = [
     lessons: 15,
     learners: "2,103",
     rating: 4.7,
-    gradient: "from-[#F59E0B] via-[#8B5CF6] to-[#4E54C8]",
+    gradient: "linear-gradient(135deg, #F59E0B, #8B5CF6, #4E54C8)",
     animation: "art",
   },
   {
@@ -44,7 +44,7 @@ const allCourses = [
     lessons: 20,
     learners: "4,450",
     rating: 4.9,
-    gradient: "from-[#10B981] via-[#06B6D4] to-[#4E54C8]",
+    gradient: "linear-gradient(135deg, #10B981, #06B6D4, #4E54C8)",
     animation: "immune",
   },
   {
@@ -53,7 +53,7 @@ const allCourses = [
     lessons: 16,
     learners: "6,789",
     rating: 4.8,
-    gradient: "from-[#4E54C8] via-[#06B6D4] to-[#10B981]",
+    gradient: "linear-gradient(135deg, #4E54C8, #06B6D4, #10B981)",
     animation: "blockchain",
   },
 ];
@@ -363,7 +363,7 @@ export default function ShowcaseSection() {
                 <div className="absolute -top-6 -left-6 w-24 h-24 rounded-full bg-[#8B5CF6] opacity-20 blur-2xl pointer-events-none group-hover:opacity-40 transition-opacity duration-300" />
 
                 {/* Animated thumbnail */}
-                <div className={`h-40 bg-gradient-to-br ${course.gradient} relative overflow-hidden`}>
+                <div className="h-40 relative overflow-hidden" style={{ background: course.gradient }}>
                   <AnimComp />
                   {/* Category tag */}
                   <div className="absolute top-3 left-3 z-10">
