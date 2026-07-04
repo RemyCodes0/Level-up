@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Helmet } from "react-helmet-async";
 import {
   Sparkles, ArrowRight, Check, Play, Upload, Wand2, Trophy,
   X, Quote, Plus, Minus, Clock, Zap, ChevronRight,
@@ -170,6 +171,114 @@ export default function LandingPage() {
   return (
     // overflow-x-hidden on both wrapper and root prevents horizontal scroll
     // at any browser zoom level — the key fix for the Ctrl+/- layout issue.
+    <>
+    <Helmet>
+      {/* ── Primary ── */}
+      <title>Level Up AI — Turn Any Topic Into Animated Video Lessons</title>
+      <meta name="description" content="Type a topic or upload your notes. Level Up AI generates 6 animated, narrated video lessons and a 20-question quiz in minutes. First lesson always free." />
+      <meta name="keywords" content="AI learning, animated video lessons, AI course generator, study tool, personalized learning, AI tutor, educational AI, learn visually, PDF to course" />
+      <meta name="author" content="Level Up AI" />
+      <meta name="robots" content="index, follow" />
+      <link rel="canonical" href="https://leveluppedu.app" />
+
+      {/* ── Open Graph (Facebook, LinkedIn, WhatsApp) ── */}
+      <meta property="og:type" content="website" />
+      <meta property="og:site_name" content="Level Up AI" />
+      <meta property="og:title" content="Level Up AI — Turn Any Topic Into Animated Video Lessons" />
+      <meta property="og:description" content="Type a topic or upload your PDF. In minutes you get 6 animated lessons with narration and a quiz that scores your readiness. First lesson free, no card needed." />
+      <meta property="og:url" content="https://leveluppedu.app" />
+      <meta property="og:image" content="https://leveluppedu.app/logo.png" />
+      <meta property="og:image:alt" content="Level Up AI logo" />
+      <meta property="og:locale" content="en_US" />
+
+      {/* ── Twitter / X Card ── */}
+      <meta name="twitter:card" content="summary_large_image" />
+      <meta name="twitter:site" content="@levelupai" />
+      <meta name="twitter:title" content="Level Up AI — Turn Any Topic Into Animated Video Lessons" />
+      <meta name="twitter:description" content="Type a topic or upload your PDF. Get 6 animated lessons with narration and a quiz in minutes. First lesson always free." />
+      <meta name="twitter:image" content="https://leveluppedu.app/logo.png" />
+      <meta name="twitter:image:alt" content="Level Up AI logo" />
+
+      {/* ── Structured Data: WebApplication ── */}
+      <script type="application/ld+json">{JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Level Up AI",
+        "url": "https://leveluppedu.app",
+        "description": "AI-powered platform that generates personalized animated video courses from any topic or PDF. Includes 6 animated lessons with narration and a 20-question readiness quiz.",
+        "applicationCategory": "EducationApplication",
+        "operatingSystem": "Web",
+        "offers": {
+          "@type": "Offer",
+          "price": "4.99",
+          "priceCurrency": "USD",
+          "description": "1 full course — 6 animated lessons, narration, and a 20-question quiz",
+          "availability": "https://schema.org/InStock"
+        },
+        "aggregateRating": {
+          "@type": "AggregateRating",
+          "ratingValue": "4.9",
+          "reviewCount": "33"
+        },
+        "publisher": {
+          "@type": "Organization",
+          "name": "Level Up AI",
+          "url": "https://leveluppedu.app",
+          "logo": {
+            "@type": "ImageObject",
+            "url": "https://leveluppedu.app/logo.png"
+          }
+        }
+      })}</script>
+
+      {/* ── Structured Data: FAQPage (matches your FAQ section) ── */}
+      <script type="application/ld+json">{JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "How long does a course take to generate?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Your first lesson is usually ready in about five minutes. The remaining lessons keep building in the background while you watch, so you're never stuck waiting for the whole thing."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What can I make a course about?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Anything you can describe in a sentence, or anything in a PDF you upload — lecture slides, a textbook chapter, your own notes. The course is built specifically around that material."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Is the first lesson really free?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. Every course's first lesson generates free, with no card required, so you can see exactly what you'd get before paying for the rest."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Do I need a subscription?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. You buy a course only when you want one. There's no recurring charge — one price, one course, whenever you need it."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What's actually in a course?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Six animated video lessons with synced narration, plus a 20-question quiz that scores your readiness and breaks down what to review."
+            }
+          }
+        ]
+      })}</script>
+    </Helmet>
     <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif", minHeight: "100vh", width: "100%", maxWidth: "100vw" }} className="overflow-x-hidden">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -522,5 +631,6 @@ export default function LandingPage() {
         </div>
       </footer>
     </div>
+    </>
   );
 }
