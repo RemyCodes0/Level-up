@@ -21,6 +21,11 @@ const UserSchema = new mongoose.Schema({
   verified: { type: Boolean, default: false },
   verificationToken: { type: String, default: null },
   verificationTokenExpires: { type: Date, default: null },
+  referralCode:          { type: String, unique: true, sparse: true },
+  referredBy:            { type: String, default: null },
+  referralRewardGranted: { type: Boolean, default: false },
+  referralCount:         { type: Number, default: 0 },
+  referralCreditsEarned: { type: Number, default: 0 },
 
   // ── AI Course Credits ──────────────────────────────────────────────────────
   courseCredits: { type: Number, default: 0 },      // paid credits
