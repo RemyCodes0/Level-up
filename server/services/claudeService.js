@@ -401,7 +401,7 @@ async function generateLessonCode(
       );
 
       const stream = await client.messages.create({
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-5",
         // Sonnet 5 enables adaptive thinking by default, which consumes tokens
         // from the same max_tokens budget as the code output — silently
         // truncating the generated code before it finishes. Thinking is not
