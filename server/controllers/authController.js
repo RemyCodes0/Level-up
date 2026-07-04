@@ -9,7 +9,7 @@ const generateToken = (id) => {
 
 // ── Signup — creates user + sends verification email ────────────────────────
 exports.registerUser = async (req, res) => {
-  const { name, email, password, role, major, year, subjects } = req.body;
+  const { name, email, password, role, major, year, subjects, ref } = req.body;
   try {
     const userExists = await User.findOne({ email });
     if (userExists) return res.status(400).json({ message: "User already exists" });
@@ -17,6 +17,14 @@ exports.registerUser = async (req, res) => {
     // Generate a verification token (64-char hex string, expires in 24h)
     const verificationToken = crypto.randomBytes(32).toString("hex");
     const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    // Validate referral code if provided — only store it if the referrer
+    // actually exists, to avoid storing dangling/fake codes
+    let referredBy = null;
+    if (ref) {
+      const referrer = await User.findOne({ referralCode: ref }).select("_id");
+      if (referrer) referredBy = ref;
+    }
 
     const user = await User.create({
       name,
@@ -28,6 +36,7 @@ exports.registerUser = async (req, res) => {
       subjects,
       verificationToken,
       verificationTokenExpires,
+      ...(referredBy ? { referredBy } : {}),
     });
 
     // Build verification link — CLIENT_URL should point to your frontend

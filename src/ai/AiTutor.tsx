@@ -18,6 +18,7 @@ import type { CourseFromAPI } from "../api/CourseApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
+import { ReferralCard } from "../components/ReferralCard";
 
 // Download/export requires headless Chrome + 2GB+ RAM — works locally but
 // OOMs on Render's Starter (512MB). Gate it behind an env var so it only
@@ -784,6 +785,7 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
         )}
       </nav>
 
+      <ReferralCard />
       <div className="border-t border-slate-100 p-3">
         <button
           onClick={onFeedback}

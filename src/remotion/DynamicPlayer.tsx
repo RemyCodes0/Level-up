@@ -444,7 +444,27 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         loop={loop}
         controls={false}
         clickToPlay
+        acknowledgeRemotionLicense
       />
+      {/* Subtle watermark — always visible, non-intrusive, bottom-right corner.
+          Stays above the video but below the control bar overlay so it's
+          visible while playing but doesn't interfere with controls. */}
+      <div
+        className="absolute bottom-3 right-3 flex items-center gap-1.5 pointer-events-none select-none z-10"
+        style={{ opacity: 0.45 }}
+      >
+        <img src="/logo.png" alt="" className="w-4 h-4 rounded object-cover" />
+        <span style={{
+          fontSize: "10px",
+          fontFamily: "'JetBrains Mono', 'Courier New', monospace",
+          fontWeight: 500,
+          color: "white",
+          letterSpacing: "0.04em",
+          textShadow: "0 1px 3px rgba(0,0,0,0.8)",
+        }}>
+          leveluppedu.app
+        </span>
+      </div>
       <VideoControls
         playerRef={playerRef}
         durationInFrames={durationInFrames}

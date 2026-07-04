@@ -45,6 +45,9 @@ export default function SignupPage() {
   const [resendMsg, setResendMsg] = useState("");
   const router = useNavigate();
 
+  // Read referral code from URL — set by the referral link (?ref=abc123)
+  const refCode = new URLSearchParams(window.location.search).get("ref") || "";
+
   useEffect(() => {
     document.body.style.background =
       "linear-gradient(135deg, #eff6ff 0%, #f5f3ff 50%, #fdf2f8 100%)";
@@ -65,6 +68,7 @@ export default function SignupPage() {
         email,
         password,
         role,
+        ...(refCode ? { ref: refCode } : {}),
       });
 
       // New flow: backend returns requiresVerification instead of a token
@@ -269,7 +273,7 @@ export default function SignupPage() {
                   <Input
                     id="email"
                     type="email"
-                    placeholder="your-email@gmail.com"
+                    placeholder="your-email@mail.aub.edu"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="pl-10 h-12 border-2 border-gray-200 focus:border-blue-500 transition-colors"

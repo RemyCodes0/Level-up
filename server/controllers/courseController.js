@@ -11,6 +11,16 @@ const Course = require("../models/Course");
 const GenerationLog = require("../models/GenerationLog");
 const User = require("../models/User");
 const sendEmail = require("../services/emailService");
+const { completeReferral } = require("./referralController");
+
+// Email subjects can't contain newlines (Resend, and most providers, reject
+// them outright). course.topic is user-supplied — a typed topic or a PDF's
+// filename — and either could contain a stray \n (e.g. a multi-line paste,
+// or a PDF filename with embedded control characters). Strip any line
+// breaks before using untrusted text in a subject line.
+function sanitizeForSubject(text) {
+  return String(text || "").replace(/[\r\n]+/g, " ").trim();
+}
 
 // Audio dir — for cleanup when a course is deleted
 const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
@@ -28,7 +38,7 @@ function notifyCourseGenerated({ course, user, isFreeTrialCourse }) {
   const kind = isFreeTrialCourse ? "Free trial" : "Paid";
   sendEmail({
     to: COURSE_NOTIFICATION_EMAIL,
-    subject: `New course generated — ${course.topic || "Untitled"} (${kind})`,
+    subject: `New course generated — ${sanitizeForSubject(course.topic) || "Untitled"} (${kind})`,
     text: [
       `A new course was just started.`,
       ``,
@@ -181,6 +191,15 @@ async function buildLesson(courseId, lesson) {
       const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
       console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready — took ${elapsedMin} min total (scene plan + audio + code).`);
       await logAttempt({ status: "success", stage: "code", errorMessage: null, attemptNumber: attempt });
+
+      // Trigger referral reward check when lesson 1 completes — this is the
+      // moment the referred user has genuinely used the product (free trial
+      // lesson generated), which is our anti-abuse gate for referral credit.
+      if (lesson.lessonNumber === 1) {
+        const course = await Course.findById(courseId).select("userId");
+        if (course) completeReferral(course.userId.toString());
+      }
+
       return;
 
     } catch (err) {
