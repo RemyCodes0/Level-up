@@ -17,6 +17,7 @@ import {
 import type { CourseFromAPI } from "../api/CourseApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
+import { ReferralCard } from "../components/ReferralCard";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
 
 // Download/export requires headless Chrome + 2GB+ RAM — works locally but
@@ -785,6 +786,7 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
         )}
       </nav>
 
+      <ReferralCard />
       <div className="border-t border-slate-100 p-3">
         <button
           onClick={onFeedback}
