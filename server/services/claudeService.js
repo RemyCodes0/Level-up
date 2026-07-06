@@ -387,7 +387,7 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
    From "remotion": ANY named export works (AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing, interpolateColors, random, Loop) — EXCEPT staticFile, which is not available.
    From "react": ONLY useMemo, useCallback, useRef. DO NOT use useState — it DOES NOT EXIST in this sandbox. Using useState will crash the video.
    Do NOT import from any other library.
-3. The component takes NO props — all data is hardcoded.
+3. The component takes NO props — all data is hardcoded. This means variables like user, currentUser, session, props, context, or anything implying external/dynamic data DO NOT EXIST and referencing them crashes with "X is not defined". Every variable you use must be either: (a) declared locally with const/let inside your own code, (b) a real Remotion or React export from the allowed list, or (c) a parameter of a function you wrote yourself. Nothing else is available — there is no login state, no user data, no external context of any kind.
 4. Structure: a single <Series> with one <Series.Sequence> per scene, IN ORDER. Do NOT use a bare <Sequence> anywhere, including inside a scene component. A <Sequence from={...} durationInFrames={...}> nested inside a scene will UNMOUNT its children once its own duration elapses — even if that's shorter than the scene's real duration — which makes the visual disappear while the audio (in the parent Series.Sequence) keeps playing. If part of a scene should only show for a portion of the scene, control that with interpolate()-driven opacity/scale on an always-mounted element, never by wrapping it in a shorter-lived Sequence.
 5. Each <Series.Sequence durationInFrames={EXACT_NUMBER}> — copy the number EXACTLY. Never compute or round it.
 6. Inside each sequence: <Audio src={"EXACT_URL"} /> — copy URLs exactly, NO staticFile() wrapper.
@@ -459,7 +459,13 @@ CODE QUALITY:
 17. No registerRoot, no Composition.
 18. Each scene component should be 200-300 lines — use the full budget to create rich, detailed animations. Extract shared helper components (ParticleBg, OrbitRing, Label) at the top to avoid repetition across scenes.
 19. Every <Series.Sequence> must have a positive integer durationInFrames ≥ 1.
-21. NEVER write comma-separated expressions directly inside JSX curly braces: {a, b} is invalid JSX. Use separate expressions, or wrap in parens: {(a, b)} — but better to split into separate JSX attributes or elements.
+20. NEVER write comma-separated expressions directly inside JSX curly braces: {a, b} is invalid JSX. Use separate expressions, or wrap in parens: {(a, b)} — but better to split into separate JSX attributes or elements.
+21. NEVER write a literal { or } character directly as JSX text content — JSX treats every { as opening a JS expression, so a bare } with no matching opener is a parse error.
+    - CRASH: <div>f(x) = {x²}</div> — the { here isn't a JS expression, it's meant to be literal text, so JSX chokes on it.
+    - CRASH: <div>Set notation: {1, 2, 3}</div> — same problem, bare braces in text.
+    - CRASH: <div>Config: {{ key: value }}</div> as plain display text (not an actual style object) — same problem.
+    - GOOD: if you need to DISPLAY a literal brace character, wrap it as a string expression: <div>f(x) = {"{"}x²{"}"}</div>
+    - BETTER: avoid literal braces in on-screen text entirely. Rewrite math/set notation in words or with different symbols: "f of x equals x squared" or use parentheses/brackets instead of braces where the concept allows it.
 
 WORKED EXAMPLE — two richly animated scenes. Study how EVERY frame has motion, how the concept is illustrated, how layers work together:
 
