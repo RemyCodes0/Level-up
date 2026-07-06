@@ -26,3 +26,4 @@ dist-ssr
 server/exports/
 remotion-render/public/audio/
 remotion-render/public/audio/**
+rendered-videos/
