@@ -30,6 +30,36 @@ const traverse = require("@babel/traverse").default;
 // real structural bug rather than fix a typo.
 const MAX_AUTOFIX_FRAME_DRIFT = 10;
 
+// ── Layer 3d dependency: known-valid identifiers ────────────────────────────
+// Mirrors EXACTLY what the browser sandbox (useCompilation.ts's SCOPE)
+// actually provides at runtime: the full Remotion module minus staticFile
+// (deliberately excluded there), plus useMemo/useCallback/useRef (useState
+// is deliberately excluded), plus React itself, plus real JS built-ins.
+//
+// If you ever change what useCompilation.ts exposes in SCOPE, update this
+// list to match — otherwise this check will either miss real bugs (if SCOPE
+// shrinks) or falsely reject valid code (if SCOPE grows and this doesn't).
+const KNOWN_GLOBALS = new Set([
+  // Remotion — every real export except staticFile
+  "AbsoluteFill", "Sequence", "Series", "Loop", "Freeze",
+  "Audio", "Video", "OffthreadVideo", "Img", "IFrame",
+  "interpolate", "interpolateColors", "spring", "Easing", "random",
+  "useCurrentFrame", "useVideoConfig", "useDelayRender",
+  "delayRender", "continueRender", "cancelRender",
+  "Composition", "Still", "Folder", "getInputProps", "registerRoot",
+  // React hooks available in the sandbox (useState deliberately excluded)
+  "useMemo", "useCallback", "useRef",
+  // React itself
+  "React",
+  // Real JavaScript globals
+  "Math", "Array", "Object", "String", "Number", "Boolean", "Date", "JSON",
+  "console", "Infinity", "NaN", "undefined", "isNaN", "isFinite",
+  "parseInt", "parseFloat", "Map", "Set", "WeakMap", "WeakSet", "Symbol",
+  "Promise", "RegExp", "Error", "TypeError", "RangeError",
+  "decodeURIComponent", "encodeURIComponent", "Function",
+]);
+
+
 function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
   // ── Layer 1: fast heuristics (catches truncation cheaply) ──────────────
   const hasExport =
@@ -206,6 +236,53 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
         }
       }
     }
+  }
+
+  // 3d. Detect references to undeclared variables — the same bug class as
+  // ESLint's "no-undef" rule. Catches the model using an arbitrary variable
+  // name (e.g. "lx", "user") inside a helper component without ever
+  // declaring it — these pass Babel's syntax check fine (it's valid JS
+  // syntax) but crash at actual runtime in the browser with "X is not
+  // defined". This has recurred multiple times with different variable
+  // names, so rather than patching one name at a time in the prompt, this
+  // catches the whole category deterministically before the code ever
+  // reaches a user.
+  const undefinedRefs = [];
+
+  traverse(ast, {
+    // ReferencedIdentifier is Babel's built-in alias for identifiers that
+    // are genuinely USED (not being declared) — it already correctly
+    // excludes the "x" in `const x = 5`, function parameter names, object
+    // pattern keys, etc., so we don't have to hand-roll that distinction.
+    ReferencedIdentifier(path) {
+      const name = path.node.name;
+      if (KNOWN_GLOBALS.has(name)) return;
+      if (path.scope.hasBinding(name)) return; // declared locally somewhere in scope
+      const loc = path.node.loc ? ` (line ${path.node.loc.start.line})` : "";
+      undefinedRefs.push(`"${name}" is used but never declared${loc}`);
+    },
+    // JSX component references (e.g. <DoubleHelix />) are a different node
+    // type (JSXIdentifier) and need their own check. Only capitalized names
+    // are checked — lowercase JSX tags (<div>) are real HTML elements, not
+    // variable references, and JSX attribute names (prop="value") aren't
+    // variable references either.
+    JSXIdentifier(path) {
+      const name = path.node.name;
+      if (!/^[A-Z]/.test(name)) return;
+      if (path.parent.type === "JSXAttribute") return;
+      if (KNOWN_GLOBALS.has(name)) return;
+      if (path.scope.hasBinding(name)) return;
+      const loc = path.node.loc ? ` (line ${path.node.loc.start.line})` : "";
+      undefinedRefs.push(`Component "<${name}>" is used but never declared${loc}`);
+    },
+  });
+
+  // De-duplicate — the same undefined name often shows up many times
+  // across a file once it's used in a loop/map, which would otherwise
+  // produce a wall of near-identical error lines.
+  const uniqueRefs = [...new Set(undefinedRefs)];
+  if (uniqueRefs.length > 0) {
+    throw new Error(`Undefined variable reference(s):\n${uniqueRefs.join("\n")}`);
   }
 
   return correctedCode;
