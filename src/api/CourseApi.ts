@@ -36,6 +36,7 @@ export interface CourseFromAPI {
   lessons: LessonFromAPI[];
   questions: QuestionFromAPI[];
   createdAt?: string;
+  isFreeTrialCourse?: boolean;
 }
 
 // ── Start course generation — returns courseId immediately ───────────────────

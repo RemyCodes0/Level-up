@@ -7,9 +7,35 @@ interface CompilationResult {
   error: string | null;
 }
 
-// Wraps Remotion's <Audio> so every usage defaults to pauseWhenBuffering={true}.
-const BufferedAudio: React.FC<any> = (props) =>
-  React.createElement(RemotionNS.Audio, { pauseWhenBuffering: true, ...props });
+// Wraps Remotion's <Audio> so every usage defaults to pauseWhenBuffering={true}
+// — without this, if a scene's audio hasn't finished loading over the network
+// when its Sequence starts, the audio stutters/glitches. With
+// pauseWhenBuffering, Remotion pauses the whole composition until that
+// scene's audio is ready, then resumes in sync.
+//
+// CRITICAL SAFETY NET: pauseWhenBuffering is designed for "not ready yet",
+// not "will never load". If the audio URL is genuinely broken (404, wrong
+// domain, deleted file), the browser fires a hard 'error' event — but
+// Remotion's buffering-wait logic doesn't automatically distinguish that
+// from "still loading", so it can end up waiting/retrying indefinitely on a
+// resource that will never succeed. This caused a real production incident:
+// 20,000+ repeated requests to a single broken audio file in minutes.
+//
+// The fix: track whether THIS specific audio source has fired a hard error.
+// Once it has, flip pauseWhenBuffering off for that instance so Remotion
+// stops blocking/retrying on it and the video just plays silently for that
+// scene instead of hanging forever.
+const BufferedAudio: React.FC<any> = (props) => {
+  const [hasErrored, setHasErrored] = React.useState(false);
+  return React.createElement(RemotionNS.Audio, {
+    pauseWhenBuffering: !hasErrored,
+    onError: (e: any) => {
+      console.warn("[BufferedAudio] Audio failed to load — disabling buffer-wait for this source to prevent infinite retry:", props.src, e);
+      setHasErrored(true);
+    },
+    ...props,
+  });
+};
 
 // ── Sandbox scope ─────────────────────────────────────────────────────────────
 // Expose the ENTIRE Remotion module so any current or future Remotion export

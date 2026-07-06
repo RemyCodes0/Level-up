@@ -353,28 +353,56 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   // arrived yet. Pre-warming the browser's HTTP cache here means that by
   // the time playback reaches scene 5, its audio is already loaded and
   // pauseWhenBuffering has nothing to wait for.
+  //
+  // Two safety layers added after a production incident where this effect
+  // re-fired repeatedly (upstream reference churn on `code`) and spawned a
+  // fresh wave of fetches for the same files every time — 20,000+ requests
+  // to a single broken audio URL in minutes:
+  //   1. Depend on the actual extracted URLs (joined into a stable string),
+  //      not the raw `code` prop — so a new `code` reference with identical
+  //      audio URLs does NOT re-trigger this effect at all.
+  //   2. Track URLs already attempted in a ref that persists for the life of
+  //      this component instance, so even if the effect DOES legitimately
+  //      re-run, it never re-fetches a URL it already tried.
+  const attemptedUrlsRef = useRef<Set<string>>(new Set());
+  const audioUrls = extractAudioUrls(code);
+  const audioUrlsKey = audioUrls.join("|");
+
   useEffect(() => {
-    if (!code) return;
-    const urls = extractAudioUrls(code);
-    const preloadedAudio = urls.map((url) => {
+    if (!code || audioUrls.length === 0) return;
+
+    const newAudioElements: HTMLAudioElement[] = [];
+
+    audioUrls.forEach((url) => {
+      // Skip anything already attempted by this component instance — this is
+      // the hard stop that prevents the runaway retry loop.
+      if (attemptedUrlsRef.current.has(url)) return;
+      attemptedUrlsRef.current.add(url);
+
       const audio = new window.Audio();
       audio.preload = "auto";
+      // On error, just log once and let it be — do NOT retry, do NOT
+      // recreate the element. A broken audio file should fail cleanly, not
+      // hammer the server.
+      audio.onerror = () => {
+        console.warn(`[DynamicPlayer] Audio prefetch failed (will not retry): ${url}`);
+      };
       audio.src = url;
-      // Calling load() explicitly kicks off the fetch immediately in all
-      // browsers, rather than waiting for some browsers' lazier defaults.
       audio.load();
-      return audio;
+      newAudioElements.push(audio);
     });
 
-    // Nothing to clean up beyond letting these get garbage collected —
-    // they're not attached to the DOM and don't play anything themselves,
-    // they exist purely to warm the browser's HTTP cache for these URLs.
     return () => {
-      preloadedAudio.forEach((audio) => {
+      newAudioElements.forEach((audio) => {
+        audio.onerror = null;
         audio.src = "";
       });
     };
-  }, [code]);
+    // audioUrlsKey (not `code`) is the real dependency — this effect only
+    // needs to re-run when the actual set of audio URLs changes, not on
+    // every render that happens to produce a new `code` string reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioUrlsKey]);
 
   useEffect(() => {
     const player = playerRef.current;

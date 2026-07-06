@@ -236,11 +236,17 @@ async function buildLessonsInPairs(courseId, lessons) {
 }
 
 // ── Orchestrates the whole course ────────────────────────────────────────────
-// isFreeTrialCourse: if true, ONLY lesson 1 is built — lessons 2-6 are left
-// in "locked" status (no AI calls made for them at all) until the user buys
-// credits and calls unlockRemainingLessonsHandler. This is what actually
-// saves the generation cost for free-trial users: 1 lesson's worth of
-// Claude/TTS calls instead of 6.
+// UPDATED: with GLM-5.2 dropping per-course cost from ~$2.50 to under ~$1,
+// the free trial now generates the FULL course (all 6 lessons + quiz) rather
+// than gating lessons 2-6 behind a mid-course paywall. This turns the trial
+// into "see the whole product once," which converts far better than "watch
+// 1/6 and hit a wall." The paywall now only appears when the user tries to
+// start a SECOND course without credits — see generateCourseHandler /
+// the free-trial-eligibility middleware upstream, unchanged by this file.
+//
+// isFreeTrialCourse is still recorded on the course document for analytics
+// and the frontend's "this was a free trial" UI/feedback-prompt logic, but
+// it NO LONGER affects generation — every course builds all 6 lessons.
 async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = false, level = null) {
   const courseStart = Date.now();
   try {
@@ -248,27 +254,18 @@ async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = fal
     const { lessons, questions } = await generateCoursePlan(topic, null, pdfBuffer, level);
 
     await Course.findByIdAndUpdate(courseId, {
-      lessons: lessons.map((l, i) => ({
+      lessons: lessons.map((l) => ({
         ...l,
-        // Lesson 1 always renders. For free-trial courses, lessons 2-6
-        // start "locked" instead of "rendering" — no generation work is
-        // queued for them at all until the course is unlocked.
-        status: isFreeTrialCourse && i > 0 ? "locked" : "rendering",
+        // Every lesson renders now, trial or not — no "locked" status.
+        status: "rendering",
         code: null,
         totalFrames: null,
       })),
       questions,
     });
 
-    if (isFreeTrialCourse) {
-      // Only build lesson 1 — lessons 2-6 stay locked, costing nothing,
-      // until the user unlocks them via unlockRemainingLessonsHandler.
-      await buildLesson(courseId, lessons[0]);
-    } else {
-      // Paid course (or an unlocked former free-trial course) — build all
-      // 6 lessons in pairs of 2, as before.
-      await buildLessonsInPairs(courseId, lessons);
-    }
+    // Build all 6 lessons in pairs, regardless of trial status.
+    await buildLessonsInPairs(courseId, lessons);
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
     const totalMin = ((Date.now() - courseStart) / 60000).toFixed(1);

@@ -18,7 +18,6 @@ import type { CourseFromAPI } from "../api/CourseApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
-import { ReferralCard } from "../components/ReferralCard";
 
 // Download/export requires headless Chrome + 2GB+ RAM — works locally but
 // OOMs on Render's Starter (512MB). Gate it behind an env var so it only
@@ -68,6 +67,7 @@ interface HistoryEntry {
   quizAnswers: QuizAnswer[];
   quizDone: boolean;
   questions: MCQQuestion[];
+  isFreeTrialCourse?: boolean;
 }
 
 interface Lesson {
@@ -785,7 +785,6 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
         )}
       </nav>
 
-      <ReferralCard />
       <div className="border-t border-slate-100 p-3">
         <button
           onClick={onFeedback}
@@ -831,6 +830,10 @@ export default function AILearningPage() {
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+  // Tracks whether the CURRENTLY VIEWED course was generated using the free
+  // trial — used to decide whether to auto-prompt for feedback after the
+  // quiz results are shown (see the quiz onSubmit handler below).
+  const [activeCourseIsFreeTrial, setActiveCourseIsFreeTrial] = useState(false);
   const [historySidebarCollapsed, setHistorySidebarCollapsed] = useState(false);
   const [credits, setCredits] = useState<Credits | null>(null);
   const [retryingLesson, setRetryingLesson] = useState<number | null>(null);
@@ -894,6 +897,7 @@ export default function AILearningPage() {
       lessons: mappedLessons.length ? mappedLessons : MOCK_LESSONS,
       lessonStatuses: mappedStatuses.length ? mappedStatuses : MOCK_LESSONS.map(() => "generating" as LessonStatus),
       quizAnswers: [], quizDone: false, questions: c.questions || [],
+      isFreeTrialCourse: !!c.isFreeTrialCourse,
     };
   };
 
@@ -942,12 +946,11 @@ export default function AILearningPage() {
 
   const markComplete = (lessonId: number) => {
     setLessons((prev) => prev.map((l) => l.id === lessonId ? { ...l, completed: true } : l));
-    // Auto-show feedback modal when the user finishes lesson 1 of a free-trial
-    // course — at this point lessons 2-6 are locked, so it's a natural pause
-    // point to collect impressions before the paywall pops up.
-    if (lessonId === 1 && lessonStatuses.some((s) => s === "locked")) {
-      setTimeout(() => setShowFeedback(true), 800);
-    }
+    // Feedback trigger moved to firing after quiz RESULTS are shown (see the
+    // quiz onSubmit handler below) — now that the free trial gives the whole
+    // course upfront, "finishing lesson 1" isn't a meaningful checkpoint
+    // anymore. The natural moment to ask for feedback is after the user has
+    // experienced the complete product: all 6 lessons + their quiz score.
   };
 
   useEffect(() => {
@@ -1077,6 +1080,11 @@ export default function AILearningPage() {
     setLessons(MOCK_LESSONS.map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null })));
     setLessonStatuses(MOCK_LESSONS.map(() => "generating"));
     setActiveSection("video"); setActiveLesson(0);
+    // Determine free-trial status from credits BEFORE this call — this is
+    // the exact same condition the backend's checkCredits middleware uses
+    // (freeTrialUsed === false means this generation will consume the trial).
+    const willUseFreeTrial = !!(credits && !credits.freeTrialUsed);
+    setActiveCourseIsFreeTrial(willUseFreeTrial);
     try {
       const { courseId } = await startCourseGeneration(name, file, level);
       fetchCredits();
@@ -1110,6 +1118,7 @@ export default function AILearningPage() {
   const restoreEntry = (entry: HistoryEntry) => {
     if (pollCancelRef.current) pollCancelRef.current();
     setActiveHistoryId(entry.id); setFileName(entry.fileName); setLessons(entry.lessons);
+    setActiveCourseIsFreeTrial(!!entry.isFreeTrialCourse);
     setLessonStatuses(entry.lessonStatuses ?? entry.lessons.map(() => "ready"));
     setQuizAnswers(entry.quizAnswers); setQuizDone(entry.quizDone); setQuizQuestions(entry.questions ?? []);
     setActiveSection(entry.quizDone ? "results" : "video"); setActiveLesson(0); setPhase("course");
@@ -1382,7 +1391,17 @@ export default function AILearningPage() {
                 </div>
               </div>
             )}
-            {activeSection === "quiz" && <QuizSection questions={quizQuestions} onSubmit={(answers) => { setQuizAnswers(answers); setQuizDone(true); setActiveSection("results"); }} />}
+            {activeSection === "quiz" && <QuizSection questions={quizQuestions} onSubmit={(answers) => {
+              setQuizAnswers(answers); setQuizDone(true); setActiveSection("results");
+              // The free trial now includes the full course + quiz. Right after
+              // the user sees their results is the natural moment to ask for
+              // feedback — they've just experienced the complete product. The
+              // 3s delay lets them actually see the score before the modal
+              // interrupts them, rather than popping up the instant they submit.
+              if (activeCourseIsFreeTrial) {
+                setTimeout(() => setShowFeedback(true), 3000);
+              }
+            }} />}
             {activeSection === "results" && (
               <>
                 <ResultsSection answers={quizAnswers} questions={quizQuestions} />

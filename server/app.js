@@ -58,20 +58,38 @@ app.use('/api/referral', require('./routes/referral'))
 
 // Serve audio files for browser playback at /audio/*
 // The browser fetches these directly during Remotion Player playback.
-app.use(
-  "/audio",
-  express.static(
-    process.env.NODE_ENV === "production"
-      ? "/data/audio"
-      : path.resolve(__dirname, "../remotion-render/public/audio")
-  )
-);
+const audioDir = process.env.NODE_ENV === "production"
+  ? "/data/audio"
+  : path.resolve(__dirname, "../remotion-render/public/audio");
+
+app.use("/audio", express.static(audioDir));
+
+// ──────────────────────────────────────────────────────────────────────────
+// EXPLICIT 404 for missing audio files.
+//
+// Without this, a missing file falls through express.static's next() call
+// into Express's own DEFAULT 404 handler — a generic, minimal HTML page
+// with an ambiguous response shape. Native <audio> elements send Range
+// requests (Range: bytes=0-) for progressive loading, and Chrome's media
+// engine doesn't handle an unexpected HTML response to a Range request
+// gracefully — instead of treating it as a clean permanent failure, it can
+// retry the request internally at the browser's own network layer, bypassing
+// any React/JS error handling entirely. This caused a real production
+// incident: 20,000+ repeated requests to a single missing audio file in
+// minutes, invisible to every application-level fix because the retries
+// were happening below the JavaScript layer.
+//
+// Sending back a plain, unambiguous 404 with an empty body removes that
+// ambiguity — Chrome sees a clean "not found" and stops trying.
+app.use("/audio", (req, res) => {
+  res.status(404).end();
+});
 
 app.get('/sitemap.xml', async (req, res) => {
   try {
     const smStream = new SitemapStream({
       hostname: 'https://levelup-snowy.vercel.app'
-    });app.use('/api/showcase', require('./routes/showcase'));
+    });
 
     smStream.write({ url: '/', changefreq: 'daily', priority: 1.0 });
     smStream.write({ url: '/tutors', changefreq: 'daily', priority: 0.9 });

@@ -15,8 +15,8 @@ const SERVER_BASE_URL = process.env.SERVER_BASE_URL || "http://localhost:5000";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  timeout: 90 * 1000,  // 90 seconds per request — long enough for any scene
-  maxRetries: 3,        // auto-retry on transient timeouts
+  timeout: 150 * 1000, // 150 seconds — scenes 12-13 with long narration were timing out at 90s
+  maxRetries: 0,       // handle retries manually below with backoff
 });
 
 // Generates audio for a single scene with manual retry + exponential backoff
@@ -68,7 +68,7 @@ async function generateSceneAudio(scene, retries = 3) {
         console.error(`  [tts] Scene ${scene.id}: all ${retries} attempts failed — ${err.message}`);
         throw err;
       }
-      const backoffMs = 1000 * attempt; // 1s, 2s, 3s
+      const backoffMs = 2000 * attempt; // 2s, 4s, 6s — longer wait for terminated connections
       console.warn(`  [tts] Scene ${scene.id}: attempt ${attempt} failed (${err.message}), retrying in ${backoffMs}ms...`);
       await new Promise((r) => setTimeout(r, backoffMs));
     }
