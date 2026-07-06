@@ -755,6 +755,48 @@ function autoFixCode(code, { totalFrames } = {}) {
   return fixed;
 }
 
+// ── Enforce correct audio URLs — don't trust the model to copy them right ───
+// GLM-5.2 (and any LLM) can occasionally mistype a single character when
+// transcribing a long, random UUID into generated code — e.g. writing
+// "...ba3e-..." as "...be3e-..." in an <Audio src="..."> tag. The rest of the
+// URL matches perfectly, but that one scene's audio silently 404s forever,
+// since the file that URL points to was never actually created.
+//
+// Rather than hoping the model copies a 36-character random string
+// perfectly every time, we enforce it deterministically: scenes are always
+// wired into <Series.Sequence> tags IN ORDER, so we can match each
+// <Audio src="..."> occurrence (in the order it appears) to the
+// corresponding scene in our own `scenes` array — which has the guaranteed-
+// correct, actually-existing-on-disk URL — and force-replace it if it
+// doesn't match exactly.
+function enforceCorrectAudioUrls(code, scenes) {
+  let sceneIndex = 0;
+  let mismatchCount = 0;
+
+  const fixed = code.replace(/<Audio\s+src=\{"([^"}]+)"\}/g, (match, foundUrl) => {
+    if (sceneIndex >= scenes.length) return match; // more Audio tags than scenes — leave as-is, validateGeneratedCode will catch structural issues
+    const correctUrl = scenes[sceneIndex].audioUrl;
+    sceneIndex++;
+
+    if (foundUrl !== correctUrl) {
+      mismatchCount++;
+      console.warn(
+        `  [audio-url-fix] Scene ${sceneIndex}: model wrote a URL that doesn't match the real file — correcting it.\n` +
+        `    Model wrote:  ${foundUrl}\n` +
+        `    Correct URL:  ${correctUrl}`
+      );
+      return `<Audio src={"${correctUrl}"}`;
+    }
+    return match;
+  });
+
+  if (mismatchCount > 0) {
+    console.warn(`  [audio-url-fix] Corrected ${mismatchCount} mismatched audio URL(s) out of ${scenes.length} scenes.`);
+  }
+
+  return fixed;
+}
+
 async function generateLessonCode(
   lesson,
   componentName,
@@ -817,7 +859,12 @@ async function generateLessonCode(
       // ── Auto-fix common GLM-5.2 output errors ─────────────────────────────
       const fixedCode = autoFixCode(code, { totalFrames });
 
-      const validatedCode = validateGeneratedCode(fixedCode, componentName, totalFrames);
+      // ── Force-correct any mistyped audio URLs — don't trust the model's
+      // ability to transcribe long UUID strings perfectly. This is what
+      // actually fixes the "one random scene has no audio" bug.
+      const audioFixedCode = enforceCorrectAudioUrls(fixedCode, scenes);
+
+      const validatedCode = validateGeneratedCode(audioFixedCode, componentName, totalFrames);
 
       const review = await reviewGeneratedCode(validatedCode, lesson);
       if (!review.skipped && review.ok === false) {
