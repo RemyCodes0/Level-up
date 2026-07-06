@@ -10,6 +10,7 @@ const {
   unlockRemainingLessonsHandler,
   generateShareLinkHandler,
   unshareCourseHandler,
+  getSharedCourseHandler,
 } = require("../controllers/courseController");
 
 // TODO: import YOUR existing auth middleware here.
@@ -26,11 +27,16 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Public — no auth required, used by the marketing showcase page
 router.get("/showcase", getShowcaseCoursesHandler);
 
+// Public — no auth required. Anyone with a shared link (no account needed)
+// hits this to view a course someone else chose to share. Must stay
+// WITHOUT `protect` — that's the whole point of a public share link.
+router.get("/shared/:shareToken", getSharedCourseHandler);
+
 // All other course routes require a logged-in user (so req.user exists)
 router.post("/generate", protect, checkCredits, upload.single("file"), generateCourseHandler);
 router.post("/:courseId/share", protect, generateShareLinkHandler);
 router.delete("/:courseId/share", protect, unshareCourseHandler);
- 
+
 router.post("/:courseId/retry/:lessonIndex", protect, retryLessonHandler);
 router.post("/:courseId/unlock", protect, unlockRemainingLessonsHandler);
 router.get("/status/:courseId", protect, getCourseStatusHandler);
