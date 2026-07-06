@@ -295,6 +295,99 @@ async function getCourseStatusHandler(req, res) {
   }
 }
 
+// ── Generate (or return existing) share link for a course ───────────────────
+// Owner-only — creates a random, unguessable token the first time this is
+// called for a course, then always returns the same token on subsequent
+// calls. The token (not the Mongo _id) is what appears in the public URL,
+// so a shared link never exposes or lets anyone guess a real course ID.
+async function generateShareLinkHandler(req, res) {
+  try {
+    const course = await Course.findOne({
+      _id: req.params.courseId,
+      userId: req.user._id,
+    });
+    if (!course) {
+      res.status(404).json({ error: "Course not found" });
+      return;
+    }
+
+    // Only fully-generated courses can be shared — sharing a course that's
+    // still generating, or that failed, would show a broken/incomplete
+    // experience to whoever receives the link.
+    if (course.status !== "ready") {
+      res.status(400).json({ error: "Only a fully-generated course can be shared." });
+      return;
+    }
+
+    if (!course.shareToken) {
+      course.shareToken = crypto.randomBytes(12).toString("hex");
+      course.isShared = true;
+      await course.save();
+    } else if (!course.isShared) {
+      // Token already exists (was shared before, then unshared) — just
+      // re-enable it rather than generating a new token, so any link
+      // already sent out before still works after re-sharing.
+      course.isShared = true;
+      await course.save();
+    }
+
+    const shareUrl = `${process.env.CLIENT_URL}/shared/${course.shareToken}`;
+    res.json({ shareToken: course.shareToken, shareUrl, isShared: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to generate share link" });
+  }
+}
+
+// ── Turn off sharing for a course (owner-only) ───────────────────────────────
+// Keeps the same shareToken in the database (so re-sharing later doesn't
+// invalidate a link that was already sent out and then paused), but flips
+// isShared to false so the public endpoint below stops serving it.
+async function unshareCourseHandler(req, res) {
+  try {
+    const course = await Course.findOneAndUpdate(
+      { _id: req.params.courseId, userId: req.user._id },
+      { $set: { isShared: false } },
+      { new: true }
+    );
+    if (!course) {
+      res.status(404).json({ error: "Course not found" });
+      return;
+    }
+    res.json({ isShared: false });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to unshare course" });
+  }
+}
+
+// ── Public, unauthenticated fetch of a shared course by its share token ─────
+// No auth required — this is the endpoint the recipient of a shared link
+// hits. Only returns data if isShared is currently true, so the owner can
+// revoke access at any time via unshareCourseHandler above.
+//
+// Deliberately strips anything the recipient doesn't need and shouldn't
+// see: userId, email-adjacent fields, internal generation logs, etc. Only
+// the actual course content (lessons, questions) plus the topic are exposed.
+async function getSharedCourseHandler(req, res) {
+  try {
+    const course = await Course.findOne({
+      shareToken: req.params.shareToken,
+      isShared: true,
+    }).select("topic lessons questions createdAt");
+
+    if (!course) {
+      res.status(404).json({ error: "This shared course wasn't found, or is no longer being shared." });
+      return;
+    }
+
+    res.json(course);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load shared course" });
+  }
+}
+
 // ── List the logged-in user's courses ────────────────────────────────────────
 // Supports pagination via ?page=1&limit=8 — defaults to page 1, 8 per page.
 // Fetches one extra document beyond the page size to cheaply determine
@@ -505,4 +598,7 @@ module.exports = {
   getShowcaseCoursesHandler,
   retryLessonHandler,
   unlockRemainingLessonsHandler,
+  generateShareLinkHandler,
+  unshareCourseHandler,
+  getSharedCourseHandler,
 };

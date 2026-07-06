@@ -29,6 +29,7 @@ import ShowcasePage from './showcase/ShowCase'
 import VerifyEmailPage from './signup/Verifyemailpage'
 import AdminDashboard from './ai/AdminDashboard'
 import PricingPage from './price/PricePage'
+import SharedCoursePage from './share/SharePage'
 function App() {
 
 
@@ -44,6 +45,7 @@ function App() {
       <Route path="/profile" element={<ProfilePage/>}/>
       <Route path="/signup" element={<SignupPage/>}/>
       <Route path="/verify-email" element={<VerifyEmailPage/>}/>
+      <Route path="/shared/:shareToken" element={<SharedCoursePage />} />
       <Route path="/tutors/:id" element={<TutorProfilePage/>}/>
       <Route path="/tutors" element={<TutorsPage/>}/>
       <Route path="/ai_tutor" element={<AILearningPage/>}/>

@@ -43,10 +43,25 @@ const courseSchema = new mongoose.Schema(
     },
     topic: String,
     // True if this course was generated using the user's free trial.
-    // While true, only lesson 1 gets built — lessons 2-6 stay "locked"
-    // until the user buys credits and unlocks the rest of THIS course
-    // (see unlockRemainingLessonsHandler). Flips to false once unlocked.
+    // Kept for analytics and for the frontend's "was this the free trial"
+    // feedback-prompt logic — no longer gates lesson generation itself
+    // (the free trial now builds the full course, all 6 lessons + quiz).
     isFreeTrialCourse: {
+      type: Boolean,
+      default: false,
+    },
+    // Shareable link support — a random, unguessable token (not the Mongo
+    // _id) so shared URLs never expose or let anyone enumerate real course
+    // IDs. Generated once on first share, then reused if unshared/re-shared.
+    shareToken: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    // Whether the share link is CURRENTLY active. Kept separate from
+    // shareToken so the owner can revoke access without losing the token —
+    // re-sharing later reuses the same link instead of invalidating it.
+    isShared: {
       type: Boolean,
       default: false,
     },

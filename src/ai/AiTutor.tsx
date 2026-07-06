@@ -29,7 +29,7 @@ import {
   ChevronRight, ChevronLeft, Clock, BarChart2, BookOpen, AlertCircle,
   Award, TrendingUp, TrendingDown, ClipboardList, Trophy,
   X, Check, PanelLeft, PenSquare, GraduationCap, Loader2, Trash2, XCircle,
-  CreditCard, Zap, Minus, Plus, MessageSquare,
+  CreditCard, Zap, Minus, Plus, MessageSquare, Share2,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -286,6 +286,7 @@ function PaywallModal({ onClose, courseId, courseName }: { onClose: () => void; 
 const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
 import { FeedbackModal } from "../feedback/FeedBackModel";
+import { ShareModal } from "../components/ShareModal";
 import { PDFDocument } from "pdf-lib";
 
 function UploadPhase({ onGenerate, credits }: {
@@ -841,6 +842,7 @@ export default function AILearningPage() {
   const [retryingLesson, setRetryingLesson] = useState<number | null>(null);
   const [unlockingCourse, setUnlockingCourse] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [failureBanner, setFailureBanner] = useState<{ lessonIndex: number; title: string; error: string | null } | null>(null);
   const seenFailuresRef = useRef<Set<number>>(new Set());
@@ -1173,6 +1175,7 @@ export default function AILearningPage() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
+        {showShareModal && activeHistoryId && <ShareModal courseId={activeHistoryId} onClose={() => setShowShareModal(false)} />}
       <Helmet>
         {/* ── Primary ── */}
         <title>{fileName ? `${fileName.replace(/\.(pdf|pptx)$/i, "")} — Level Up AI` : "Your AI Course — Level Up AI"}</title>
@@ -1362,6 +1365,15 @@ export default function AILearningPage() {
                       lessonNumber={activeLesson + 1}
                       lessonTitle={lessons[activeLesson]?.title}
                     />
+                  )}
+                  {activeHistoryId && allLessonsReady && (
+                    <Button
+                      variant="outline"
+                      className="text-xs sm:text-sm px-3 sm:px-4 shrink-0 border-blue-200 text-blue-600 hover:bg-blue-50"
+                      onClick={() => setShowShareModal(true)}
+                    >
+                      <Share2 className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Share</span>
+                    </Button>
                   )}
                   {activeLesson < lessons.length - 1 ? (
                     lessonStatuses[activeLesson + 1] === "locked" ? (
