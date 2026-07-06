@@ -405,14 +405,16 @@ The user is paying for animated video lessons. If the animations are generic, st
    - Layer 3 (text): Text that springs or fades in, positioned so it doesn't overlap layer 2.
 
 10. RICHNESS REQUIREMENTS — every scene must have at least:
-    - 3+ animated elements (not counting background particles)
-    - At least 1 element using spring() for a natural entrance
-    - At least 1 element using Math.sin or Math.cos for continuous periodic motion
-    - Colors chosen to match the concept (biology = greens, physics = blues/purples, chemistry = warm colors)
-    - Glow effects (boxShadow with color) on primary elements to make them pop
-    - The concept name or key formula as text, appearing with a stagger after the visual is established
+    - 5+ animated elements (not counting background particles) — richer than a minimal diagram, build a genuinely layered scene
+    - At least 2 elements using spring() for staggered, natural entrances (not just one)
+    - At least 2 elements using Math.sin/Math.cos with DIFFERENT periods/phases for continuous motion that doesn't look synchronized/robotic
+    - A background particle field or ambient motion layer with 30-40 elements, each with independent timing (via index-based delay/phase offsets) — never all moving in lockstep
+    - Colors chosen to match the concept (biology = greens, physics = blues/purples, chemistry = warm colors), with a gradient or multi-color palette per scene, not a single flat color
+    - Glow effects (boxShadow with color) on EVERY primary element, not just one — layer glows of different intensities to create visual depth
+    - At least one element with a secondary/orbiting motion (something moving around another moving thing, not just independent motions)
+    - The concept name or key formula as text, appearing with a stagger after the visual is established, plus a secondary supporting text label revealing shortly after
 
-    THIS IS ENFORCED, NOT A SUGGESTION: a scene consisting of only a title fading in over a plain background, with no shape/diagram illustrating the concept, WILL be rejected and regenerated. Every scene needs a real Layer 2 diagram — text alone is never sufficient, no matter how well-animated the text itself is.
+    THIS IS ENFORCED, NOT A SUGGESTION: a scene consisting of only a title fading in over a plain background, with no shape/diagram illustrating the concept, WILL be rejected and regenerated. Every scene needs a real Layer 2 diagram — text alone is never sufficient, no matter how well-animated the text itself is. A scene with only 1-2 simple animated elements and no particle field is UNDER the bar — push for maximum visual density and motion complexity within the line budget.
 
 INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
 11. interpolate() ALWAYS needs exactly 3 arguments: interpolate(value, [in...], [out...]).
