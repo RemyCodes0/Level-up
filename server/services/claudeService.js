@@ -976,6 +976,136 @@ function enforceCorrectAudioUrls(code, scenes) {
   return fixed;
 }
 
+// ── Scene-level quality lint ─────────────────────────────────────────────────
+// Root cause of the "black screen with a few particles" courses: the ONLY
+// thing enforcing animation richness was the code critic — an LLM judging
+// another LLM. When the critic is skipped (review.skipped) or lenient, a
+// structurally-valid but visually-empty scene passes validateGeneratedCode
+// untouched, because that validator checks syntax/structure, not whether a
+// Layer 2 concept diagram actually exists. This lint is the deterministic
+// backstop: cheap static checks that reject text-only / motionless scenes
+// BEFORE they ever reach the user, with a per-scene reason that gets fed
+// back into the regeneration prompt so the retry is targeted, not blind.
+//
+// All checks are heuristic and deliberately conservative (a lint that
+// over-rejects burns regeneration attempts and money). Helper components
+// are expanded into the scene's "effective source" so a scene that
+// delegates its motion/shapes to helpers isn't falsely flagged.
+
+const BUILTIN_JSX_TAGS = new Set([
+  "AbsoluteFill",
+  "Audio",
+  "Series",
+  "Sequence",
+  "Loop",
+  "Fragment",
+]);
+
+// Map every top-level component definition (function Name( / const Name =)
+// to its source slice, using the next top-level definition as the boundary.
+function extractTopLevelComponentSources(code) {
+  const sources = {};
+  const defPattern =
+    /(?:^|\n)(?:export\s+)?(?:function\s+([A-Z][A-Za-z0-9_]*)\s*\(|const\s+([A-Z][A-Za-z0-9_]*)\s*=)/g;
+  const defs = [...code.matchAll(defPattern)];
+  defs.forEach((m, i) => {
+    const name = m[1] || m[2];
+    const start = m.index;
+    const end = i + 1 < defs.length ? defs[i + 1].index : code.length;
+    sources[name] = code.slice(start, end);
+  });
+  return sources;
+}
+
+// A scene's effective source = its own source + the sources of every custom
+// component it renders (recursively, cycle-safe). Without this, a scene
+// built as <ParticleBg/><OrbitDiagram/><Label/> would look "empty" to the
+// lint even though it's perfectly rich.
+function expandedComponentSource(name, sources, visited = new Set()) {
+  if (!name || visited.has(name) || !sources[name]) return "";
+  visited.add(name);
+  let src = sources[name];
+  const used = [...src.matchAll(/<([A-Z][A-Za-z0-9_]*)\b/g)].map((m) => m[1]);
+  for (const childName of new Set(used)) {
+    if (BUILTIN_JSX_TAGS.has(childName)) continue;
+    src += expandedComponentSource(childName, sources, visited);
+  }
+  return src;
+}
+
+// Find, in order, the scene component rendered inside each <Series.Sequence>.
+function extractSceneComponentNames(code) {
+  const blocks = code.match(/<Series\.Sequence[\s\S]*?<\/Series\.Sequence>/g) || [];
+  return blocks.map((block) => {
+    const tags = [...block.matchAll(/<([A-Z][A-Za-z0-9_]*)\b/g)]
+      .map((m) => m[1])
+      .filter((n) => !BUILTIN_JSX_TAGS.has(n));
+    return tags[0] || null;
+  });
+}
+
+function lintSceneQuality(code, scenes) {
+  const issues = [];
+
+  // Whole-file check: the SAFE-bounds + clamp() pattern from rule 14 must
+  // actually exist in the output. This is the defense against the
+  // "animations drift to the edges where the user can't see them" failure —
+  // when the model skips the pattern entirely, nothing else catches it.
+  const clampUses = (code.match(/\bclamp\w*\s*\(/g) || []).length;
+  const definesSafe = /\bSAFE\b/.test(code);
+  if (!definesSafe || clampUses < 3) {
+    issues.push(
+      "Missing frame-boundary safety: the file must define SAFE bounds and route every element position through a clamp() helper (rule 14). Without it, elements drift off the 1920x1080 frame where the user cannot see them."
+    );
+  }
+
+  const sources = extractTopLevelComponentSources(code);
+  const sceneNames = extractSceneComponentNames(code);
+
+  sceneNames.forEach((name, i) => {
+    // Inline JSX inside the Sequence or an unlocatable component — skip
+    // rather than guess. validateGeneratedCode still covers structure.
+    if (!name || !sources[name]) return;
+
+    const src = expandedComponentSource(name, sources);
+    const sceneIssues = [];
+
+    if (!/useCurrentFrame\s*\(/.test(src)) {
+      sceneIssues.push(
+        "no useCurrentFrame() anywhere in the scene — it is completely static, violating rule 7 (continuous motion)"
+      );
+    }
+
+    const motionSignals = (src.match(/Math\.sin\s*\(|Math\.cos\s*\(|spring\s*\(/g) || []).length;
+    if (motionSignals < 2) {
+      sceneIssues.push(
+        `only ${motionSignals} continuous-motion signal(s) (Math.sin/Math.cos/spring) — rule 10 requires at least 2 with different periods/phases`
+      );
+    }
+
+    // Visual density: static tag counts undercount loops (one <circle> in a
+    // .map renders 32 circles), so a loop construct counts as a multiplier.
+    const shapes = (src.match(/<(?:circle|rect|path|polyline|polygon|line|ellipse|g)\b/g) || []).length;
+    const divs = (src.match(/<div\b/g) || []).length;
+    const hasLoopRendering = /\.map\s*\(|Array\.from\s*\(/.test(src);
+    const denseEnough =
+      shapes + divs >= 6 || (shapes + divs >= 2 && hasLoopRendering);
+    if (!denseEnough) {
+      sceneIssues.push(
+        `near-empty scene (${shapes} SVG shapes, ${divs} divs, no loop-rendered elements) — this is a text-only scene with no Layer 2 concept diagram, which rule 10 explicitly rejects`
+      );
+    }
+
+    if (sceneIssues.length) {
+      issues.push(`Scene ${i + 1} (${name}): ${sceneIssues.join("; ")}`);
+    }
+  });
+
+  if (issues.length) {
+    throw contentError(`Scene quality lint failed: ${issues.join(" | ")}`);
+  }
+}
+
 async function generateLessonCode(
   lesson,
   componentName,
@@ -1083,6 +1213,11 @@ async function generateLessonCode(
       const audioFixedCode = enforceCorrectAudioUrls(fixedCode, scenes);
 
       const validatedCode = validateGeneratedCode(audioFixedCode, componentName, totalFrames);
+
+      // Deterministic richness gate — runs BEFORE the critic so empty scenes
+      // are caught even when the critic is skipped. Throws contentError with
+      // per-scene findings, which become the retry feedback.
+      lintSceneQuality(validatedCode, scenes);
 
       const review = await reviewGeneratedCode(validatedCode, lesson);
       if (!review.skipped && review.ok === false) {
