@@ -10,12 +10,11 @@
 //      tags, stray tokens) that heuristics structurally cannot detect.
 //   3. Semantic checks on the parsed AST — catches code that is VALID
 //      JavaScript but still violates the actual rules the AI was given:
-//      wrong interpolate() argument shape, forbidden imports, top-level names
-//      that collide with the sandbox scope, and a durationInFrames sum that
-//      doesn't match the audio-measured total. The duration-sum check can
-//      auto-correct small arithmetic slips (the AI is consistently off by a
-//      few frames sometimes) instead of rejecting and paying for a full
-//      regeneration over a 1-2 frame typo.
+//      wrong interpolate() argument shape, forbidden imports, and a
+//      durationInFrames sum that doesn't match the audio-measured total.
+//      The duration-sum check can auto-correct small arithmetic slips
+//      (the AI is consistently off by a few frames sometimes) instead of
+//      rejecting and paying for a full regeneration over a 1-2 frame typo.
 //
 // Requires @babel/parser and @babel/traverse — install with:
 //   npm install @babel/parser @babel/traverse
@@ -30,102 +29,6 @@ const traverse = require("@babel/traverse").default;
 // it miscounted or omitted a whole scene — auto-fixing that would mask a
 // real structural bug rather than fix a typo.
 const MAX_AUTOFIX_FRAME_DRIFT = 10;
-
-// ── Reserved sandbox-scope names ────────────────────────────────────────────
-// The browser sandbox (useCompilation.ts) makes every Remotion export (except
-// staticFile) plus the three safe React hooks available to generated code as
-// bare top-level identifiers, via a `const { ... } = __SCOPE__;` prelude, and
-// injects `React` as a parameter. If a generated lesson declares ANY of these
-// names at its own top level, one of two bad things happens:
-//   - it shadows the real binding — e.g. a top-level `const Audio = ...`
-//     replaces the buffered <Audio> wrapper, silently disabling the 404-storm
-//     guard that prevents thousands of requests to a broken audio file; or
-//   - it becomes a duplicate `const` in the same scope, a hard SyntaxError
-//     that fails the ENTIRE compile (all scenes die with one cryptic message).
-//
-// The sandbox now dedupes to degrade gracefully, but the clean fix is to never
-// ship such code: reject it here so it regenerates with a rename instead.
-//
-// This list MUST mirror the names injected in useCompilation.ts. It is
-// deliberately limited to Remotion's stable, long-lived core exports (the ones
-// a model would plausibly reuse as a helper/variable name) plus the injected
-// React bindings. staticFile is intentionally absent — it is EXCLUDED from the
-// sandbox scope, so a lesson declaring `const staticFile` does not collide.
-// Anything not on this list that still collides is caught by the sandbox's
-// runtime dedup, so an incomplete list degrades safely rather than crashing.
-const RESERVED_SCOPE_NAMES = new Set([
-  // Injected React bindings
-  "React", "useMemo", "useCallback", "useRef",
-  // Remotion components (stable core)
-  "AbsoluteFill", "Audio", "Video", "OffthreadVideo", "Img", "IFrame",
-  "Sequence", "Series", "Loop", "Freeze", "Still", "Composition", "Folder",
-  // Remotion functions / hooks (stable core)
-  "interpolate", "interpolateColors", "spring", "measureSpring",
-  "useCurrentFrame", "useVideoConfig", "useCurrentScale", "useBufferState",
-  "random", "delayRender", "continueRender", "cancelRender",
-  "getInputProps", "registerRoot", "prefetch", "getRemotionEnvironment",
-  // Remotion namespaces / constants
-  "Easing", "Experimental", "VERSION",
-]);
-
-// Recursively collect identifier names bound by a declaration id, handling
-// destructuring patterns (const { a, b } = ..., const [x] = ..., defaults,
-// rest). Top-level destructuring is rare in generated lessons but cheap to
-// handle correctly rather than miss.
-function collectPatternNames(idNode, out) {
-  if (!idNode) return;
-  switch (idNode.type) {
-    case "Identifier":
-      out.push(idNode.name);
-      break;
-    case "ObjectPattern":
-      for (const prop of idNode.properties) {
-        if (prop.type === "ObjectProperty") collectPatternNames(prop.value, out);
-        else if (prop.type === "RestElement") collectPatternNames(prop.argument, out);
-      }
-      break;
-    case "ArrayPattern":
-      for (const el of idNode.elements) {
-        if (!el) continue;
-        collectPatternNames(el.type === "RestElement" ? el.argument : el, out);
-      }
-      break;
-    case "AssignmentPattern":
-      collectPatternNames(idNode.left, out);
-      break;
-    case "RestElement":
-      collectPatternNames(idNode.argument, out);
-      break;
-    default:
-      break;
-  }
-}
-
-// Names declared at the PROGRAM top level only. Nested declarations (inside a
-// scene function, a .map callback, etc.) live in their own scope and never
-// collide with the sandbox prelude, so they must not be collected here.
-function collectTopLevelDeclaredNames(ast) {
-  const names = [];
-  for (const stmt of ast.program.body) {
-    let decl = stmt;
-    if (
-      (stmt.type === "ExportNamedDeclaration" ||
-        stmt.type === "ExportDefaultDeclaration") &&
-      stmt.declaration
-    ) {
-      decl = stmt.declaration;
-    }
-    if (
-      (decl.type === "FunctionDeclaration" || decl.type === "ClassDeclaration") &&
-      decl.id
-    ) {
-      names.push(decl.id.name);
-    } else if (decl.type === "VariableDeclaration") {
-      for (const d of decl.declarations) collectPatternNames(d.id, names);
-    }
-  }
-  return names;
-}
 
 function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
   // ── Layer 1: fast heuristics (catches truncation cheaply) ──────────────
@@ -245,27 +148,7 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
     throw new Error(importErrors.join("\n"));
   }
 
-  // 3c. No top-level declaration may collide with a name the sandbox injects
-  // into scope. A collision either shadows a real Remotion binding (e.g. a
-  // top-level `const Audio` replaces the buffered wrapper and re-arms the
-  // 404-request-storm) or produces a duplicate-`const` SyntaxError that kills
-  // the whole compile. Reject here so it regenerates with a rename.
-  const declaredNames = collectTopLevelDeclaredNames(ast);
-  const collisions = [...new Set(declaredNames)].filter((n) =>
-    RESERVED_SCOPE_NAMES.has(n)
-  );
-  if (collisions.length > 0) {
-    throw new Error(
-      `Generated code declares top-level identifier(s) that collide with Remotion/React ` +
-        `names already provided in the sandbox scope: ${collisions.join(", ")}. ` +
-        `Redeclaring these at the top level shadows the real export (which breaks things like ` +
-        `<Audio> buffering) or crashes the entire compile. Rename each colliding helper/variable ` +
-        `to something unique (e.g. "OrbitLoop" instead of "Loop", "ImageTile" instead of "Img", ` +
-        `"NarrationAudio" instead of "Audio").`
-    );
-  }
-
-  // 3d. Sum every <Series.Sequence durationInFrames={N}> and compare to the
+  // 3c. Sum every <Series.Sequence durationInFrames={N}> and compare to the
   // real audio-measured total. Small drift gets auto-corrected on the LAST
   // sequence (absorbing rounding slop there is harmless); large drift means
   // something structural is wrong and gets rejected instead of papered over.
