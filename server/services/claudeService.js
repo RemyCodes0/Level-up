@@ -562,6 +562,16 @@ CODE QUALITY:
     - GOOD: if you need to DISPLAY a literal brace character, wrap it as a string expression: <div>f(x) = {"{"}x²{"}"}</div>
     - BETTER: avoid literal braces in on-screen text entirely. Rewrite math/set notation in words or with different symbols: "f of x equals x squared" or use parentheses/brackets instead of braces where the concept allows it.
 22. ANY custom wrapper component used with JSX children MUST accept and render them. If you write <MyBackground>...scene content...</MyBackground>, then MyBackground's definition MUST destructure children in its props ({ children }: { children?: React.ReactNode }) AND render {children} inside its returned JSX. A wrapper that omits children makes React silently discard EVERYTHING placed inside it — the entire scene renders as an empty background with no error and no warning. This single mistake destroys the whole lesson. Before finishing, re-check every wrapper component you created: does it render {children}?
+23. COORDINATE ORIGIN DISCIPLINE — this is how "animated" scenes still end up rendering off-screen where the user sees nothing. If you write a helper component that positions an element from coordinate props (e.g. function Cell({ cx, cy }) that sets left/top/transform from cx/cy), you MUST obey BOTH of these:
+    (a) Treat cx/cy (or x/y) as FRAME-GLOBAL coordinates measured from the top-left of the 1920x1080 frame, and clamp the helper's OWN final left/top to SAFE as the last step, exactly like rule 14 — the clamp rule applies INSIDE your helpers, not just in scene-level code:
+        const left = clamp(cx - size / 2, SAFE.xMin, SAFE.xMax);
+        const top  = clamp(cy - size / 2, SAFE.yMin, SAFE.yMax);
+    (b) NEVER nest such a helper inside a wrapper that adds its own top/left/transform offset. If the wrapper is at top:600 and you also pass cy={700}, the two origins STACK to 1300 and the element renders below the visible frame — no crash, no error, just an invisible element. This is a FAILED scene.
+    Two consequences follow, and you must respect them:
+    - Do NOT pass frame-global coordinates (like cy={700}) into a helper that sits inside an offset/transformed wrapper. Pick ONE convention per helper and use it everywhere: coordinates are always frame-global and the helper clamps them.
+    - To LAY OUT a GROUP of elements (a row of cells, a grid, side-by-side panels), use flexbox with relative positioning on the container (display:flex, gap, justifyContent) and let children flow — do NOT position each child with absolute cx/cy inside an already-offset absolute wrapper. Flexbox keeps groups on-screen automatically; stacked absolute origins do not.
+    - A helper that is position:absolute with NO top/left/right/bottom set has an AMBIGUOUS static position inside a flex parent (it may center, it may not, depending on the browser). Never rely on this — always set explicit top/left, or use position:relative + flex.
+    Before finishing, for every element ask: what is its true on-screen (x, y) after every ancestor offset and transform is applied? If that could exceed roughly (1800, 960) or go below (120, 120), it is off-screen and the scene has failed.
 
 WORKED EXAMPLE — two richly animated scenes. Study how EVERY frame has motion, how the concept is illustrated, how layers work together:
 
@@ -1118,6 +1128,51 @@ function lintSceneQuality(code, scenes) {
     if (hasChildContent && !/\bchildren\b/.test(src)) {
       issues.push(
         `Component ${name} is used as a wrapper with JSX children (<${name}>...</${name}>) but its definition never accepts or renders {children} — every scene placed inside it is silently discarded, producing an empty video. Destructure children in its props and render {children} inside its output.`
+      );
+    }
+  }
+
+  // Unclamped positioning helper detection — the bug behind concept elements
+  // rendering OFF-SCREEN where the user can't see them. A helper that takes a
+  // coordinate PAIR (cx+cy or x+y) and writes it into left/top/translate but
+  // never clamps is a landmine: the caller decides what coordinate origin
+  // those props mean, and different call sites use different origins (some
+  // pass frame-global values like cy={700}, some pass cx={0} and rely on an
+  // offset wrapper). When a frame-global value is passed into a helper that's
+  // ALSO nested in a wrapper with its own top/left/transform, the origins
+  // stack and the element lands past 1080/1920 — invisible, no error, no
+  // crash. clampPos existing elsewhere in the file (in the particle bg, say)
+  // does NOT protect these helpers, so a naive "is clamp used" check passes
+  // while the concept elements still escape the frame.
+  //
+  // The fix the model must apply: the helper clamps its OWN final left/top to
+  // SAFE, treating its coordinate props as frame-global — and callers must
+  // NOT nest it inside offset wrappers (see prompt rule 23). We detect the
+  // unclamped helper and force regeneration with that instruction.
+  //
+  // Scoped tightly to avoid false positives: only helpers taking a coordinate
+  // PAIR are flagged (a lone `y` prop like a title's vertical position is
+  // not — a single axis rarely stacks into an off-screen position and
+  // flagging it would regenerate harmless code).
+  for (const [name, src] of Object.entries(sources)) {
+    const propsMatch = src.match(/\{([^{}]*)\}\s*:/); // first destructured props block
+    const propList = propsMatch ? propsMatch[1] : "";
+    const hasPair =
+      (/\bcx\b/.test(propList) && /\bcy\b/.test(propList)) ||
+      (/\bx\b/.test(propList) && /\by\b/.test(propList));
+    if (!hasPair) continue;
+
+    // Does it actually POSITION using those props?
+    const positionsWithProps =
+      /(?:left|top)\s*:\s*[^,;}\n]*\b(?:cx|cy|x|y)\b/.test(src) ||
+      /translate[^)]*\b(?:cx|cy|x|y)\b/.test(src);
+    if (!positionsWithProps) continue;
+
+    // Does the helper clamp its own output?
+    const clampsInternally = /\bclamp\w*\s*\(/.test(src);
+    if (!clampsInternally) {
+      issues.push(
+        `Positioning helper ${name} takes coordinate props (cx/cy or x/y) and writes them into left/top/transform without clamping — its rendered position depends entirely on the caller's coordinate origin, and when it is nested inside an offset/transformed wrapper the origins stack and the element renders off the 1920x1080 frame where the user cannot see it. Fix: inside ${name}, treat its coordinate props as FRAME-GLOBAL and clamp the final left/top to SAFE (clampPos(rawLeft, SAFE.xMin, SAFE.xMax), clampPos(rawTop, SAFE.yMin, SAFE.yMax)) as the last step before styling; and do NOT nest ${name} inside wrappers that add their own top/left/transform offset (rule 23).`
       );
     }
   }
