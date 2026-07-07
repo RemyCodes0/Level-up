@@ -561,6 +561,7 @@ CODE QUALITY:
     - CRASH: <div>Config: {{ key: value }}</div> as plain display text (not an actual style object) — same problem.
     - GOOD: if you need to DISPLAY a literal brace character, wrap it as a string expression: <div>f(x) = {"{"}x²{"}"}</div>
     - BETTER: avoid literal braces in on-screen text entirely. Rewrite math/set notation in words or with different symbols: "f of x equals x squared" or use parentheses/brackets instead of braces where the concept allows it.
+22. ANY custom wrapper component used with JSX children MUST accept and render them. If you write <MyBackground>...scene content...</MyBackground>, then MyBackground's definition MUST destructure children in its props ({ children }: { children?: React.ReactNode }) AND render {children} inside its returned JSX. A wrapper that omits children makes React silently discard EVERYTHING placed inside it — the entire scene renders as an empty background with no error and no warning. This single mistake destroys the whole lesson. Before finishing, re-check every wrapper component you created: does it render {children}?
 
 WORKED EXAMPLE — two richly animated scenes. Study how EVERY frame has motion, how the concept is illustrated, how layers work together:
 
@@ -1100,6 +1101,26 @@ function lintSceneQuality(code, scenes) {
       issues.push(`Scene ${i + 1} (${name}): ${sceneIssues.join("; ")}`);
     }
   });
+
+  // Dropped-children detection — the bug behind fully-empty lessons where
+  // only the background/particles render. If a custom component is used in
+  // wrapper form (<GradientBg> ...scene content... </GradientBg>) but its
+  // definition never references `children`, React silently discards
+  // everything placed inside it: no error, no console warning, just a scene
+  // with nothing in it. No AST no-undef check can catch this (nothing is
+  // undefined) and the richness lint can't either (the orphaned content
+  // still exists in the source) — it has to be checked explicitly.
+  for (const [name, src] of Object.entries(sources)) {
+    const wrapperUse = code.match(
+      new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`)
+    );
+    const hasChildContent = wrapperUse && wrapperUse[1].trim().length > 0;
+    if (hasChildContent && !/\bchildren\b/.test(src)) {
+      issues.push(
+        `Component ${name} is used as a wrapper with JSX children (<${name}>...</${name}>) but its definition never accepts or renders {children} — every scene placed inside it is silently discarded, producing an empty video. Destructure children in its props and render {children} inside its output.`
+      );
+    }
+  }
 
   if (issues.length) {
     throw contentError(`Scene quality lint failed: ${issues.join(" | ")}`);
