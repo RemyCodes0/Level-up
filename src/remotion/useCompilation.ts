@@ -25,11 +25,6 @@ interface CompilationResult {
 // Once it has, flip pauseWhenBuffering off for that instance so Remotion
 // stops blocking/retrying on it and the video just plays silently for that
 // scene instead of hanging forever.
-//
-// NOTE (export path): the useState below is correct for browser playback in
-// the Player. If rendering ever moves server-side (Remotion Lambda), this
-// per-instance error state is exactly the kind of non-frame-derived state
-// Remotion warns against for deterministic export, and should be revisited.
 const BufferedAudio: React.FC<any> = (props) => {
   const [hasErrored, setHasErrored] = React.useState(false);
   return React.createElement(RemotionNS.Audio, {
@@ -83,10 +78,6 @@ const SCOPE_KEYS = Object.keys(SCOPE);
 // the code's own declaration win (dropping the colliding name from the
 // prelude), a collision degrades to at most one shadowed Remotion binding
 // instead of a dead lesson.
-//
-// Server-side, validateCode.js rejects these collisions outright so they
-// normally never reach this sandbox; this dedup is the graceful-degradation
-// backstop for anything that slips through (or for older cached lessons).
 function collectTopLevelDeclarations(source: string): Set<string> {
   const declared = new Set<string>();
   const pattern = /^(?:export\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/gm;
