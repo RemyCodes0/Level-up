@@ -13,6 +13,27 @@ const glmClient = new OpenAI({
   maxRetries: 0,       // handle retries manually
 });
 
+// ── Error classification ─────────────────────────────────────────────────────
+// Two kinds of failure need different handling:
+//   - Transport errors (connection reset, rate limit, 5xx): retry as-is,
+//     the same prompt may well succeed next time.
+//   - Content errors (bad JSON, failed validation, critic rejection): the
+//     model produced wrong OUTPUT. Retrying with the identical prompt often
+//     reproduces the identical mistake — so content errors are fed back into
+//     the retry prompt (see generateLessonCode).
+//   - Non-retryable errors (401/403 auth): retrying is pure wasted time and
+//     log noise. Fail immediately.
+function contentError(message) {
+  const err = new Error(message);
+  err.isContentError = true;
+  return err;
+}
+
+function isNonRetryable(err) {
+  const status = err?.status ?? err?.response?.status;
+  return status === 401 || status === 403;
+}
+
 // ── Retry helper with exponential backoff + jitter ──────────────────────────
 // Hammering a rate-limited or momentarily-overloaded API with zero delay
 // makes correlated failures across all attempts more likely, not less.
@@ -35,6 +56,15 @@ async function backoffDelay(attempt, baseMs = 500, capMs = 8000) {
 // spike. This wraps the actual API call so no matter how many lessons are
 // kicked off concurrently by the caller, only N requests to GLM are ever
 // in flight at once — everything else queues.
+//
+// IMPORTANT: the limited function must cover the ENTIRE lifetime of the
+// request, including consuming the response stream. With streaming, the
+// create() promise resolves as soon as response headers arrive — the HTTP
+// connection then stays open for the whole (potentially minutes-long)
+// stream. If the limiter releases its slot at create()-resolution time,
+// you can end up with far more than N sockets actually open at once,
+// which defeats the entire point. generateLessonCode therefore passes the
+// full "open stream + consume every chunk" operation into limit().
 function createLimiter(maxConcurrent) {
   let active = 0;
   const queue = [];
@@ -85,15 +115,13 @@ function describeError(err) {
 }
 
 // ── Safer JSON extraction ────────────────────────────────────────────────────
-// The old version used indexOf("{") / lastIndexOf("}"), which grabs from the
-// FIRST brace to the LAST brace anywhere in the text. Any stray brace in
-// trailing commentary, or inside a string value, silently produces the wrong
-// slice. This version walks the text tracking bracket depth and string state,
-// so it finds the actual matching close brace for the first top-level object.
-function extractFirstJsonObject(text) {
-  const start = text.indexOf("{");
-  if (start === -1) return null;
-
+// Walks the text from a given "{" tracking bracket depth and string state,
+// so it finds the actual matching close brace for that object — immune to
+// stray braces inside string values or trailing commentary.
+//
+// Returns the balanced slice, or null if that "{" is never closed
+// (truncated response, or a prose brace with no matching close).
+function extractJsonObjectFrom(text, start) {
   let depth = 0;
   let inString = false;
   let stringChar = null;
@@ -128,24 +156,53 @@ function extractFirstJsonObject(text) {
     }
   }
 
-  return null; // Never closed — truncated response
+  return null; // Never closed
 }
 
+// Parsing strategy, in order of preference:
+//   1. Extract a balanced object and JSON.parse it untouched. No text-level
+//      mutation happens on output that was already valid — the old version
+//      globally stripped ``` sequences BEFORE extraction, which could corrupt
+//      backticks living inside JSON string values. Extraction starts at the
+//      first "{", so markdown fences around the object are irrelevant anyway.
+//   2. Only if the pristine parse fails, apply the trailing-comma repair and
+//      try once more.
+//   3. Only if THAT fails, advance past this "{" and try the next candidate.
+//      This recovers the case where the model prefixed the JSON with prose
+//      that itself contains braces (e.g. "Here is {your plan}: {...}") —
+//      which the old first-brace-only approach could never recover from.
 function safeParseJson(text) {
-  let clean = text.replace(/```json|```/g, "").trim();
+  let searchFrom = 0;
+  let lastErr = null;
 
-  const extracted = extractFirstJsonObject(clean);
-  if (!extracted) {
-    throw new Error("Could not locate a complete JSON object in model output");
+  for (let attempts = 0; attempts < 8; attempts++) {
+    const braceAt = text.indexOf("{", searchFrom);
+    if (braceAt === -1) break;
+
+    const candidate = extractJsonObjectFrom(text, braceAt);
+    if (candidate === null) {
+      // This "{" never balances (prose brace or truncation) — try the next one.
+      searchFrom = braceAt + 1;
+      continue;
+    }
+
+    try {
+      return JSON.parse(candidate);
+    } catch (pristineErr) {
+      try {
+        // Trailing-comma cleanup, scoped to a structurally balanced object
+        // and only attempted after a clean parse already failed.
+        return JSON.parse(candidate.replace(/,(\s*[}\]])/g, "$1"));
+      } catch (repairedErr) {
+        lastErr = repairedErr;
+        searchFrom = braceAt + 1;
+      }
+    }
   }
-  clean = extracted;
 
-  // Trailing-comma cleanup is still text-level, but now scoped to a JSON
-  // object we've already structurally validated the boundaries of, which
-  // makes it much lower risk than applying it to the whole raw response.
-  clean = clean.replace(/,(\s*[}\]])/g, "$1");
-
-  return JSON.parse(clean);
+  throw contentError(
+    `Could not parse a complete JSON object from model output${lastErr ? ` (last parse error: ${lastErr.message})` : ""}`
+  );
 }
 
 // ── Course plan shape validation ────────────────────────────────────────────
@@ -175,6 +232,8 @@ function validateCoursePlan(plan) {
         errors.push(
           `Lesson ${i + 1}: expected 4 keyPoints, got ${lesson.keyPoints?.length ?? "none"}`
         );
+      } else if (lesson.keyPoints.some((kp) => typeof kp !== "string" || !kp.trim())) {
+        errors.push(`Lesson ${i + 1}: keyPoints must all be non-empty strings`);
       }
     });
   }
@@ -183,8 +242,13 @@ function validateCoursePlan(plan) {
     errors.push(`Expected 20 questions, got ${plan.questions?.length ?? "none"}`);
   } else {
     plan.questions.forEach((q, i) => {
+      if (!q.question || typeof q.question !== "string") {
+        errors.push(`Question ${i + 1}: missing/invalid question text`);
+      }
       if (!Array.isArray(q.options) || q.options.length !== 4) {
         errors.push(`Question ${i + 1}: expected 4 options`);
+      } else if (q.options.some((o) => typeof o !== "string" || !o.trim())) {
+        errors.push(`Question ${i + 1}: options must all be non-empty strings`);
       }
       if (
         typeof q.correct !== "number" ||
@@ -313,9 +377,22 @@ ${rules}
     try {
       const message = await client.messages.create({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 6000,
+        // Bumped from 6000: 6 lessons + 20 four-option questions sits close
+        // enough to 6k output tokens on verbose topics that truncation was
+        // a realistic (and previously invisible) failure mode.
+        max_tokens: 8000,
         messages,
       });
+
+      // A truncated response was previously indistinguishable from a
+      // malformed one: safeParseJson would throw "could not parse" and the
+      // retry loop would burn 2 more attempts on the exact same truncation.
+      // Surfacing the real cause makes the log actionable.
+      if (message.stop_reason === "max_tokens") {
+        throw contentError(
+          "Course plan response hit max_tokens and was truncated — the JSON is incomplete"
+        );
+      }
 
       const text = message.content
         .filter((b) => b.type === "text")
@@ -326,7 +403,7 @@ ${rules}
 
       const { ok, errors } = validateCoursePlan(plan);
       if (!ok) {
-        throw new Error(`Course plan failed shape validation: ${errors.join("; ")}`);
+        throw contentError(`Course plan failed shape validation: ${errors.join("; ")}`);
       }
 
       // Keep the return shape identical to the original function (the plan
@@ -340,6 +417,13 @@ ${rules}
       return plan;
     } catch (err) {
       lastError = err;
+
+      if (isNonRetryable(err)) {
+        throw new Error(
+          `Course plan generation failed with a non-retryable error (check ANTHROPIC_API_KEY): ${describeError(err)}`
+        );
+      }
+
       console.warn(
         `  [plan] Attempt ${attempt}/${maxAttempts} failed: ${describeError(err)}. Retrying...`
       );
@@ -677,18 +761,53 @@ function autoFixCode(code, { totalFrames } = {}) {
     "background-color": "backgroundColor",
     "font-size": "fontSize",
     "font-weight": "fontWeight",
+    "font-family": "fontFamily",
     "border-radius": "borderRadius",
     "box-shadow": "boxShadow",
+    "text-shadow": "textShadow",
     "letter-spacing": "letterSpacing",
+    "line-height": "lineHeight",
     "text-align": "textAlign",
+    "z-index": "zIndex",
+    "flex-direction": "flexDirection",
+    "justify-content": "justifyContent",
+    "align-items": "alignItems",
     "pointer-events": "pointerEvents",
   };
   for (const [kebab, camel] of Object.entries(cssPropertyMap)) {
     const pattern = new RegExp(`["']?${kebab}["']?\\s*:`, "g");
-    if (pattern.test(fixed)) {
-      fixed = fixed.replace(pattern, `${camel}:`);
-      notes.push(`renamed CSS property ${kebab} -> ${camel}`);
-    }
+    let count = 0;
+    fixed = fixed.replace(pattern, () => {
+      count++;
+      return `${camel}:`;
+    });
+    if (count) notes.push(`renamed CSS property ${kebab} -> ${camel} (x${count})`);
+  }
+
+  // Fix 1b: kebab-case SVG *attributes* in JSX (stroke-width={2} crashes
+  // just like kebab style keys do). Pattern anchors on the "=" so it can't
+  // touch style-object keys (those use ":") or prose in strings (which
+  // almost never contains kebab-word= sequences).
+  const svgAttrMap = {
+    "stroke-width": "strokeWidth",
+    "stroke-linecap": "strokeLinecap",
+    "stroke-linejoin": "strokeLinejoin",
+    "stroke-dasharray": "strokeDasharray",
+    "stroke-dashoffset": "strokeDashoffset",
+    "stroke-opacity": "strokeOpacity",
+    "fill-opacity": "fillOpacity",
+    "text-anchor": "textAnchor",
+    "dominant-baseline": "dominantBaseline",
+    "clip-path": "clipPath",
+  };
+  for (const [kebab, camel] of Object.entries(svgAttrMap)) {
+    const pattern = new RegExp(`\\b${kebab}=`, "g");
+    let count = 0;
+    fixed = fixed.replace(pattern, () => {
+      count++;
+      return `${camel}=`;
+    });
+    if (count) notes.push(`renamed SVG attribute ${kebab} -> ${camel} (x${count})`);
   }
 
   // Fix 2: Duplicate/non-increasing inputRange values in interpolate() calls.
@@ -719,35 +838,60 @@ function autoFixCode(code, { totalFrames } = {}) {
   // model sometimes reaches for the raw canvas dimensions anyway. Rewrite
   // to a safely-inset range (100px margin on each side) rather than relying
   // solely on the model following the SAFE-constant pattern correctly.
-  const rawWidthPattern = /Math\.random\(\)\s*\*\s*1920(?!\d)/g;
-  const rawHeightPattern = /Math\.random\(\)\s*\*\s*1080(?!\d)/g;
-  if (rawWidthPattern.test(fixed)) {
-    fixed = fixed.replace(rawWidthPattern, "(100 + Math.random() * 1720)");
-    notes.push("clamped unbounded Math.random() * 1920 position to a safe inset range");
+  let widthFixCount = 0;
+  fixed = fixed.replace(/Math\.random\(\)\s*\*\s*1920(?!\d)/g, () => {
+    widthFixCount++;
+    return "(100 + Math.random() * 1720)";
+  });
+  if (widthFixCount) {
+    notes.push(`clamped unbounded Math.random() * 1920 position to a safe inset range (x${widthFixCount})`);
   }
-  if (rawHeightPattern.test(fixed)) {
-    fixed = fixed.replace(rawHeightPattern, "(100 + Math.random() * 880)");
-    notes.push("clamped unbounded Math.random() * 1080 position to a safe inset range");
+  let heightFixCount = 0;
+  fixed = fixed.replace(/Math\.random\(\)\s*\*\s*1080(?!\d)/g, () => {
+    heightFixCount++;
+    return "(100 + Math.random() * 880)";
+  });
+  if (heightFixCount) {
+    notes.push(`clamped unbounded Math.random() * 1080 position to a safe inset range (x${heightFixCount})`);
   }
-
 
   // Fix 3: bare `durationInFrames` used where it isn't in scope.
-  // Rather than silently substituting a guessed fallback value (which can
-  // quietly change animation timing with no visible signal), we now require
-  // an explicit totalFrames to substitute, and we LOG every substitution so
-  // it shows up in review rather than disappearing into the diff.
-  if (/\bdurationInFrames\b(?!\s*[=:])/.test(fixed)) {
+  //
+  // Critical nuance the old version missed: `durationInFrames` is sometimes
+  // a PERFECTLY LEGITIMATE identifier —
+  //   const { durationInFrames } = useVideoConfig();
+  //   function Scene({ durationInFrames }: { durationInFrames: number }) { ... }
+  // The old blanket substitution turned the destructuring itself into
+  // `const { fps, 450 } = useVideoConfig()` — a syntax error we introduced
+  // ourselves. So: if the code DECLARES the identifier anywhere (const/let/
+  // var, destructuring, or a destructured function parameter), leave every
+  // occurrence alone — it's in scope. Only when it's used with NO
+  // declaration anywhere do we substitute the known totalFrames.
+  //
+  // The substitution pattern also now excludes property access
+  // (`scene.durationInFrames` must not become `scene.450`) via a negative
+  // lookbehind, in addition to the existing exclusions for JSX props
+  // (`durationInFrames={...}`) and object keys (`durationInFrames: ...`).
+  const declaresDurationInFrames =
+    /(?:const|let|var)\s+durationInFrames\b/.test(fixed) ||
+    /(?:const|let|var)\s*\{[^{}]*\bdurationInFrames\b[^{}]*\}\s*=/.test(fixed) ||
+    /\(\s*\{[^{}]*\bdurationInFrames\b[^{}]*\}/.test(fixed);
+
+  const bareUsePattern = /(?<!\.)\bdurationInFrames\b(?!\s*[=:])/;
+  if (!declaresDurationInFrames && bareUsePattern.test(fixed)) {
     const fallback = Number.isFinite(totalFrames) ? totalFrames : null;
     if (fallback === null) {
-      throw new Error(
+      throw contentError(
         "Code references out-of-scope `durationInFrames` and no totalFrames was provided to safely substitute — regenerating."
       );
     }
     notes.push(`substituted out-of-scope durationInFrames -> ${fallback}`);
-    fixed = fixed.replace(/\bdurationInFrames\b(?!\s*[=:])/g, `${fallback}`);
+    fixed = fixed.replace(/(?<!\.)\bdurationInFrames\b(?!\s*[=:])/g, `${fallback}`);
   }
 
-  // Fix 4: common HTML-attribute-in-JSX slips.
+  // Fix 4: common HTML-attribute-in-JSX slips. (`\bfor=` cannot touch
+  // `htmlFor=` — the pattern is case-sensitive and "htmlFor" contains "For",
+  // not "for". `for (` loops have no "=" and are also untouched.)
   fixed = fixed.replace(/\bclass=/g, "className=");
   fixed = fixed.replace(/\bfor=/g, "htmlFor=");
 
@@ -758,12 +902,14 @@ function autoFixCode(code, { totalFrames } = {}) {
   // throws to force a regeneration attempt instead of guessing.
   const backtickCount = (fixed.match(/`/g) || []).length;
   if (backtickCount % 2 !== 0) {
-    throw new Error("Unterminated template literal detected — regenerating instead of guessing a fix.");
+    throw contentError("Unterminated template literal detected — regenerating instead of guessing a fix.");
   }
 
-  // Fix 6: harmless whitespace/punctuation noise, safe regardless of context.
-  fixed = fixed.replace(/;;/g, ";");
-  fixed = fixed.replace(/,(\s*[}\)])/g, "$1");
+  // (The old Fix 6 — stripping `;;` and trailing commas — has been removed
+  // on purpose. Both are VALID JavaScript/TypeScript that compile fine, so
+  // the fix repaired nothing, while the text-level regexes could mutate
+  // those character sequences inside string literals shown on screen. A
+  // "fix" whose only possible effect is a false positive shouldn't exist.)
 
   if (notes.length) {
     console.log(`  [autofix] Applied: ${notes.join(" | ")}`);
@@ -786,12 +932,23 @@ function autoFixCode(code, { totalFrames } = {}) {
 // corresponding scene in our own `scenes` array — which has the guaranteed-
 // correct, actually-existing-on-disk URL — and force-replace it if it
 // doesn't match exactly.
+//
+// Matches BOTH forms the model actually emits — src={"url"} (the form the
+// prompt asks for) and the plain-attribute slip src="url" — and tolerates
+// other attributes appearing before src. The old single-pattern version
+// silently skipped any <Audio> tag not written in the exact braced style,
+// which meant a mistyped URL in the plain form shipped uncorrected.
 function enforceCorrectAudioUrls(code, scenes) {
   let sceneIndex = 0;
   let mismatchCount = 0;
+  let audioTagCount = 0;
 
-  const fixed = code.replace(/<Audio\s+src=\{"([^"}]+)"\}/g, (match, foundUrl) => {
-    if (sceneIndex >= scenes.length) return match; // more Audio tags than scenes — leave as-is, validateGeneratedCode will catch structural issues
+  const audioSrcPattern = /<Audio\b[^>]*?src=(?:\{\s*"([^"}]+)"\s*\}|"([^">]+)")/g;
+
+  const fixed = code.replace(audioSrcPattern, (match, bracedUrl, plainUrl) => {
+    audioTagCount++;
+    if (sceneIndex >= scenes.length) return match; // more Audio tags than scenes — leave as-is, structural mismatch is reported below
+    const foundUrl = bracedUrl ?? plainUrl;
     const correctUrl = scenes[sceneIndex].audioUrl;
     sceneIndex++;
 
@@ -802,11 +959,16 @@ function enforceCorrectAudioUrls(code, scenes) {
         `    Model wrote:  ${foundUrl}\n` +
         `    Correct URL:  ${correctUrl}`
       );
-      return `<Audio src={"${correctUrl}"}`;
+      return match.replace(foundUrl, correctUrl);
     }
     return match;
   });
 
+  if (audioTagCount !== scenes.length) {
+    console.warn(
+      `  [audio-url-fix] Structural mismatch: expected ${scenes.length} <Audio> tags (one per scene), found ${audioTagCount}. Leaving for validateGeneratedCode to reject if invalid.`
+    );
+  }
   if (mismatchCount > 0) {
     console.warn(`  [audio-url-fix] Corrected ${mismatchCount} mismatched audio URL(s) out of ${scenes.length} scenes.`);
   }
@@ -822,16 +984,39 @@ async function generateLessonCode(
   maxAttempts = 3
 ) {
   let lastError = null;
+  // When an attempt fails on CONTENT (validation, critic, truncation), the
+  // next attempt tells the model exactly what was wrong. Retrying blind with
+  // the identical prompt — as the old version did — frequently reproduces
+  // the identical mistake, since the model's failure was deterministic-ish,
+  // not random. Transport failures (connection errors, rate limits) don't
+  // set this, since the prompt wasn't the problem.
+  let contentFeedback = null;
   const lessonStart = Date.now();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Reset per attempt: only errors thrown AFTER the stream was fully
+    // received count as content errors worth feeding back to the model.
+    let receivedFullOutput = false;
+
     try {
       console.log(
         `  [code] Attempt ${attempt}/${maxAttempts} for ${componentName}...`
       );
 
-      const stream = await limitGlmCall(() =>
-        glmClient.chat.completions.create({
+      const userContent =
+        buildPerLessonContent(lesson, componentName, scenes, totalFrames) +
+        (contentFeedback
+          ? `\n\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:\n"${contentFeedback}"\nRegenerate the code from scratch and make absolutely sure this specific problem does not occur again.`
+          : "");
+
+      // The ENTIRE request lifetime — opening the stream AND consuming every
+      // chunk — runs inside the limiter, so the concurrency slot is held for
+      // as long as the HTTP connection is actually open. Releasing the slot
+      // at create()-resolution (as before) allowed unbounded overlapping
+      // streams, which is exactly the connection-spike problem the limiter
+      // exists to prevent.
+      const { text, stopReason } = await limitGlmCall(async () => {
+        const stream = await glmClient.chat.completions.create({
           model: "glm-5.2",
           thinking: { type: "disabled" },
           max_tokens: 100000,
@@ -843,34 +1028,50 @@ async function generateLessonCode(
             },
             {
               role: "user",
-              content: buildPerLessonContent(lesson, componentName, scenes, totalFrames),
+              content: userContent,
             },
           ],
-        })
-      );
+        });
 
-      let text = "";
-      let stopReason = null;
+        let streamedText = "";
+        let finishReason = null;
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta;
-        // Only collect actual content, not reasoning_content tokens
-        if (delta?.content) text += delta.content;
-        if (chunk.choices[0]?.finish_reason) stopReason = chunk.choices[0].finish_reason;
-      }
+        for await (const chunk of stream) {
+          const delta = chunk.choices?.[0]?.delta;
+          // Only collect actual content, not reasoning_content tokens
+          if (delta?.content) streamedText += delta.content;
+          if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
+        }
+
+        return { text: streamedText, stopReason: finishReason };
+      });
+
+      receivedFullOutput = true;
 
       if (stopReason === "length") {
-        throw new Error("Hit max_tokens — code was truncated");
+        throw contentError("Hit max_tokens — code was truncated. Generate more compact code.");
       }
 
-      const code = text
-        .replace(/```tsx|```typescript|```ts|```jsx|```/g, "")
+      // Strip markdown fences ONLY at the very start and very end of the
+      // output. The old global strip (/```/g anywhere) could eat backtick
+      // sequences living inside the generated code's own template literals,
+      // corrupting valid code.
+      let code = text.trim();
+      code = code
+        .replace(/^```(?:tsx|typescript|ts|jsx|js)?\s*/i, "")
+        .replace(/\s*```\s*$/, "")
         .trim();
 
       // Detect plain text output — GLM-5.2 sometimes ignores the prompt and
       // outputs topic descriptions instead of TSX code. Catch this early.
-      if (!code.startsWith("import") && !code.startsWith("const") && !code.startsWith("//") && !code.startsWith("export")) {
-        throw new Error("Model output plain text instead of TSX code — ignoring system prompt");
+      if (
+        !code.startsWith("import") &&
+        !code.startsWith("const") &&
+        !code.startsWith("//") &&
+        !code.startsWith("/*") &&
+        !code.startsWith("export")
+      ) {
+        throw contentError("Model output plain text instead of TSX code — you MUST output only TSX code starting with `import`.");
       }
 
       // ── Auto-fix common GLM-5.2 output errors ─────────────────────────────
@@ -885,11 +1086,10 @@ async function generateLessonCode(
 
       const review = await reviewGeneratedCode(validatedCode, lesson);
       if (!review.skipped && review.ok === false) {
-        // Previously this only logged a warning and returned the flagged
-        // code anyway, so the critic's findings never actually protected
-        // anything. Now a failed review counts as a failed attempt and
-        // triggers a regeneration, same as any other validation failure.
-        throw new Error(
+        // A failed review counts as a failed attempt and triggers a
+        // regeneration — and the critic's specific findings become the
+        // feedback for the next attempt, so it isn't just a blind reroll.
+        throw contentError(
           `Code critic flagged issues: ${review.issues?.join("; ") || "unspecified"}`
         );
       }
@@ -901,6 +1101,19 @@ async function generateLessonCode(
       return validatedCode;
     } catch (err) {
       lastError = err;
+
+      if (isNonRetryable(err)) {
+        throw new Error(
+          `Lesson code generation failed with a non-retryable error (check ZAI_API_KEY): ${describeError(err)}`
+        );
+      }
+
+      // Content errors (anything thrown after the full stream arrived, or
+      // explicitly tagged) get fed back to the model on the next attempt.
+      if (err.isContentError || receivedFullOutput) {
+        contentFeedback = err.message;
+      }
+
       console.warn(
         `  [code] Attempt ${attempt} failed: ${describeError(err)}. Retrying...`
       );
