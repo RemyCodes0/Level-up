@@ -458,6 +458,23 @@ ${rules}
 // Crash-safety rules (interpolate shape, clamping, forbidden imports,
 // duration sum) are kept — those reflect real runtime constraints of this
 // environment, not compensations for model weakness.
+//
+// ACCURACY PASS (visual-correctness additions — targets scenes that run
+// without crashing but LOOK wrong: misplaced arrows, spilled particles,
+// mistimed reveals, unreadable text):
+//   4b  — frame numbers are per-scene (Series.Sequence resets frame to 0);
+//         global-timeline offsets silently never fire.
+//   7b  — pace reveals across the FULL scene duration; entrance-then-idle
+//         scenes fail even though they satisfy the continuous-motion rule.
+//   8   — visualDescription is a binding spec; onScreenText renders verbatim.
+//   9   — Layer 3 expanded: reserved text zones, zIndex, contrast, minimum
+//         sizes, no two texts in the same spot simultaneously.
+//   10c — spatial anchoring: related elements share ONE position source
+//         (connectors, moving targets, containment). Worked example's
+//         WaveScene refactored to model compute-once/reference-everywhere.
+//   10d — proportion sanity: element sizes relative to their role.
+//   12b — spring() requires fps from useVideoConfig() (runtime throw).
+//   FINAL SELF-CHECK — one-pass verification checklist before returning.
 const CODE_GEN_STATIC_RULES = `
 ⚠️ OUTPUT FORMAT: You MUST respond with ONLY raw TypeScript/TSX code. No explanations, no descriptions, no topic summaries, no markdown. The FIRST character of your response must be "i" (from "import"). If you output anything other than TSX code, the entire system fails and the user loses their course. CODE ONLY.
 
@@ -474,6 +491,7 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 3. The component takes NO props — all data is hardcoded. This means variables like user, currentUser, session, props, context, or anything implying external/dynamic data DO NOT EXIST and referencing them crashes with "X is not defined". Every variable you use must be either: (a) declared locally with const/let inside your own code, (b) a real Remotion or React export from the allowed list, or (c) a parameter of a function you wrote yourself. Nothing else is available — there is no login state, no user data, no external context of any kind.
    NEVER use a JavaScript built-in name (Math, Array, Object, String, Number, Date, JSON, Boolean, Map, Set) as a variable, function parameter, or destructured prop name. Doing so shadows the real built-in inside that scope and crashes with "X.method is not a function" — for example, naming a helper component's parameter Math means Math.sin inside that component no longer refers to the real Math object at all, it refers to whatever value was actually passed in for that parameter.
 4. Structure: a single <Series> with one <Series.Sequence> per scene, IN ORDER. Do NOT use a bare <Sequence> anywhere, including inside a scene component. A <Sequence from={...} durationInFrames={...}> nested inside a scene will UNMOUNT its children once its own duration elapses — even if that's shorter than the scene's real duration — which makes the visual disappear while the audio (in the parent Series.Sequence) keeps playing. If part of a scene should only show for a portion of the scene, control that with interpolate()-driven opacity/scale on an always-mounted element, never by wrapping it in a shorter-lived Sequence.
+4b. FRAME NUMBERS ARE PER-SCENE, NOT GLOBAL. useCurrentFrame() inside a <Series.Sequence> is RELATIVE to that scene's own start — it reads 0 on the scene's first frame, in EVERY scene. NEVER offset animation timings by the durations of earlier scenes. A scene-5 entrance written as interpolate(frame, [1240, 1270], [0, 1]) will NEVER fire — frame inside that scene only ever runs from 0 to that scene's own duration, so the element stays invisible for the whole scene. Every inputRange number is local to its scene: entrances near [0, 30], exits near [sceneDuration - 30, sceneDuration] written as plain literals of THAT scene's duration.
 5. Each <Series.Sequence durationInFrames={EXACT_NUMBER}> — copy the number EXACTLY. Never compute or round it.
 6. Inside each sequence: <Audio src={"EXACT_URL"} /> — copy URLs exactly, NO staticFile() wrapper.
 
@@ -482,12 +500,18 @@ The user is paying for animated video lessons. If the animations are generic, st
 
 7. CONTINUOUS MOTION IS NON-NEGOTIABLE. At frame 0, things move. At frame 100, things move. At frame 200, things move. If anything stops moving after its entrance animation, the scene is wrong. Use Math.sin(frame/k), Math.cos(frame/k), and (frame*speed)%360 to guarantee perpetual motion on every element.
 
+7b. PACE THE SCENE ACROSS ITS FULL DURATION. Each scene's durationInFrames matches its narration audio — the visuals must UNFOLD across ALL of it, tracking the story being narrated, not finish building in the first 2 seconds and then idle. Break the scene's content into 3-5 stages and spread their entrances across the timeline: for a 450-frame scene, stagger stage reveals at roughly frames 0, 90, 200, 320 (as plain literals scaled to the actual duration), with the illustrated process (rule 10b) visibly progressing between reveals. Ambient motion (rule 7) is NOT a substitute for narrative progress — a scene where every element has fully appeared by frame 60 and merely wobbles in place for the remaining 390 frames FAILS this rule, because the viewer watches nothing new happen while the narrator keeps explaining.
+
 8. ILLUSTRATE THE EXACT CONCEPT — not generic particles. If the topic is DNA replication, show the double helix unwinding with individual base pairs. If it's photosynthesis, show photons hitting chlorophyll and electrons jumping energy levels. If it's sorting algorithms, show actual elements moving into order. If it's electromagnetism, show field lines rotating. The animation must make the concept VISIBLE — a viewer with no prior knowledge should understand the concept from the visuals alone, without reading the text.
+   THE SCENE SPEC IS BINDING: each scene below comes with a visualDescription and onScreenText. The visualDescription is the SPEC — implement the specific elements and actions it names, not a different visual you'd prefer. The onScreenText is the EXACT text to display on screen — render it verbatim as the scene's primary text (plus at most brief supporting labels); do not invent replacement headline text or paraphrase it.
 
 9. THREE MANDATORY LAYERS — all three must exist in every scene:
    - Layer 1 (background): Continuously moving gradient, rotating color field, or drifting particle system. Never static.
    - Layer 2 (concept): The main animated diagram — the thing that illustrates what the scene teaches. This is the star of the scene.
-   - Layer 3 (text): Text that springs or fades in, positioned so it doesn't overlap layer 2.
+   - Layer 3 (text): Text that springs or fades in. Text must be LEGIBLE and NON-OVERLAPPING at all times:
+     · Reserve a clear zone for text (typically a bottom band around y 860-960, or a top band around y 120-220) and keep the Layer 2 diagram OUT of that zone — including its motion range, not just its resting position.
+     · Give text a zIndex above the diagram, plus a textShadow (or a subtle dark backing panel) so it stays readable over any background color.
+     · Body text >= 28px, titles >= 36px. Never let two text blocks occupy the same position at the same time — if new text replaces old text, fade the old one fully OUT before the new one reaches full opacity.
 
 10. RICHNESS REQUIREMENTS — every scene must have at least:
     - 5+ animated elements (not counting background particles) — richer than a minimal diagram, build a genuinely layered scene
@@ -509,6 +533,39 @@ The user is paying for animated video lessons. If the animations are generic, st
     - "Chemical reaction" → show the actual reactant shapes moving toward each other, colliding/merging, and becoming product shapes — not just displaying reactant and product labels side by side.
     Ask yourself: if I paused this scene at 3 different frames (start, middle, end), would the visual actually look meaningfully different at each point, reflecting real progress in the process? If the answer is no — if it's the same static picture with the same labels the whole time, just with a title fading in — the scene has failed this requirement regardless of how many decorative particles are in the background.
 
+10c. SPATIAL ANCHORING — elements that RELATE to each other must share ONE source of truth for their position. This is the #1 cause of a scene that runs without crashing but still looks WRONG: an arrow pointing at empty space, a label floating away from the thing it names, particles spilling outside the cup that's supposed to hold them, a pointer landing next to its target instead of on it. It happens when you type a coordinate for element A, then SEPARATELY type another coordinate for the arrow/label/particle meant to attach to A — and the two numbers don't actually match, or A moves and its attachment stays put.
+    The fix is always the same: compute each position ONCE into a named constant, then have EVERY element that depends on it reference that same constant. Never type the same conceptual position twice — if two elements must line up, they must read from the same variable.
+
+    (a) CONNECTORS (arrows, lines, pointers, brackets) must start and end at the ACTUAL anchor of the things they connect — never at a separately-guessed coordinate.
+        const enzymePos = { x: 700, y: 540 };
+        const targetPos = { x: 1150, y: 540 };
+        - Render the enzyme AT enzymePos and the target AT targetPos (via transform/left/top or cx/cy).
+        - Draw the arrow FROM enzymePos TO targetPos by reusing those SAME constants:
+          <line x1={enzymePos.x} y1={enzymePos.y} x2={targetPos.x} y2={targetPos.y} ... />
+        BAD: enzyme positioned at (700,540) but the arrow hardcoded as x1={720} y1={560} x2={1100} — typed independently, so it drifts off the enzyme and misses the target. That is exactly the "arrow in the wrong place" bug.
+
+    (b) A MOVING target: the connector or label must MOVE WITH it. Compute the live (animated) position ONCE and reference that one value in both the element and whatever attaches to it.
+        const targetY = clampPos(540 + Math.sin(frame / 10) * 60, SAFE.yMin, SAFE.yMax);
+        // use targetY for BOTH the bobbing element AND the arrow endpoint / label that tracks it
+        BAD: the element bobs with Math.sin(frame/…) but the arrow points at a static y=540 — it only lines up on one frame and is visibly wrong for every other frame.
+
+    (c) CONTAINMENT — anything meant to be INSIDE a container (liquid, particles, items in a cup / beaker / box / circle / flask) must be positioned FROM the container's OWN geometry, inset by a margin, and clamped to that inner region. Define the container's bounds once, derive the contents' allowed region from them, and never guess "inside" coordinates independently of where you actually drew the container.
+        const cup = { x: 860, y: 500, w: 200, h: 260 }; // the exact box you draw the cup at
+        const inner = { xMin: cup.x + 24, xMax: cup.x + cup.w - 24, yMin: cup.y + 44, yMax: cup.y + cup.h - 20 };
+        // spawn EVERY particle inside the inner region, and clamp its animated position back into it:
+        const px = clampPos(rawX, inner.xMin, inner.xMax);
+        const py = clampPos(rawY, inner.yMin, inner.yMax);
+        For a ROUND container, keep each particle within (radius − margin) of the container's center — compute dx,dy from the center and, if dx*dx+dy*dy exceeds (R−margin)², pull it back — or just clamp to an inscribed box.
+        BAD: cup drawn spanning x=860…1060, but particles spawned at random x across 700…1200 — half of them render outside the cup. That is exactly the "particles out of the cup" bug.
+
+    (d) SELF-CHECK before finishing each scene: for EVERY arrow, label, pointer, and contained element, ask — does its position literally reference the same constant/variable as the thing it attaches to (or derive from that thing's container geometry)? If it uses an independently-typed number, it WILL be misaligned — rewrite it to read from the shared anchor. (These anchor constants belong in positions / transforms / SVG attributes ONLY — they must still never appear inside interpolate()'s input or output arrays per rule 11, and every final position still gets clamped to SAFE or the inner region per rule 14.)
+
+10d. PROPORTION SANITY — size elements according to their ROLE, relative to each other:
+    - The main Layer 2 diagram dominates the frame: roughly 40-60% of frame width, centered in the non-text zone.
+    - Decorative/background particles stay small (4-16px). Contents are much smaller than their container (a particle inside a 200px-wide cup must be a small fraction of 200px, never comparable to it).
+    - Labels are visually subordinate to the thing they label — a label's font size should not exceed the labeled element's own size.
+    - If an element's size is a computed/animated value, clamp it to a sane range exactly like positions are clamped — a pulsing circle whose radius formula can hit 0 or 900 is a bug even if it never crashes.
+
 INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
 11. interpolate() ALWAYS needs exactly 3 arguments: interpolate(value, [in...], [out...]).
     - The 2nd and 3rd arguments (inputRange, outputRange) MUST be array literals written directly in the call — [0, 20] — containing ONLY plain number literals. NEVER a variable holding an array, and NEVER an expression inside the array (no "end - 30", no "i * 8", no "startFrame + 20"). If a value needs to vary, shift the FIRST argument instead — see the staggering technique below — never the array contents.
@@ -528,6 +585,7 @@ INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exception
     - Math.sin/cos ALWAYS receive a plain number — never undefined, null, or a string.
     - Polygon/polyline points: filter out any NaN before joining: points.filter(p => !isNaN(p.x) && !isNaN(p.y))
     - When using random() or useMemo for positions, ALWAYS validate the result is finite before using it.
+12b. spring() MUST be called with BOTH frame AND fps: spring({ frame, fps, config: { ... } }), where fps comes from useVideoConfig() inside the component (const { fps } = useVideoConfig()). Calling spring() without fps throws at runtime and kills the scene. Never hardcode an fps number and never pass undefined — every component that uses spring() must call useVideoConfig() itself (or receive fps as an explicit parameter from a component that did).
 13. CLAMP entrance animations so elements don't fly off-screen after settling:
     const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
     Use CLAMP for interpolate() entrance animations. For Math.sin/cos continuous motion, CLAMP is NOT needed.
@@ -654,32 +712,34 @@ function WaveScene({ label }: { label: string }) {
   const points = 32;
   const labelOpacity = interpolate(frame, [10, 40], [0, 1], CLAMP);
 
+  // SPATIAL ANCHORING (rule 10c): compute each point's position ONCE, then let
+  // BOTH the circles AND the connecting line read from it. It's tempting to
+  // type the same y = 200 + Math.sin(...) formula separately in each place —
+  // don't. Any drift between the two copies makes the line peel away from the
+  // dots. One shared source of truth guarantees they always coincide.
+  const wavePoints = Array.from({ length: points }, (_, i) => {
+    const x = (i / (points - 1)) * 1920;
+    const phase = (i / points) * Math.PI * 4;
+    const y = 200 + Math.sin(frame / 10 + phase) * 80;
+    const brightness = (Math.sin(frame / 10 + phase) + 1) / 2;
+    return { x, y, brightness };
+  });
+
   return (
     <AbsoluteFill style={{ backgroundColor: "#0f172a", justifyContent: "center", alignItems: "center" }}>
       <svg width={1920} height={400} style={{ position: "absolute", top: "50%", transform: "translateY(-50%)" }}>
         {/* Wave made of individually oscillating circles for a particle-wave look */}
-        {Array.from({ length: points }, (_, i) => {
-          const x = (i / (points - 1)) * 1920;
-          const phase = (i / points) * Math.PI * 4;
-          const y = 200 + Math.sin(frame / 10 + phase) * 80;
-          const brightness = (Math.sin(frame / 10 + phase) + 1) / 2;
-          return (
-            <circle
-              key={i}
-              cx={x} cy={y} r={8}
-              fill={"hsl(" + (200 + brightness * 60) + ", 80%, " + (40 + brightness * 40) + "%)"}
-              opacity={0.6 + brightness * 0.4}
-            />
-          );
-        })}
-        {/* Connecting line */}
+        {wavePoints.map((p, i) => (
+          <circle
+            key={i}
+            cx={p.x} cy={p.y} r={8}
+            fill={"hsl(" + (200 + p.brightness * 60) + ", 80%, " + (40 + p.brightness * 40) + "%)"}
+            opacity={0.6 + p.brightness * 0.4}
+          />
+        ))}
+        {/* Connecting line — reuses the SAME wavePoints, so it can never drift off the dots */}
         <polyline
-          points={Array.from({ length: points }, (_, i) => {
-            const x = (i / (points - 1)) * 1920;
-            const phase = (i / points) * Math.PI * 4;
-            const y = 200 + Math.sin(frame / 10 + phase) * 80;
-            return \`\${x},\${y}\`;
-          }).join(" ")}
+          points={wavePoints.map((p) => \`\${p.x},\${p.y}\`).join(" ")}
           fill="none"
           stroke="rgba(96,165,250,0.4)"
           strokeWidth={2}
@@ -712,7 +772,20 @@ export const LessonExample = () => {
 
 Every scene above has motion on EVERY frame. The atom's nucleus pulses, electrons orbit, background hue shifts. The wave's particles oscillate continuously. There is no static frame. Build every scene in your lesson to this standard.
 
-Begin with imports, then the CLAMP constant, then helper components, then the main component.
+FINAL SELF-CHECK — before finishing, make ONE verification pass over your code and confirm ALL of these:
+1. Exactly one <Series.Sequence> per scene, in the given order, each durationInFrames copied EXACTLY, and their sum equals the given TOTAL FRAMES.
+2. Every scene contains its <Audio src={"..."} /> with the URL copied character-for-character from the scene table.
+3. No useState, no bare <Sequence>, no staticFile, no imports from anything except "react" and "remotion".
+4. Every interpolate() call: exactly 3 arguments (plus optional options object), input/output ranges are literal number arrays of equal length, inputRange strictly increasing, no variables or expressions inside the arrays.
+5. Every spring() call receives both frame and fps from useVideoConfig() (rule 12b).
+6. Every positioned element's FINAL x/y passes through clamp to SAFE — or to its container's inner region (rules 10c, 14).
+7. Every arrow, pointer, label, and contained element reads its position from the SAME constant/variable as the thing it attaches to or lives inside (rule 10c) — no independently-typed coordinates for related elements.
+8. Every wrapper component that content is nested inside actually renders {children} in its body (rule 22).
+9. Each scene: motion on every frame (rule 7), the illustrated process visibly progresses across the FULL scene duration (rules 7b, 10b), text is verbatim onScreenText, legible, in its reserved zone, never overlapping the diagram or other text (rules 8, 9).
+10. All animation timings use scene-LOCAL frame numbers starting at 0 — no offsets from earlier scenes' durations (rule 4b).
+If any check fails, fix the code before returning it. Do not return code that fails a check.
+
+Begin with imports, then the CLAMP constant and the FRAME / SAFE / clamp position constants (rule 14), then shared helper components, then the main component.
 `;
 
 function buildPerLessonContent(lesson, componentName, scenes, totalFrames) {
