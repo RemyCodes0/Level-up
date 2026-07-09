@@ -586,6 +586,10 @@ INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exception
     - Polygon/polyline points: filter out any NaN before joining: points.filter(p => !isNaN(p.x) && !isNaN(p.y))
     - When using random() or useMemo for positions, ALWAYS validate the result is finite before using it.
 12b. spring() MUST be called with BOTH frame AND fps: spring({ frame, fps, config: { ... } }), where fps comes from useVideoConfig() inside the component (const { fps } = useVideoConfig()). Calling spring() without fps throws at runtime and kills the scene. Never hardcode an fps number and never pass undefined — every component that uses spring() must call useVideoConfig() itself (or receive fps as an explicit parameter from a component that did).
+12c. NEVER read a property off a value that can be undefined — "Cannot read properties of undefined (reading 'x')" is a real crash that has killed scenes in production. The two patterns that cause it:
+    - CONSECUTIVE-ELEMENT ACCESS: connecting point i to point i+1 (lines between anchor points, segment chains, paired elements). points[i + 1] is undefined on the LAST iteration if the loop runs to points.length. Fix: iterate only to length - 1 when the body reads [i + 1] — points.slice(0, -1).map((p, i) => { const next = points[i + 1]; ... }) — or guard explicitly: if (!next) return null; before touching next.x.
+    - LOOKUPS THAT CAN MISS: anchors.find(...), anchorMap[key], scenePositions[idx] — any lookup where the key/index might not exist returns undefined, and .x on it crashes. Fix: guard every lookup result before property access (const a = anchors.find(...); if (!a) return null;) or use a guaranteed-complete structure (build the array/object so every index/key you will read is definitely present).
+    This applies to EVERY .x / .y / .length / any property read on the result of indexing, find, filter()[0], or object lookup — if the value isn't provably defined, guard it first. A guard that renders nothing (return null) is always better than a crash that kills the whole video.
 13. CLAMP entrance animations so elements don't fly off-screen after settling:
     const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
     Use CLAMP for interpolate() entrance animations. For Math.sin/cos continuous motion, CLAMP is NOT needed.
@@ -783,6 +787,7 @@ FINAL SELF-CHECK — before finishing, make ONE verification pass over your code
 8. Every wrapper component that content is nested inside actually renders {children} in its body (rule 22).
 9. Each scene: motion on every frame (rule 7), the illustrated process visibly progresses across the FULL scene duration (rules 7b, 10b), text is verbatim onScreenText, legible, in its reserved zone, never overlapping the diagram or other text (rules 8, 9).
 10. All animation timings use scene-LOCAL frame numbers starting at 0 — no offsets from earlier scenes' durations (rule 4b).
+11. No property read (.x, .y, etc.) on the result of arr[i + 1], find(), filter()[0], or a keyed lookup without a bounds/existence guard (rule 12c) — every loop whose body reads [i + 1] iterates only to length - 1.
 If any check fails, fix the code before returning it. Do not return code that fails a check.
 
 Begin with imports, then the CLAMP constant and the FRAME / SAFE / clamp position constants (rule 14), then shared helper components, then the main component.

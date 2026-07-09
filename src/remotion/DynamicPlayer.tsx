@@ -411,16 +411,60 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
     return () => player.removeEventListener("ended", onEnded);
   }, [onEnded, Component]);
 
-  if (error) {
+  // ── Render-time crash state ────────────────────────────────────────────────
+  // useCompilation only catches COMPILE-time errors. Generated code can still
+  // throw while RENDERING a specific frame (e.g. an out-of-bounds points[i+1]
+  // that only executes when that scene plays). The Player's onError reports
+  // those; storing them here routes BOTH failure modes into the same error
+  // screen below — the one that already has the working Regenerate button.
+  const [renderError, setRenderError] = useState(false);
+
+  // A successful retry replaces `code` with freshly generated code — clear the
+  // crash state so the new lesson gets a clean mount instead of being stuck
+  // behind the previous code's error screen.
+  useEffect(() => {
+    setRenderError(false);
+  }, [code]);
+
+  // The Player emits an "error" EVENT on its ref when the composition throws
+  // while rendering a frame — the same event-listener mechanism as the
+  // "ended" listener above. This (not a prop) is the reliable hook for
+  // render-time crashes; it flips renderError, which swaps the Player out
+  // for the unified error screen with the Regenerate button.
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+    const onPlayerError = (e: any) => {
+      // Details go to the console ONLY — never the UI. The raw eval'd stack
+      // ("<anonymous>:2486:19") lives here for debugging.
+      console.error(
+        "[DynamicPlayer] Generated lesson code crashed at render time:",
+        e?.detail?.error ?? e
+      );
+      setRenderError(true);
+    };
+    player.addEventListener("error", onPlayerError);
+    return () => player.removeEventListener("error", onPlayerError);
+  }, [Component]);
+
+  // Error DETAILS are deliberately console-only, never shown in the UI —
+  // raw messages can reveal internals of the generated code / URLs to end
+  // users. The console keeps them available for debugging.
+  useEffect(() => {
+    if (error) console.error("[DynamicPlayer] Lesson code failed to compile:", error);
+  }, [error]);
+
+  if (error || renderError) {
     return (
       <div
         style={{ aspectRatio: "16/9" }}
-        className="flex flex-col items-center justify-center bg-slate-900 rounded-xl text-red-400 text-sm p-6 text-center overflow-auto"
+        className="flex flex-col items-center justify-center bg-slate-900 rounded-xl text-red-400 text-sm p-6 text-center"
       >
-        <p className="font-semibold mb-2">Animation compilation error</p>
-        <pre className="text-red-400/70 text-xs text-left whitespace-pre-wrap max-w-full max-h-48 overflow-auto bg-black/30 p-3 rounded">
-          {error}
-        </pre>
+        <p className="font-semibold mb-1">This animation hit an error</p>
+        <p className="text-red-400/60 text-xs max-w-sm">
+          Something went wrong while {renderError ? "playing" : "preparing"} this
+          lesson's animation. Regenerating it usually fixes this.
+        </p>
         {onRetry && (
           <button
             onClick={onRetry}
@@ -473,6 +517,54 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         controls={false}
         clickToPlay
         acknowledgeRemotionLicense
+        // ── Render-time crash containment ──────────────────────────────────
+        // The Player's built-in error boundary renders this the MOMENT the
+        // composition throws — so the user immediately sees the message and
+        // a working Regenerate button (never a blank/dead player). The
+        // "error" event listener above additionally flips renderError as a
+        // second layer, swapping the whole Player for the unified error
+        // screen. Details are console-only in both — no internals in the UI.
+        // Inline styles + generous font sizes on purpose: this renders inside
+        // the Player surface, which may be scaled, so sizes must stay legible
+        // either way.
+        errorFallback={() => (
+          <div
+            style={{
+              width: "100%", height: "100%",
+              display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center",
+              backgroundColor: "#0f172a", color: "#f87171",
+              textAlign: "center", padding: 24, gap: 10,
+            }}
+          >
+            <div style={{ fontSize: 28, fontWeight: 700 }}>
+              This animation hit an error
+            </div>
+            <div style={{ fontSize: 20, color: "rgba(248,113,113,0.65)", maxWidth: 560, lineHeight: 1.4 }}>
+              Something went wrong while playing this lesson's animation.
+              Regenerating it usually fixes this.
+            </div>
+            {onRetry ? (
+              <button
+                onClick={(e) => { e.stopPropagation(); if (!retrying) onRetry(); }}
+                disabled={retrying}
+                style={{
+                  marginTop: 10, padding: "12px 24px", borderRadius: 12,
+                  fontSize: 20, fontWeight: 600, cursor: retrying ? "not-allowed" : "pointer",
+                  backgroundColor: "rgba(239,68,68,0.2)", color: "#fca5a5",
+                  border: "1px solid rgba(239,68,68,0.3)",
+                  opacity: retrying ? 0.5 : 1,
+                }}
+              >
+                {retrying ? "Regenerating…" : "Regenerate this lesson"}
+              </button>
+            ) : (
+              <div style={{ fontSize: 16, color: "rgba(239,68,68,0.5)", marginTop: 6 }}>
+                Try regenerating this lesson
+              </div>
+            )}
+          </div>
+        )}
       />
       {/* Subtle watermark — always visible, non-intrusive, bottom-right corner.
           Stays above the video but below the control bar overlay so it's
