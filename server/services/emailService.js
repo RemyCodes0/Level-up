@@ -22,7 +22,27 @@
 
 const { Resend } = require("resend");
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Construct the client DEFENSIVELY. Current versions of the `resend` package
+// throw from the constructor when the API key is missing — and because this
+// file is required at server boot by many controllers (auth, feedback,
+// referral, admin, …), an unguarded `new Resend(undefined)` crashes the ENTIRE
+// API on startup, not just email. The failure is cryptic too: the throw
+// happens mid-require, so the requiring controller's exports never get set and
+// you see a downstream "argument handler must be a function" from the router.
+//
+// Instead: only build the client if the key exists. If it's absent (e.g. local
+// dev without email configured), skip it and turn sendEmail into a logged
+// no-op so the server still boots and only email is unavailable.
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
+
+if (!resend) {
+  console.warn(
+    "[emailService] RESEND_API_KEY is not set — email sending is DISABLED. " +
+    "Emails will be skipped (no-op) so the server can still boot. " +
+    "Set RESEND_API_KEY in your environment to enable email."
+  );
+}
 
 // Falls back to Resend's test sender if EMAIL_FROM isn't set yet, so things
 // don't crash during setup — but set EMAIL_FROM to your verified domain for
@@ -30,6 +50,12 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM = process.env.RESEND_FROM_EMAIL || "Level Up <onboarding@resend.dev>";
 
 const sendEmail = async ({ to, subject, text, html }) => {
+  // No client (missing key) → skip gracefully instead of throwing.
+  if (!resend) {
+    console.warn(`[emailService] Skipped email to "${to}" (subject: "${subject}") — RESEND_API_KEY not configured.`);
+    return;
+  }
+
   try {
     const { data, error } = await resend.emails.send({
       from: FROM,

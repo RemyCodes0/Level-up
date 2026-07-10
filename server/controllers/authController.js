@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const sendEmail = require("../services/emailService");
+const { completeReferral } = require("./referralController");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
@@ -94,6 +95,14 @@ exports.verifyEmail = async (req, res) => {
     user.verificationToken = null;
     user.verificationTokenExpires = null;
     await user.save();
+
+    // Award the referral now that the account is real (email verified). This
+    // is the anti-abuse gate: verifying proves the referred user owns the
+    // email, without forcing them to generate a lesson first (which added
+    // friction and hurt conversion). Fire-and-forget — it must never block or
+    // fail email verification. completeReferral is idempotent (guarded by
+    // referralRewardGranted), so it's safe even if verify is somehow hit twice.
+    completeReferral(user._id.toString());
 
     res.json({ message: "Email verified successfully! You can now log in." });
   } catch (error) {
