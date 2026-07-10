@@ -46,9 +46,12 @@ export function initAnalytics(): void {
     // bulk of "know everything anonymous people do" with no manual tagging.
     autocapture: true,
 
-    // We fire pageviews ourselves on route change (see PostHogPageView), so turn
-    // off the built-in one to avoid double-counting in this single-page app.
-    capture_pageview: false,
+    // SPA pageviews: PostHog's recommended mode for single-page apps. It
+    // captures a $pageview automatically on every History API navigation (which
+    // is how React Router moves between routes) AND on first load — so we don't
+    // need a manual route-tracker component, and PostHog's own pageview
+    // detection recognizes it.
+    capture_pageview: "history_change",
     capture_pageleave: true, // gives time-on-page and bounce
 
     // Session replay — watch real sessions (anonymous included). Genuinely useful
@@ -108,12 +111,6 @@ export function resetUser(): void {
 export function track(event: string, props?: Record<string, unknown>): void {
   if (!started) return;
   posthog.capture(event, props);
-}
-
-/** Manual pageview — used by PostHogPageView on each route change. */
-export function capturePageview(props?: Record<string, unknown>): void {
-  if (!started) return;
-  posthog.capture("$pageview", props);
 }
 
 // ── Cookie consent ───────────────────────────────────────────────────────────
