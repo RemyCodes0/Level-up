@@ -4,6 +4,7 @@ import type React from "react";
 import axios from "axios";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { analytics, identifyUser } from "../lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -73,12 +74,15 @@ export default function SignupPage() {
 
       // New flow: backend returns requiresVerification instead of a token
       if (res.data.requiresVerification) {
+        analytics.signedUp({ requires_verification: true });
         setVerified(true);
       } else {
         // Fallback for backwards compat if backend hasn't been updated yet
         const { token, ...user } = res.data;
         localStorage.setItem("token", token);
         localStorage.setItem("user", JSON.stringify(user));
+        identifyUser(user);
+        analytics.signedUp({ requires_verification: false });
         router("/ai_tutor");
       }
     } catch (err: any) {

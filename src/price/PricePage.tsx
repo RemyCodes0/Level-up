@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, ArrowRight, Sparkles, Plus, Minus } from "lucide-react";
+import { analytics } from "../lib/analytics";
 
 // Same "Cutting Room" tokens used across the rest of the site, for
 // consistency when a visitor lands here directly (e.g. from an ad or a
@@ -31,6 +32,8 @@ function FaqItem({ q, a }: { q: string; a: string }) {
 
 export default function PricingPage() {
   const navigate = useNavigate();
+
+  useEffect(() => { analytics.pricingViewed(); }, []);
 
   const faqs = [
     { q: "Is the first lesson really free?", a: "Yes. Every course's first lesson generates free, with no card required, so you can see exactly what you'd get before paying for the rest." },

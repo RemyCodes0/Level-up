@@ -4,6 +4,7 @@ import type React from "react";
 import axios from "axios";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { analytics, identifyUser } from "../lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,15 +65,15 @@ export default function LoginPage() {
         password,
       });
       localStorage.setItem("token", res.data.token);
-      localStorage.setItem(
-        "user",
-        JSON.stringify({
-          _id: res.data._id,
-          name: res.data.name,
-          email: res.data.email,
-          role: res.data.role,
-        })
-      );
+      const loggedInUser = {
+        _id: res.data._id,
+        name: res.data.name,
+        email: res.data.email,
+        role: res.data.role,
+      };
+      localStorage.setItem("user", JSON.stringify(loggedInUser));
+      identifyUser(loggedInUser);
+      analytics.loggedIn({ role: res.data.role });
       navigate("/ai_tutor");
     } catch (err: any) {
       const data = err.response?.data;

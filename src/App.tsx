@@ -30,12 +30,16 @@ import VerifyEmailPage from './signup/Verifyemailpage'
 import AdminDashboard from './ai/AdminDashboard'
 import PricingPage from './price/PricePage'
 import SharedCoursePage from './share/SharePage'
+import { PostHogPageView } from './lib/PostHogPageView'
+import { CookieConsent } from './lib/CookieConsent'
 function App() {
 
 
   return (
     
     <BrowserRouter>
+    <PostHogPageView />
+    <CookieConsent />
     <Analytics />
     <AuthProvider>
     <Routes>

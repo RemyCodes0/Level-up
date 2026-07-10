@@ -19,6 +19,7 @@ import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
 import { ReferralCard } from "../components/ReferralCard";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
+import { analytics } from "../lib/analytics";
 
 // Download/export requires headless Chrome + 2GB+ RAM — works locally but
 // OOMs on Render's Starter (512MB). Gate it behind an env var so it only
@@ -310,6 +311,7 @@ function UploadPhase({ onGenerate, credits }: {
     if (!(file.type === "application/pdf" || file.name.endsWith(".pptx"))) return;
 
     setUploadedFile(file);
+    analytics.pdfUploaded();
     setPageCount(null);
     setPageCountError(null);
 
@@ -833,6 +835,24 @@ export default function AILearningPage() {
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+
+  // course_completed: fire once, only for courses generated in THIS session
+  // (startedCoursesRef), the first time all their lessons finish. Guards prevent
+  // re-firing on re-render or when revisiting an already-finished course.
+  const startedCoursesRef = useRef<Set<string>>(new Set());
+  const completedFiredRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const ready = lessonStatuses.length > 0 && lessonStatuses.every((s) => s === "ready" || s === "failed");
+    if (
+      ready &&
+      activeHistoryId &&
+      startedCoursesRef.current.has(activeHistoryId) &&
+      !completedFiredRef.current.has(activeHistoryId)
+    ) {
+      completedFiredRef.current.add(activeHistoryId);
+      analytics.courseCompleted({ courseId: activeHistoryId });
+    }
+  }, [lessonStatuses, activeHistoryId]);
   // Tracks whether the CURRENTLY VIEWED course was generated using the free
   // trial — used to decide whether to auto-prompt for feedback after the
   // quiz results are shown (see the quiz onSubmit handler below).
@@ -975,6 +995,7 @@ export default function AILearningPage() {
 
   const handleRetryLesson = async (lessonIndex: number) => {
     if (!activeHistoryId || retryingLesson !== null) return;
+    analytics.lessonRegenerated({ lesson: lessonIndex + 1 });
     setRetryingLesson(lessonIndex);
     try {
       await retryLesson(activeHistoryId, lessonIndex);
@@ -1074,6 +1095,7 @@ export default function AILearningPage() {
     file: File | null | undefined,
     level: "beginner" | "intermediate" | "advanced" | null
   ) => {
+    analytics.courseStarted({ topic: name, source: file ? "pdf" : "topic" });
     bgTimersRef.current.forEach(clearTimeout); bgTimersRef.current = [];
     if (pollCancelRef.current) pollCancelRef.current();
     // Jump straight into the course view (not a separate "generating" screen) —
@@ -1091,6 +1113,7 @@ export default function AILearningPage() {
     setActiveCourseIsFreeTrial(willUseFreeTrial);
     try {
       const { courseId } = await startCourseGeneration(name, file, level);
+      startedCoursesRef.current.add(courseId);
       fetchCredits();
       const freshLessons = MOCK_LESSONS.map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null }));
       const freshStatuses: LessonStatus[] = freshLessons.map(() => "generating");
@@ -1265,7 +1288,7 @@ export default function AILearningPage() {
               const progress = lessonProgresses[i] ?? 0;
               return (
                 <button key={lesson.id} disabled={isDisabled}
-                  onClick={() => { if (!isDisabled) { setActiveLesson(i); setActiveSection("video"); if (isMobile) setCourseSidebarOpen(false); } }}
+                  onClick={() => { if (!isDisabled) { analytics.lessonViewed({ lesson: i + 1 }); setActiveLesson(i); setActiveSection("video"); if (isMobile) setCourseSidebarOpen(false); } }}
                   className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${isActive ? "bg-blue-50 border-r-2 border-blue-600" : isFailed ? "opacity-70 hover:bg-red-50/50" : isLockedStatus ? "opacity-70 cursor-not-allowed" : isDisabled ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50"}`}
                 >
                   <div className="mt-0.5 shrink-0">

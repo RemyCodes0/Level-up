@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { analytics, resetUser } from "../lib/analytics";
 import { useAuth } from "@/lib/auth-context";
 import { Navbar } from "@/components/navbar/Navbar";
 import {
@@ -153,6 +154,8 @@ export default function ProfilePage() {
   };
 
   const handleLogout = () => {
+    analytics.loggedOut();
+    resetUser(); // clear PostHog identity so the next user on this device is separate
     localStorage.removeItem("user");
     localStorage.removeItem("token");
     router("/login");

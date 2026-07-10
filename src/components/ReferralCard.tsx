@@ -1,5 +1,6 @@
 // components/ReferralCard.tsx
 import { useState, useEffect } from "react";
+import { analytics } from "../lib/analytics";
 import { Copy, Check, Users, Gift, X, ArrowRight, Sparkles } from "lucide-react";
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
@@ -25,6 +26,7 @@ function ReferralModal({ link, onClose }: { link: string; onClose: () => void })
       document.body.removeChild(input);
     }
     setCopied(true);
+    analytics.referralLinkCopied();
     setTimeout(() => setCopied(false), 2500);
   };
 

@@ -7,6 +7,7 @@ import {
   Repeat,
 } from "lucide-react";
 import { useCompilation } from "./useCompilation";
+import { analytics } from "../lib/analytics";
 
 interface DynamicPlayerProps {
   code: string;
@@ -441,6 +442,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         "[DynamicPlayer] Generated lesson code crashed at render time:",
         e?.detail?.error ?? e
       );
+      analytics.lessonRenderFailed({ message: e?.detail?.error?.message });
       setRenderError(true);
     };
     player.addEventListener("error", onPlayerError);
