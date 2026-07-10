@@ -1,169 +1,255 @@
-// controllers/adminController.js
-//
-// Powers the private admin dashboard. Every number here is derived from data
-// ALREADY stored in MongoDB (users, courses, lesson statuses, credits) — no
-// new tracking required. Cost and per-course timing/retry metrics are NOT
-// included because they aren't recorded anywhere yet; those panels are
-// stubbed on the frontend until we add that logging.
-//
-// Protected by requireAdmin middleware (see middleware/requireAdmin.js) — a
-// simple hardcoded check against your own user id / email.
-
+const crypto = require("crypto");
 const User = require("../models/User");
-const Course = require("../models/Course");
+const jwt = require("jsonwebtoken");
+const sendEmail = require("../services/emailService");
+const { completeReferral } = require("./referralController");
 
-// GET /api/admin/overview
-// Returns the headline numbers + breakdowns for the dashboard, in one call.
-exports.getOverview = async (req, res) => {
+const generateToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
+};
+
+// ── Signup — creates user + sends verification email ────────────────────────
+exports.registerUser = async (req, res) => {
+  const { name, email, password, role, major, year, subjects, ref } = req.body;
   try {
-    const now = new Date();
-    const dayAgo = new Date(now - 24 * 60 * 60 * 1000);
-    const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    const userExists = await User.findOne({ email });
+    if (userExists) return res.status(400).json({ message: "User already exists" });
 
-    // Run all the independent aggregations in parallel for speed.
-    const [
-      totalUsers,
-      verifiedUsers,
-      newUsersWeek,
-      totalCourses,
-      coursesDay,
-      coursesWeek,
-      statusBreakdown,
-      freeTrialCount,
-      creditsAgg,
-      lessonStats,
-    ] = await Promise.all([
-      User.countDocuments({}),
-      User.countDocuments({ verified: true }),
-      User.countDocuments({ createdAt: { $gte: weekAgo } }),
-      Course.countDocuments({}),
-      Course.countDocuments({ createdAt: { $gte: dayAgo } }),
-      Course.countDocuments({ createdAt: { $gte: weekAgo } }),
-      // Course-level status breakdown (generating / ready / failed)
-      Course.aggregate([
-        { $group: { _id: "$status", count: { $sum: 1 } } },
-      ]),
-      Course.countDocuments({ isFreeTrialCourse: true }),
-      // Sum of all remaining credits across users (rough proxy for unspent
-      // purchased credits).
-      User.aggregate([
-        { $group: { _id: null, totalCredits: { $sum: "$courseCredits" } } },
-      ]),
-      // Lesson-level stats: how many individual lessons are ready vs failed
-      // vs locked. This is the real "generation health" signal.
-      Course.aggregate([
-        { $unwind: "$lessons" },
-        { $group: { _id: "$lessons.status", count: { $sum: 1 } } },
-      ]),
-    ]);
+    // Generate a verification token (64-char hex string, expires in 24h)
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-    // Reshape the status aggregations into simple objects.
-    const courseStatus = { generating: 0, ready: 0, failed: 0 };
-    statusBreakdown.forEach((s) => {
-      if (s._id) courseStatus[s._id] = s.count;
+    // Validate referral code if provided — only store it if the referrer
+    // actually exists, to avoid storing dangling/fake codes
+    let referredBy = null;
+    if (ref) {
+      const referrer = await User.findOne({ referralCode: ref }).select("_id");
+      if (referrer) referredBy = ref;
+    }
+
+    const user = await User.create({
+      name,
+      email,
+      password,
+      role,
+      major,
+      year,
+      subjects,
+      verificationToken,
+      verificationTokenExpires,
+      ...(referredBy ? { referredBy } : {}),
     });
 
-    const lessonStatus = { rendering: 0, ready: 0, failed: 0, locked: 0 };
-    lessonStats.forEach((s) => {
-      if (s._id) lessonStatus[s._id] = s.count;
+    // Build verification link — CLIENT_URL should point to your frontend
+    const verifyUrl = `${process.env.CLIENT_URL}/verify-email?token=${verificationToken}`;
+
+    await sendEmail({
+      to: email,
+      subject: "Verify your Level Up account",
+      text: `Hi ${name},\n\nWelcome to Level Up! Please verify your email by clicking the link below:\n\n${verifyUrl}\n\nThis link expires in 24 hours.\n\nIf you didn't create this account, you can safely ignore this email.`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
+          <h2 style="color: #1e293b; margin-bottom: 8px;">Welcome to Level Up!</h2>
+          <p style="color: #475569; font-size: 15px; line-height: 1.6;">
+            Hi ${name}, thanks for signing up. Please verify your email to get started:
+          </p>
+          <a href="${verifyUrl}"
+             style="display: inline-block; margin: 24px 0; padding: 12px 28px; background: linear-gradient(135deg, #3b82f6, #6366f1); color: #fff; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 15px;">
+            Verify my email
+          </a>
+          <p style="color: #94a3b8; font-size: 13px;">
+            This link expires in 24 hours. If you didn't create this account, you can safely ignore this email.
+          </p>
+        </div>
+      `,
     });
 
-    const totalLessons =
-      lessonStatus.rendering + lessonStatus.ready + lessonStatus.failed + lessonStatus.locked;
-    const lessonSuccessRate =
-      totalLessons > 0
-        ? Math.round((lessonStatus.ready / (lessonStatus.ready + lessonStatus.failed || 1)) * 100)
-        : null;
+    // Don't return a JWT — user must verify first
+    res.status(201).json({
+      message: "Account created! Check your email to verify your account.",
+      requiresVerification: true,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
-    const totalRemainingCredits = creditsAgg[0]?.totalCredits || 0;
+// ── Verify email — called when user clicks the link ─────────────────────────
+exports.verifyEmail = async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ message: "Missing verification token" });
+
+  try {
+    const user = await User.findOne({
+      verificationToken: token,
+      verificationTokenExpires: { $gt: new Date() },
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        message: "Invalid or expired verification link. Please request a new one.",
+      });
+    }
+
+    user.verified = true;
+    user.verificationToken = null;
+    user.verificationTokenExpires = null;
+    await user.save();
+
+    // Award the referral now that the account is real (email verified). This
+    // is the anti-abuse gate: verifying proves the referred user owns the
+    // email, without forcing them to generate a lesson first (which added
+    // friction and hurt conversion). Fire-and-forget — it must never block or
+    // fail email verification. completeReferral is idempotent (guarded by
+    // referralRewardGranted), so it's safe even if verify is somehow hit twice.
+    completeReferral(user._id.toString());
+
+    res.json({ message: "Email verified successfully! You can now log in." });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ── Resend verification email ───────────────────────────────────────────────
+exports.resendVerification = async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: "Email is required" });
+
+  try {
+    const user = await User.findOne({ email });
+
+    // Don't reveal whether the email exists — always return success
+    if (!user || user.verified) {
+      return res.json({ message: "If that email exists and isn't verified, a new link has been sent." });
+    }
+
+    // Generate a fresh token
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    user.verificationToken = verificationToken;
+    user.verificationTokenExpires = verificationTokenExpires;
+    await user.save();
+
+    const verifyUrl = `${process.env.CLIENT_URL}/verify-email?token=${verificationToken}`;
+
+    await sendEmail({
+      to: email,
+      subject: "Verify your Level Up account",
+      text: `Hi ${user.name},\n\nHere's your new verification link:\n\n${verifyUrl}\n\nThis link expires in 24 hours.`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
+          <h2 style="color: #1e293b; margin-bottom: 8px;">New verification link</h2>
+          <p style="color: #475569; font-size: 15px; line-height: 1.6;">
+            Hi ${user.name}, here's your new verification link:
+          </p>
+          <a href="${verifyUrl}"
+             style="display: inline-block; margin: 24px 0; padding: 12px 28px; background: linear-gradient(135deg, #3b82f6, #6366f1); color: #fff; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 15px;">
+            Verify my email
+          </a>
+          <p style="color: #94a3b8; font-size: 13px;">This link expires in 24 hours.</p>
+        </div>
+      `,
+    });
+
+    res.json({ message: "If that email exists and isn't verified, a new link has been sent." });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ── Login — blocks unverified users ─────────────────────────────────────────
+exports.loginUser = async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(401).json({ message: "Invalid credentials" });
+
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
+
+    // Block login if email not verified
+    if (!user.verified) {
+      return res.status(403).json({
+        message: "Please verify your email before logging in.",
+        needsVerification: true,
+        email: user.email,
+      });
+    }
 
     res.json({
-      users: {
-        total: totalUsers,
-        verified: verifiedUsers,
-        unverified: totalUsers - verifiedUsers,
-        newThisWeek: newUsersWeek,
-      },
-      courses: {
-        total: totalCourses,
-        last24h: coursesDay,
-        last7d: coursesWeek,
-        freeTrial: freeTrialCount,
-        paid: totalCourses - freeTrialCount,
-        status: courseStatus,
-      },
-      generationHealth: {
-        lessonStatus,
-        totalLessons,
-        // % of finished lessons that succeeded (ready vs failed) — the
-        // clearest single health number.
-        lessonSuccessRate,
-      },
-      // Revenue is approximate: we don't store a payments ledger yet, so this
-      // shows unspent credits as a proxy. Real revenue tracking would need a
-      // payments collection (flagged for later).
-      creditsProxy: {
-        totalRemainingCredits,
-      },
-      generatedAt: now,
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token: generateToken(user._id),
     });
-  } catch (err) {
-    console.error("admin getOverview error:", err);
-    res.status(500).json({ error: "Failed to load admin overview" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
 
-// GET /api/admin/activity?limit=20
-// Recent courses across ALL users — the "live activity feed".
-exports.getRecentActivity = async (req, res) => {
+// ── Existing CRUD handlers (unchanged) ──────────────────────────────────────
+
+exports.getUsers = async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
-
-    const courses = await Course.find({})
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .populate("userId", "name email")
-      .select("topic status isFreeTrialCourse lessons createdAt updatedAt userId")
-      .lean();
-
-    const activity = courses.map((c) => {
-      const readyLessons = (c.lessons || []).filter((l) => l.status === "ready").length;
-      const failedLessons = (c.lessons || []).filter((l) => l.status === "failed").length;
-      return {
-        id: c._id,
-        topic: c.topic,
-        status: c.status,
-        isFreeTrial: c.isFreeTrialCourse,
-        lessonsReady: readyLessons,
-        lessonsFailed: failedLessons,
-        lessonsTotal: (c.lessons || []).length,
-        user: c.userId ? { name: c.userId.name, email: c.userId.email } : null,
-        createdAt: c.createdAt,
-        updatedAt: c.updatedAt,
-      };
-    });
-
-    res.json({ activity });
+    const user = await User.find();
+    res.status(200).json({ user });
   } catch (err) {
-    console.error("admin getRecentActivity error:", err);
-    res.status(500).json({ error: "Failed to load activity" });
+    res.status(500).json({ message: err.message });
   }
 };
 
-// GET /api/admin/courses/:courseId
-// Full detail for one course, including the generated lesson code, so the
-// admin can preview/inspect the actual videos users generated.
-exports.getCourseDetail = async (req, res) => {
+exports.deleteUser = async (req, res) => {
   try {
-    const course = await Course.findById(req.params.courseId)
-      .populate("userId", "name email")
-      .lean();
-
-    if (!course) return res.status(404).json({ error: "Course not found" });
-
-    res.json({ course });
+    const user = await User.findByIdAndDelete(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    res.status(200).json({ message: "User deleted", user });
   } catch (err) {
-    console.error("admin getCourseDetail error:", err);
-    res.status(500).json({ error: "Failed to load course detail" });
+    res.status(500).json({ message: err });
+  }
+};
+
+exports.getUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: "No user found" });
+    }
+    res.status(200).json({ user });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+exports.updateUser = async (req, res) => {
+  const userId = req.params.id;
+
+  try {
+    let user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const allowedFields = ["name", "email", "major", "year", "subjects", "password"];
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        user[field] = req.body[field];
+      }
+    });
+
+    const updatedUser = await user.save();
+
+    res.status(200).json({
+      _id: updatedUser._id,
+      name: updatedUser.name,
+      email: updatedUser.email,
+      role: updatedUser.role,
+      major: updatedUser.major,
+      year: updatedUser.year,
+      subjects: updatedUser.subjects,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };

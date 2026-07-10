@@ -31,7 +31,7 @@ function ReferralModal({ link, onClose }: { link: string; onClose: () => void })
   const steps = [
     { number: "01", title: "Share your link", description: "Send your invite link to a friend via WhatsApp, text, or email." },
     { number: "02", title: "Friend signs up", description: "They create a free Level Up account using your link." },
-    { number: "03", title: "Friend tries the app", description: "They generate their first lesson — the free trial. Just signing up doesn't count." },
+    { number: "03", title: "Friend verifies their email", description: "They click the confirmation link in their inbox — the same step everyone does to log in." },
     { number: "04", title: "You earn a credit", description: "After 3 friends do this, 1 free course credit lands in your account. Then it resets — 3 more friends, another credit." },
   ];
 
@@ -61,7 +61,7 @@ function ReferralModal({ link, onClose }: { link: string; onClose: () => void })
             <Gift className="h-6 w-6 text-white" />
           </div>
           <h2 className="text-lg sm:text-xl font-bold text-white mb-1 pr-9">Invite friends, earn credits</h2>
-          <p className="text-purple-200 text-sm">Every 3 friends who try the app = 1 free course credit. No limit.</p>
+          <p className="text-purple-200 text-sm">Every 3 friends who sign up = 1 free course credit. No limit.</p>
         </div>
 
         {/* Scrollable middle: steps + warning */}
@@ -89,7 +89,7 @@ function ReferralModal({ link, onClose }: { link: string; onClose: () => void })
           <div className="mx-5 mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-2">
             <span className="text-amber-500 shrink-0 mt-0.5">⚠️</span>
             <p className="text-xs text-amber-700 leading-relaxed">
-              <span className="font-semibold">Remember:</span> your friend must generate their first lesson — not just create an account. That's what triggers your referral credit.
+              <span className="font-semibold">Remember:</span> your friend needs to verify their email (the confirmation link we send them) for your credit to count. Just entering their details without confirming won't trigger it.
             </p>
           </div>
         </div>
@@ -172,7 +172,7 @@ export function ReferralCard() {
             style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 2px 8px rgba(99,102,241,0.4)" }}>
             <Sparkles className="h-3.5 w-3.5" />
             Invite a friend & earn a credit
-           
+            <ArrowRight className="h-3.5 w-3.5 ml-auto" />
           </button>
 
           {/* Stats */}

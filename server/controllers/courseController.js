@@ -11,7 +11,7 @@ const Course = require("../models/Course");
 const GenerationLog = require("../models/GenerationLog");
 const User = require("../models/User");
 const sendEmail = require("../services/emailService");
-const { completeReferral } = require("./referralController");
+
 
 // Email subjects can't contain newlines (Resend, and most providers, reject
 // them outright). course.topic is user-supplied — a typed topic or a PDF's
@@ -191,14 +191,6 @@ async function buildLesson(courseId, lesson) {
       const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
       console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready — took ${elapsedMin} min total (scene plan + audio + code).`);
       await logAttempt({ status: "success", stage: "code", errorMessage: null, attemptNumber: attempt });
-
-      // Trigger referral reward check when lesson 1 completes — this is the
-      // moment the referred user has genuinely used the product (free trial
-      // lesson generated), which is our anti-abuse gate for referral credit.
-      if (lesson.lessonNumber === 1) {
-        const course = await Course.findById(courseId).select("userId");
-        if (course) completeReferral(course.userId.toString());
-      }
 
       return;
 

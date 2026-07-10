@@ -2,8 +2,9 @@
 //
 // Referral system — every 3 verified referrals earns the referrer 1 free credit.
 // "Verified" means: the referred user signed up via the referral link AND
-// has generated at least one lesson (their free trial). This prevents fake
-// account abuse since generating a lesson costs real compute time (~5 min).
+// verified their email. Email verification is the anti-abuse gate — it proves
+// the referred user owns a real inbox — without forcing them to generate a
+// lesson first (that extra step added friction and hurt signup conversion).
 //
 // The cycle repeats indefinitely — 3 friends = 1 credit, then the counter
 // resets. 6 friends = 2 credits, 9 = 3, and so on.
@@ -52,11 +53,11 @@ async function getReferralLink(req, res) {
   }
 }
 
-// ── POST /api/referral/complete ───────────────────────────────────────────────
-// Called internally when a user generates their first lesson (the free trial).
-// Checks if they signed up via a referral code and, if so, credits the referrer.
-// This is called from courseController.js after lesson 1 is confirmed ready —
-// NOT on account creation, to prevent fake-account abuse.
+// ── completeReferral(referredUserId) ─────────────────────────────────────────
+// Called from authController.verifyEmail when a referred user verifies their
+// email. Checks if they signed up via a referral code and, if so, credits the
+// referrer. Awarding on verification (not lesson generation) removes signup
+// friction while still gating on a real, owned email address.
 async function completeReferral(referredUserId) {
   try {
     const referredUser = await User.findById(referredUserId).select(
@@ -103,7 +104,7 @@ async function completeReferral(referredUserId) {
         text: [
           `Hi ${referrer.name || "there"},`,
           ``,
-          `One of your referrals just generated their first lesson — and that was your 3rd!`,
+          `One of your referrals just signed up and verified their email — and that was your 3rd!`,
           `We've added 1 free course credit to your account.`,
           ``,
           `Keep sharing your link to earn more:`,
@@ -116,7 +117,7 @@ async function completeReferral(referredUserId) {
             <img src="${CLIENT_URL}/logo.png" alt="Level Up" style="width: 40px; height: 40px; border-radius: 8px; margin-bottom: 16px;" />
             <h2 style="color: #FF5C49; margin: 0 0 12px;">You earned a free credit! 🎉</h2>
             <p style="color: #9A95AC; margin: 0 0 16px;">
-              One of your referrals just generated their first lesson — that's 3 friends joined!
+              One of your referrals just signed up — that's 3 friends joined!
               We've added <strong style="color: #F6F1E7;">1 free course credit</strong> to your account.
             </p>
             <p style="color: #9A95AC; margin: 0 0 20px;">
