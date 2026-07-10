@@ -18,42 +18,6 @@ const Tutor = require('./models/Tutor');
 
 const app = express();
 
-// ──────────────────────────────────────────────────────────────────────────
-// CORS for audio files — MUST run before the global cors() below.
-//
-// Normal <audio>/<Audio> playback tolerates a missing Access-Control-Allow-
-// Origin header, so this was never needed before. But CLIENT-SIDE video export
-// (renderMediaOnWeb + @remotion/media) fetches each narration file with
-// fetch()/WebCodecs, which enforces CORS strictly. Because it uses Range
-// requests, the browser can send a preflight OPTIONS — and the global cors()
-// package ANSWERS and ENDS preflight requests itself (preflightContinue is
-// false by default). Since its allow-list is only the two app domains,
-// localhost dev (and any other origin) would get a preflight WITHOUT an
-// allow-origin header and be blocked before our own /audio handler ever runs.
-// Running this first means we own the /audio preflight and the GET response.
-//
-// Audio files are already public (shared lesson links serve them), so we echo
-// the request Origin back rather than restricting it. Echoing the exact origin
-// (not "*") keeps it valid alongside credentials. Expose-Headers lets the
-// client read the range/length metadata it needs to decode the audio.
-app.use("/audio", (req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-  } else {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-  }
-  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Range, Content-Type");
-  res.setHeader(
-    "Access-Control-Expose-Headers",
-    "Content-Range, Content-Length, Accept-Ranges, Content-Type"
-  );
-  if (req.method === "OPTIONS") return res.status(204).end();
-  next();
-});
-
 app.use(cors({
   origin: process.env.NODE_ENV === "production"
     ? ["https://levelup-snowy.vercel.app", "https://leveluppedu.app"]
@@ -94,13 +58,12 @@ app.use('/api/referral', require('./routes/referral'))
 
 // Serve audio files for browser playback at /audio/*
 // The browser fetches these directly during Remotion Player playback.
-// (CORS headers for these are set by the /audio middleware near the top of
-// this file, which runs before the global cors() so it can own the preflight.)
 const audioDir = process.env.NODE_ENV === "production"
   ? "/data/audio"
   : path.resolve(__dirname, "../remotion-render/public/audio");
 
 app.use("/audio", express.static(audioDir));
+
 // ──────────────────────────────────────────────────────────────────────────
 // EXPLICIT 404 for missing audio files.
 //

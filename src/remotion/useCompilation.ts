@@ -88,16 +88,7 @@ function collectTopLevelDeclarations(source: string): Set<string> {
   return declared;
 }
 
-export function useCompilation(
-  code: string,
-  // Optional Audio implementation override. Preview (DynamicPlayer) passes
-  // nothing → uses the classic remotion <Audio> via BufferedAudio, with its
-  // broken-URL safety net. Client-side EXPORT passes @remotion/media's <Audio>,
-  // because renderMediaOnWeb only supports that one — the classic <Audio>
-  // throws during client-side rendering. Must be a stable (module-level)
-  // reference so this memo doesn't recompile every render.
-  audioOverride?: React.ComponentType<any>,
-): CompilationResult {
+export function useCompilation(code: string): CompilationResult {
   return useMemo(() => {
     if (!code?.trim()) return { Component: null, error: null };
 
@@ -188,12 +179,7 @@ export function useCompilation(
         `"use strict";\n${transpiled}\nreturn ${exportedName};`
       );
 
-      // For export, swap only the Audio binding to @remotion/media's <Audio>;
-      // everything else in the scope is identical to preview. The key "Audio"
-      // already exists in SCOPE, so the destructure prelude is unchanged.
-      const scope = audioOverride ? { ...SCOPE, Audio: audioOverride } : SCOPE;
-
-      const Component = factory(React, scope);
+      const Component = factory(React, SCOPE);
 
       if (typeof Component !== "function") {
         return { Component: null, error: `Expected a function, got ${typeof Component}` };
@@ -206,5 +192,5 @@ export function useCompilation(
         error: err instanceof Error ? err.message : "Unknown compilation error",
       };
     }
-  }, [code, audioOverride]);
+  }, [code]);
 }
