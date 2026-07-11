@@ -140,7 +140,22 @@ export function initAnalytics(): void {
     persistence: "localStorage+cookie",
 
     loaded: (ph) => {
-      if (import.meta.env.DEV) ph.debug(false); // flip to true to see events in console
+      if (import.meta.env.DEV) {
+        ph.debug(false); // flip to true to see every event in the console
+
+        // Expose PostHog on window in DEV ONLY so you can debug from the browser
+        // console — e.g. posthog.clear_opt_in_out_capturing() to re-show the
+        // cookie banner, or posthog.debug() to log events. It's an ES module
+        // import (bundled by Vite), so it is NOT global by default.
+        (window as unknown as { posthog: typeof ph }).posthog = ph;
+        console.log(
+          "%c[analytics] `posthog` is available in the console (dev only).",
+          "color:#8b5cf6",
+          "\n  posthog.clear_opt_in_out_capturing()  → reset consent, banner shows again on reload" +
+          "\n  posthog.debug()                       → log every event as it fires" +
+          "\n  posthog.has_opted_in_capturing()      → is capturing currently on?"
+        );
+      }
     },
   });
 
