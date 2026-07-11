@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
-import { analyticsDecisionMade, acceptAnalytics, declineAnalytics } from "./analytics";
+import { analyticsDecisionMade, acceptAnalytics, declineAnalytics, analyticsReady } from "./analytics";
 
 // A minimal cookie-consent banner. PostHog is opted-out by default, so until the
 // visitor clicks Accept, nothing is captured and no tracking cookies are set —
 // which is what GDPR-style explicit consent requires. The banner only shows when
-// analytics is active AND the visitor hasn't decided yet; PostHog remembers the
-// choice, so it won't nag on return visits.
+// the visitor hasn't decided yet; PostHog remembers the choice, so it won't nag
+// on return visits.
 export function CookieConsent() {
   const [show, setShow] = useState(false);
+  const ready = analyticsReady();
 
   useEffect(() => {
     if (!analyticsDecisionMade()) setShow(true);
@@ -25,17 +26,27 @@ export function CookieConsent() {
       className="fixed inset-x-0 bottom-0 z-[100] p-3 sm:p-4"
     >
       <div className="mx-auto max-w-3xl rounded-2xl bg-slate-900 text-slate-100 shadow-2xl border border-white/10 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
-        <p className="text-xs sm:text-sm leading-relaxed flex-1 text-slate-300">
-          We use cookies and analytics to understand how Level Up is used and to
-          improve it. You can accept or decline — declining means we won't set
-          analytics cookies.{" "}
-          <a
-            href="/privacy-policy.html"
-            className="underline hover:text-white whitespace-nowrap"
-          >
-            Privacy policy
-          </a>
-        </p>
+        <div className="flex-1">
+          <p className="text-xs sm:text-sm leading-relaxed text-slate-300">
+            We use cookies and analytics to understand how Level Up is used and to
+            improve it. You can accept or decline — declining means we won't set
+            analytics cookies.{" "}
+            <a
+              href="/privacy-policy.html"
+              className="underline hover:text-white whitespace-nowrap"
+            >
+              Privacy policy
+            </a>
+          </p>
+          {/* Dev-only: if PostHog never initialized, accepting does nothing.
+              Say so loudly here instead of failing silently. */}
+          {!ready && import.meta.env.DEV && (
+            <p className="mt-2 text-[11px] text-amber-400">
+              ⚠️ Dev note: PostHog isn't configured — check the console for
+              [analytics] details. Accepting won't capture anything until it's fixed.
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={decline}

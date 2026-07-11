@@ -19,18 +19,88 @@ import posthog from "posthog-js";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const KEY = import.meta.env.VITE_PUBLIC_POSTHOG_KEY as string | undefined;
-const HOST =
+let HOST =
   (import.meta.env.VITE_PUBLIC_POSTHOG_HOST as string | undefined) ||
   "https://us.i.posthog.com";
 
 let started = false;
 
-export function initAnalytics(): void {
-  if (started) return;
+// ── Startup diagnostic ───────────────────────────────────────────────────────
+// Prints ONE clear block to the browser console on every load saying exactly
+// what's configured, what's wrong, and how to fix it. Analytics failures are
+// otherwise silent (the app keeps working, events just never send), which makes
+// them painful to debug — this makes the state impossible to miss.
+function diagnose(): { ok: boolean; problems: string[] } {
+  const problems: string[] = [];
+
   if (!KEY) {
-    console.warn("[analytics] VITE_PUBLIC_POSTHOG_KEY not set — analytics disabled.");
+    problems.push(
+      'VITE_PUBLIC_POSTHOG_KEY is MISSING.\n' +
+      '   → Add it to your .env: VITE_PUBLIC_POSTHOG_KEY=phc_xxxxx\n' +
+      '   → Get it from PostHog → Settings → Project → "Project API Key".\n' +
+      '   → Then RESTART the dev server (Vite only reads .env at startup).'
+    );
+  } else if (KEY.startsWith("phx_")) {
+    problems.push(
+      `VITE_PUBLIC_POSTHOG_KEY is the WRONG KEY TYPE (starts with "phx_").\n` +
+      '   → "phx_" is a PERSONAL API key (management API). It causes 401/404 errors.\n' +
+      '   → You need the PROJECT API key, which starts with "phc_".\n' +
+      '   → PostHog → Settings → Project → "Project API Key". Then restart the dev server.'
+    );
+  } else if (!KEY.startsWith("phc_")) {
+    problems.push(
+      `VITE_PUBLIC_POSTHOG_KEY doesn't look right (should start with "phc_").\n` +
+      '   → Copy the "Project API Key" from PostHog → Settings → Project.'
+    );
+  }
+
+  if (!/^https?:\/\//.test(HOST)) {
+    problems.push(
+      `VITE_PUBLIC_POSTHOG_HOST is not a valid URL (got: "${HOST}").\n` +
+      '   → It must be an absolute URL: https://us.i.posthog.com (or https://eu.i.posthog.com).\n' +
+      '   → It is NOT your own domain and NOT the API key.\n' +
+      '   → Falling back to https://us.i.posthog.com for now.'
+    );
+    HOST = "https://us.i.posthog.com";
+  }
+
+  return { ok: problems.length === 0, problems };
+}
+
+function logDiagnostic(result: { ok: boolean; problems: string[] }) {
+  const mask = (k?: string) => (k ? `${k.slice(0, 8)}…${k.slice(-4)} (${k.length} chars)` : "MISSING");
+
+  if (result.ok) {
+    console.log(
+      "%c[analytics] PostHog configured ✅",
+      "color:#22c55e;font-weight:bold",
+      `\n  key:  ${mask(KEY)}\n  host: ${HOST}\n  Note: capturing starts only AFTER you click "Accept" on the cookie banner.`
+    );
     return;
   }
+
+  console.group("%c[analytics] PostHog is NOT working ❌", "color:#ef4444;font-weight:bold;font-size:13px");
+  console.log("Current values:");
+  console.log("  VITE_PUBLIC_POSTHOG_KEY :", mask(KEY));
+  console.log("  VITE_PUBLIC_POSTHOG_HOST:", HOST || "MISSING");
+  console.log("\nProblem(s) found:");
+  result.problems.forEach((p, i) => console.log(`\n${i + 1}. ${p}`));
+  console.log(
+    "\nAlso note: the cookie banner is HIDDEN when analytics can't start.\n" +
+    "Fix the above, restart the dev server, and open an incognito window — the banner will appear."
+  );
+  console.groupEnd();
+}
+
+export function initAnalytics(): void {
+  if (started) return;
+
+  const result = diagnose();
+  logDiagnostic(result);
+
+  // Without a usable key we cannot init — bail (app still runs, analytics off).
+  if (!KEY) return;
+
   started = true;
 
   posthog.init(KEY, {
@@ -118,10 +188,17 @@ export function track(event: string, props?: Record<string, unknown>): void {
 // gates all capturing and cookies. Returning visitors' choices are remembered
 // by PostHog, so the banner only shows until they've decided once.
 
+/** True if PostHog actually initialized (valid key present). */
+export function analyticsReady(): boolean {
+  return started;
+}
+
 /** True once the visitor has explicitly accepted OR declined (so hide banner).
- *  Also true when analytics is disabled entirely (no key) — nothing to consent to. */
+ *  If analytics never started (bad/missing key), returns false so the banner
+ *  still renders — otherwise a misconfiguration silently hides it and you can't
+ *  tell the difference between "already consented" and "analytics is broken". */
 export function analyticsDecisionMade(): boolean {
-  if (!started) return true;
+  if (!started) return false;
   return posthog.has_opted_in_capturing() || posthog.has_opted_out_capturing();
 }
 
