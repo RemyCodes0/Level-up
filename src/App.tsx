@@ -19,6 +19,7 @@ import AdminUsersPage from './admin/Users'
 import AdminSessionsPage from './admin/Sessions'
 import AdminApplicationsPage from './admin/Application'
 import AdminAnalyticsPage from './admin/Analytics'
+import AdminEmailPage from './admin/EmailComposer'
 import TutorProfilePage from './tutors/tutors-detail/tutors-detail'
 import MessagesPage from './messages/Messages'
 import BookSessionPage from './book/Book'
@@ -65,6 +66,7 @@ function App() {
       <Route path="/admin/sessions" element={<AdminSessionsPage/>}/>
       <Route path="/admin/applications" element={<AdminApplicationsPage/>}/>
       <Route path="/admin/analytics" element={<AdminAnalyticsPage/>}/>
+      <Route path="/admin/email" element={<AdminEmailPage/>}/>
       <Route path="/messages" element={<MessagesPage/>}/>
       <Route path="/book/:id" element={<BookSessionPage/>}/>
       <Route path="/apply" element={<ApplyTutorPage/>}/>

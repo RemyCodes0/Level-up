@@ -30,6 +30,12 @@ const UserSchema = new mongoose.Schema({
   // ── AI Course Credits ──────────────────────────────────────────────────────
   courseCredits: { type: Number, default: 0 },      // paid credits
   freeTrialUsed: { type: Boolean, default: false },  // has used the 1 free course
+
+  // ── Email preferences ──────────────────────────────────────────────────────
+  // When true, this user is excluded from broadcast/marketing emails. Set via
+  // the one-click unsubscribe link appended to every broadcast. Transactional
+  // emails (verification, referral) ignore this flag.
+  emailUnsubscribed: { type: Boolean, default: false },
 }, { timestamps: true });
 
 UserSchema.pre('save', async function (next) {

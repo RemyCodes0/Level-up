@@ -51,6 +51,8 @@ app.use('/api/feedback', feedbackRoutes);
 app.use('/api/export', exportRoutes)
 app.use('/api/assessment', require('./routes/assessment'))
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/admin/email', require('./routes/adminEmail'));
+app.use('/api/email', require('./routes/email'));
 app.use('/api/showcase', require('./routes/showcase'));
 app.use('/api/payment', require('./routes/payment'));
 app.use('/api/referral', require('./routes/referral'))
