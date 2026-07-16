@@ -69,7 +69,7 @@ function App() {
       <Route path="/tutor/dashboard" element={<TutorDashboardPage/>}/>
       <Route path="/tutor/earnings" element={<TutorEarningsPage/>}/>
       <Route path="/tutor/availability" element={<TutorAvailabilityPage/>}/>
-      <Route path="/price" element={<PricingPage/>}/>
+      <Route path="/price" element={<PricingPage/>}/> 
       <Route path="/tutor/profile" element={<TutorProfileEditPage/>}/>
       <Route path="/tutor/sessions" element={<TutorSessionsPage/>}/>
       <Route path="/admin/dashboard" element={<AdminDashboardPage/>}/>
