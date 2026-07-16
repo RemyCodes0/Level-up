@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "@/lib/auth-context";
 import { Navbar } from "@/components/navbar/Navbar";
+import { PageMeta } from "@/components/PageMeta";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -74,6 +75,7 @@ export default function BookSessionPage() {
   if (!tutor) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center">
+        <PageMeta title="Book a Session | Level Up AI" noindex />
         <Navbar />
         <div className="container mx-auto px-4 py-8">
           <Card className="max-w-md mx-auto border-none shadow-lg">
@@ -144,6 +146,7 @@ export default function BookSessionPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
+      <PageMeta title="Book a Session | Level Up AI" noindex />
       <Navbar />
       <div className="container mx-auto px-4 py-8">
         <Button

@@ -10,6 +10,7 @@ import { getShowcaseCourses } from "../api/CourseApi";
 import type { CourseFromAPI } from "../api/CourseApi";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
 import { FeedbackModal } from "../feedback/FeedBackModel";
+import { PageMeta } from "../components/PageMeta";
 
 // ── Subject-coded accents — one per course card, not one repeated brand color ──
 // Cycles if there are ever more than 6 courses; stable assignment by index.
@@ -62,8 +63,12 @@ export default function ShowcasePage() {
 
   return (
     <div style={{ background: "#FAF8F3", minHeight: "100vh" }}>
+      <PageMeta
+        title="Course Catalog — Real AI-Generated Lessons | Level Up"
+        description="Six real courses, dozens of animated lessons — every one generated end to end by AI, narrated, animated, and quizzed. Browse the catalog and press play."
+        canonical="/ai_showcase"
+      />
       <Helmet>
-        <title>Course Catalog — Real AI-Generated Lessons | Level Up</title>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
           href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"

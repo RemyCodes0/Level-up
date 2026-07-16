@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { useNavigate } from "react-router-dom"
 import { Navbar } from "@/components/navbar/Navbar"
+import { PageMeta } from "@/components/PageMeta"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -92,6 +93,7 @@ export default function MessagesPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
+        <PageMeta title="Messages | Level Up AI" noindex />
         <Navbar />
         <div className="container mx-auto px-4 py-8">
           <div className="text-center">Loading...</div>

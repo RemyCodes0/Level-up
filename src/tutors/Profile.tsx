@@ -3,6 +3,7 @@
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Navbar } from "@/components/navbar/Navbar";
+import { PageMeta } from "@/components/PageMeta";
 import {
   Card,
   CardContent,
@@ -259,6 +260,7 @@ export default function TutorProfileEditPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      <PageMeta title="Edit Tutor Profile | Level Up AI" noindex />
       <Navbar />
 
       {/* Header band */}

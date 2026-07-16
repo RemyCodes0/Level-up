@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
+import { PageMeta } from "@/components/PageMeta";
 
 type Mode = "individual" | "broadcast";
 type Audience = "all" | "learners" | "tutors";
@@ -117,6 +118,7 @@ export default function EmailComposer() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
+      <PageMeta title="Admin — Compose Email | Level Up AI" noindex />
       <div className="max-w-6xl mx-auto px-5 py-8">
         {/* Header */}
         <div className="mb-8">

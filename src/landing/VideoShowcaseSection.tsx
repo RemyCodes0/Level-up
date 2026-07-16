@@ -223,7 +223,7 @@ function InputScreen({ active }: { active: boolean }) {
             <div style={{ width: "16px", height: "16px", borderRadius: "50%", border: "1.5px solid #D1D5DB", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <span style={{ fontSize: "10px", color: "#9CA3AF" }}>+</span>
             </div>
-            PDF (10MB, 30 pages max) · PPTX (convert to PDF before uploading)
+            PDF (100 pages max) · PPTX — up to 25MB
           </div>
           <div style={{ width: "28px", height: "28px", borderRadius: "8px", background: done ? "#6366F1" : "#E5E7EB", display: "flex", alignItems: "center", justifyContent: "center", transition: "background 0.3s" }}>
             <ArrowUp style={{ width: "14px", height: "14px", color: done ? "#fff" : "#9CA3AF" }} />

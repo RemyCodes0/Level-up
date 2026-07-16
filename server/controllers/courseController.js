@@ -4,12 +4,14 @@ const path = require("path");
 const {
   generateCoursePlan,
   generateLessonCode,
+  generateNextCourseSuggestions,
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
 const { generateAllSceneAudio } = require("../services/ttsService");
 const Course = require("../models/Course");
 const GenerationLog = require("../models/GenerationLog");
 const User = require("../models/User");
+const QuizAttempt = require("../models/QuizAttempt");
 const sendEmail = require("../services/emailService");
 
 
@@ -68,6 +70,7 @@ async function generateCourseHandler(req, res) {
   try {
     const topic = req.body.topic || "";
     const pdfBuffer = req.file?.buffer ?? null;
+    const sourceFileName = req.file?.originalname ?? null;
     // Level from the optional pre-course chat ("beginner"|"intermediate"|
     // "advanced"). Absent/empty if the user skipped the chat.
     const level = req.body.level || null;
@@ -98,7 +101,7 @@ async function generateCourseHandler(req, res) {
     notifyCourseGenerated({ course, user: req.user, isFreeTrialCourse: !!req.usingFreeTrial });
 
     res.json({ courseId: course._id, status: "generating" });
-    processCourse(course._id.toString(), topic, pdfBuffer, !!req.usingFreeTrial, level);
+    processCourse(course._id.toString(), topic, pdfBuffer, !!req.usingFreeTrial, level, sourceFileName);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to start course generation" });
@@ -179,10 +182,24 @@ async function buildLesson(courseId, lesson) {
         totalFrames
       );
 
+      // Scene boundaries for replay analytics (Progress model) — computed
+      // from the same measuredScenes the code generator just used, in the
+      // same order they're laid out in the compiled <Series>. This is the
+      // only place this timing data is available; it's gone once the scenes
+      // array itself isn't kept (only totalFrames survives on the lesson
+      // otherwise).
+      let cursor = 0;
+      const sceneMeta = measuredScenes.map((s, i) => {
+        const startFrame = cursor;
+        cursor += s.durationInFrames;
+        return { index: i, startFrame, endFrame: cursor, label: s.onScreenText || `Scene ${i + 1}` };
+      });
+
       await Course.findByIdAndUpdate(courseId, {
         $set: {
           [`lessons.${lesson.lessonNumber - 1}.code`]: tsxCode,
           [`lessons.${lesson.lessonNumber - 1}.totalFrames`]: totalFrames,
+          [`lessons.${lesson.lessonNumber - 1}.scenes`]: sceneMeta,
           [`lessons.${lesson.lessonNumber - 1}.status`]: "ready",
           [`lessons.${lesson.lessonNumber - 1}.error`]: null,
         },
@@ -239,11 +256,11 @@ async function buildLessonsInPairs(courseId, lessons) {
 // isFreeTrialCourse is still recorded on the course document for analytics
 // and the frontend's "this was a free trial" UI/feedback-prompt logic, but
 // it NO LONGER affects generation — every course builds all 6 lessons.
-async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = false, level = null) {
+async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = false, level = null, sourceFileName = null) {
   const courseStart = Date.now();
   try {
     console.log(`[${courseId}] Generating course plan...`);
-    const { lessons, questions } = await generateCoursePlan(topic, null, pdfBuffer, level);
+    const { lessons, questions } = await generateCoursePlan(topic, null, pdfBuffer, sourceFileName, level);
 
     await Course.findByIdAndUpdate(courseId, {
       lessons: lessons.map((l) => ({
@@ -335,21 +352,154 @@ async function generateShareLinkHandler(req, res) {
 // Keeps the same shareToken in the database (so re-sharing later doesn't
 // invalidate a link that was already sent out and then paused), but flips
 // isShared to false so the public endpoint below stops serving it.
+//
+// Also cascades to isPublished: a published gallery listing links straight
+// to the /shared/:shareToken page (see publishCourseHandler) — if the link
+// itself stops working, leaving the gallery entry up would just be a dead
+// link in a public listing. Unsharing always fully removes a course from
+// public view; the reverse isn't true (see unpublishCourseHandler).
 async function unshareCourseHandler(req, res) {
   try {
     const course = await Course.findOneAndUpdate(
       { _id: req.params.courseId, userId: req.user._id },
-      { $set: { isShared: false } },
+      { $set: { isShared: false, isPublished: false } },
       { new: true }
     );
     if (!course) {
       res.status(404).json({ error: "Course not found" });
       return;
     }
-    res.json({ isShared: false });
+    res.json({ isShared: false, isPublished: false });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to unshare course" });
+  }
+}
+
+// ── Publish a course to the public gallery (owner-only) ─────────────────────
+// Publishing implies sharing: the gallery links each card straight to the
+// existing /shared/:shareToken viewer, so publishing ensures a share token
+// exists and is active (reusing generateShareLinkHandler's same lazy-create
+// logic) before flipping isPublished on. publishedAt is stamped fresh on
+// every publish call — including re-publishing after an unpublish — so a
+// course a user brings back gets fresh gallery visibility rather than
+// keeping its original (possibly ancient) position in the recency sort.
+async function publishCourseHandler(req, res) {
+  try {
+    const course = await Course.findOne({
+      _id: req.params.courseId,
+      userId: req.user._id,
+    });
+    if (!course) {
+      res.status(404).json({ error: "Course not found" });
+      return;
+    }
+    if (course.status !== "ready") {
+      res.status(400).json({ error: "Only a fully-generated course can be published." });
+      return;
+    }
+
+    if (!course.shareToken) {
+      course.shareToken = crypto.randomBytes(12).toString("hex");
+    }
+    course.isShared = true;
+    course.isPublished = true;
+    course.publishedAt = new Date();
+    await course.save();
+
+    res.json({
+      isPublished: true,
+      publishedAt: course.publishedAt,
+      shareUrl: `${process.env.CLIENT_URL}/shared/${course.shareToken}`,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to publish course" });
+  }
+}
+
+// ── Remove a course from the public gallery (owner-only) ────────────────────
+// Delists only — does NOT touch isShared/shareToken, so a direct link the
+// owner already shared keeps working. To fully revoke access, use unshare.
+async function unpublishCourseHandler(req, res) {
+  try {
+    const course = await Course.findOneAndUpdate(
+      { _id: req.params.courseId, userId: req.user._id },
+      { $set: { isPublished: false } },
+      { new: true }
+    );
+    if (!course) {
+      res.status(404).json({ error: "Course not found" });
+      return;
+    }
+    res.json({ isPublished: false });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to unpublish course" });
+  }
+}
+
+// ── Keyset pagination cursor (opaque to the client) ──────────────────────────
+// Encodes the (publishedAt, _id) of the last row on a page, so the next page
+// can resume with "everything after this point" instead of skip/limit's
+// "everything before this point, discarded" — the difference that keeps
+// this O(limit) per page at any depth instead of O(page * limit).
+function encodeCursor(course) {
+  return Buffer.from(JSON.stringify({ p: course.publishedAt, id: course._id.toString() })).toString("base64url");
+}
+function decodeCursor(raw) {
+  try {
+    const { p, id } = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+    if (!p || !id) return null;
+    return { publishedAt: new Date(p), id };
+  } catch {
+    return null;
+  }
+}
+
+// ── Public gallery: search + paginate published courses (no auth) ───────────
+// ?q= optional search term (matched against topic via the isPublished+topic
+// text index) — result set is always sorted by recency (publishedAt), not
+// text relevance, so the same keyset cursor logic works identically whether
+// or not a search term is present.
+async function listPublicCoursesHandler(req, res) {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 50);
+    const q = (req.query.q || "").trim();
+    const cursor = req.query.cursor ? decodeCursor(req.query.cursor) : null;
+
+    const filter = { isPublished: true };
+    if (q) filter.$text = { $search: q };
+    if (cursor) {
+      filter.$or = [
+        { publishedAt: { $lt: cursor.publishedAt } },
+        { publishedAt: cursor.publishedAt, _id: { $lt: cursor.id } },
+      ];
+    }
+
+    const rows = await Course.find(filter)
+      .select("topic publishedAt userId shareToken")
+      .sort({ publishedAt: -1, _id: -1 })
+      .limit(limit + 1)
+      .populate("userId", "name")
+      .lean();
+
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+
+    res.json({
+      courses: page.map((c) => ({
+        _id: c._id,
+        topic: c.topic,
+        publishedAt: c.publishedAt,
+        shareUrl: `/shared/${c.shareToken}`,
+        author: c.userId?.name || "Anonymous",
+      })),
+      nextCursor: hasMore ? encodeCursor(page[page.length - 1]) : null,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load the public gallery" });
   }
 }
 
@@ -416,23 +566,23 @@ async function deleteCourseHandler(req, res) {
       return;
     }
 
-    for (const lesson of course.lessons || []) {
-      if (lesson.scenes) {
-        for (const scene of lesson.scenes) {
-          try {
-            if (scene.audioUrl) {
-              const fileName = scene.audioUrl.split("/audio/")[1];
-              if (fileName) {
-                const filePath = path.join(AUDIO_DIR, fileName);
-                if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-              }
-            }
-          } catch (e) {
-            console.error("Failed to delete audio file (non-fatal):", e.message);
-          }
-        }
-      }
-    }
+    // Collect every audio file path first, then delete them all in parallel
+    // off the event loop (fs.promises.unlink instead of the old
+    // fs.existsSync + fs.unlinkSync pair, which blocked the whole server —
+    // not just this request — once per scene, sequentially).
+    const filePaths = (course.lessons || [])
+      .flatMap((lesson) => lesson.scenes || [])
+      .map((scene) => scene.audioUrl?.split("/audio/")[1])
+      .filter(Boolean)
+      .map((fileName) => path.join(AUDIO_DIR, fileName));
+
+    await Promise.all(
+      filePaths.map((filePath) =>
+        fs.promises.unlink(filePath).catch((e) => {
+          if (e.code !== "ENOENT") console.error("Failed to delete audio file (non-fatal):", e.message);
+        })
+      )
+    );
 
     await Course.deleteOne({ _id: course._id });
     res.json({ success: true });
@@ -582,6 +732,37 @@ async function unlockRemainingLessonsHandler(req, res) {
   }
 }
 
+// ── Continuous learning: "what should I learn next?" ────────────────────────
+// GET /api/course/:courseId/next-suggestions — owner-only. Works for ANY
+// finished course, solo or collaborative, not just rooms — this is what
+// turns course generation into an ongoing curriculum instead of one-off
+// requests. Weak topics (if the user has taken the quiz) steer the
+// suggestions toward reinforcing what they actually struggled with.
+async function getNextSuggestionsHandler(req, res) {
+  try {
+    const course = await Course.findOne({ _id: req.params.courseId, userId: req.user._id })
+      .select("topic status")
+      .lean();
+    if (!course) return res.status(404).json({ error: "Course not found" });
+    if (course.status !== "ready") {
+      return res.status(400).json({ error: "This course isn't finished generating yet" });
+    }
+
+    const latestAttempt = await QuizAttempt.findOne({ userId: req.user._id, courseId: course._id })
+      .sort({ submittedAt: -1 })
+      .lean();
+    const weakTopics = latestAttempt
+      ? latestAttempt.topicBreakdown.filter((t) => t.pct < 70).map((t) => t.topic)
+      : [];
+
+    const suggestions = await generateNextCourseSuggestions(course.topic, weakTopics);
+    res.json({ suggestions });
+  } catch (err) {
+    console.error("getNextSuggestionsHandler error:", err);
+    res.status(500).json({ error: "Failed to generate suggestions" });
+  }
+}
+
 module.exports = {
   generateCourseHandler,
   getCourseStatusHandler,
@@ -591,6 +772,15 @@ module.exports = {
   retryLessonHandler,
   unlockRemainingLessonsHandler,
   generateShareLinkHandler,
+  // Exported for collabController.js — creating a collaborative room's
+  // shared course reuses this exact background generation flow (scene plan
+  // -> audio -> code, per lesson) rather than duplicating it.
+  processCourse,
+  buildLesson,
   unshareCourseHandler,
   getSharedCourseHandler,
+  publishCourseHandler,
+  unpublishCourseHandler,
+  listPublicCoursesHandler,
+  getNextSuggestionsHandler,
 };

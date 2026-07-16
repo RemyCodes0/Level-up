@@ -19,6 +19,9 @@ export interface LessonFromAPI {
   totalFrames: number | null;
   status: "rendering" | "ready" | "failed" | "locked";
   error?: string | null;
+  // True for a lesson generated from a collaborative room's group quiz
+  // weaknesses (see remedialService.js) rather than the original course plan.
+  isRemedial?: boolean;
 }
 
 export interface QuestionFromAPI {
@@ -37,6 +40,9 @@ export interface CourseFromAPI {
   questions: QuestionFromAPI[];
   createdAt?: string;
   isFreeTrialCourse?: boolean;
+  isShared?: boolean;
+  isPublished?: boolean;
+  publishedAt?: string | null;
 }
 
 // ── Start course generation — returns courseId immediately ───────────────────
@@ -119,6 +125,74 @@ export async function unlockCourse(courseId: string): Promise<{ ok: true; messag
 export async function getShowcaseCourses(): Promise<CourseFromAPI[]> {
   const res = await fetch(`${BASE_URL}/api/course/showcase`);
   if (!res.ok) throw new Error("Failed to load showcase courses");
+  return res.json();
+}
+
+// ── Continuous learning: AI-suggested next courses ───────────────────────────
+export interface NextCourseSuggestion {
+  topic: string;
+  reason: string;
+}
+
+export async function getNextSuggestions(courseId: string): Promise<NextCourseSuggestion[]> {
+  const res = await fetch(`${BASE_URL}/api/course/${courseId}/next-suggestions`, {
+    headers: { ...authHeaders() },
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to load suggestions");
+  return data.suggestions;
+}
+
+// ── Publish / unpublish a course to the public gallery (owner-only) ─────────
+export interface PublishResult {
+  isPublished: true;
+  publishedAt: string;
+  shareUrl: string;
+}
+
+export async function publishCourse(courseId: string): Promise<PublishResult> {
+  const res = await fetch(`${BASE_URL}/api/course/${courseId}/publish`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to publish course");
+  return data;
+}
+
+export async function unpublishCourse(courseId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/course/${courseId}/publish`, {
+    method: "DELETE",
+    headers: { ...authHeaders() },
+  });
+  if (!res.ok) throw new Error("Failed to unpublish course");
+}
+
+// ── Public gallery: search + paginate published courses (no auth) ───────────
+export interface PublicGalleryCourse {
+  _id: string;
+  topic: string;
+  publishedAt: string;
+  shareUrl: string;
+  author: string;
+}
+
+export interface PublicGalleryResult {
+  courses: PublicGalleryCourse[];
+  nextCursor: string | null;
+}
+
+export async function listPublicCourses(
+  q = "",
+  cursor: string | null = null,
+  limit = 12
+): Promise<PublicGalleryResult> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (q) params.set("q", q);
+  if (cursor) params.set("cursor", cursor);
+
+  const res = await fetch(`${BASE_URL}/api/course/public?${params.toString()}`);
+  if (!res.ok) throw new Error("Failed to load the public gallery");
   return res.json();
 }
 

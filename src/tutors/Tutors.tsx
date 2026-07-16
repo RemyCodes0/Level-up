@@ -181,12 +181,12 @@ export default function TutorsPage() {
 
   <meta
     property="og:url"
-    content="https://levelup-snowy.vercel.app/tutors"
+    content="https://leveluppedu.app/tutors"
   />
 
   <link
     rel="canonical"
-    href="https://levelup-snowy.vercel.app/tutors"
+    href="https://leveluppedu.app/tutors"
   />
 </Helmet>
       <Navbar />

@@ -42,4 +42,6 @@ const TutorApplicationSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+TutorApplicationSchema.index({ status: 1 });
+
 module.exports = mongoose.model("TutorApplication", TutorApplicationSchema);

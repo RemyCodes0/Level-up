@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Navbar } from "@/components/navbar/Navbar";
+import { PageMeta } from "@/components/PageMeta";
 import {
   Card,
   CardContent,
@@ -179,6 +180,7 @@ export default function TutorDashboardPage() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        <PageMeta title="Tutor Dashboard | Level Up AI" noindex />
         <Navbar />
         <div className="container mx-auto px-4 py-8">
           <div className="flex items-center justify-center h-96">

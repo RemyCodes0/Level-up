@@ -15,6 +15,12 @@ interface DynamicPlayerProps {
   onEnded?: () => void;
   onRetry?: () => void;
   retrying?: boolean;
+  // Fires when playback jumps backward by more than a couple seconds (a
+  // deliberate re-watch, not the small backward drift that can happen at a
+  // loop boundary) — the new frame position, for the caller to bucket into
+  // "which scene got replayed" using the lesson's persisted scene
+  // boundaries. Used for collaborative-room replay analytics.
+  onSeekBack?: (frame: number) => void;
 }
 
 const FPS = 30;
@@ -276,6 +282,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   onEnded,
   onRetry,
   retrying,
+  onSeekBack,
 }) => {
   const playerRef = useRef<PlayerRef>(null);
   // Wraps BOTH the Player and the controls overlay — this is the element we
@@ -411,6 +418,22 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
     player.addEventListener("ended", onEnded);
     return () => player.removeEventListener("ended", onEnded);
   }, [onEnded, Component]);
+
+  // Backward-seek detection for replay analytics — a >45-frame (1.5s)
+  // backward jump between consecutive frameupdate events is a deliberate
+  // rewind, not normal forward playback or minor buffering jitter.
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player || !onSeekBack) return;
+    let lastFrame = 0;
+    const onFrameUpdate = (e: { detail: { frame: number } }) => {
+      const frame = e.detail.frame;
+      if (lastFrame - frame > 45) onSeekBack(frame);
+      lastFrame = frame;
+    };
+    player.addEventListener("frameupdate", onFrameUpdate as any);
+    return () => player.removeEventListener("frameupdate", onFrameUpdate as any);
+  }, [onSeekBack, Component]);
 
   // ── Render-time crash state ────────────────────────────────────────────────
   // useCompilation only catches COMPILE-time errors. Generated code can still

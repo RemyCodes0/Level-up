@@ -6,6 +6,14 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import {
   startCourseGeneration,
   pollCourse,
   listCourses,
@@ -13,13 +21,17 @@ import {
   retryLesson,
   unlockCourse,
   getCourseStatus,
+  getNextSuggestions,
 } from "../api/CourseApi";
-import type { CourseFromAPI } from "../api/CourseApi";
+import type { CourseFromAPI, NextCourseSuggestion } from "../api/CourseApi";
+import { getProgress, markLessonWatched } from "../api/ProgressApi";
+import { submitQuiz as submitQuizApi, getLatestAttempt } from "../api/QuizApi";
+import type { QuizResult } from "../api/QuizApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
 import { ReferralCard } from "../components/ReferralCard";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
-import { analytics } from "../lib/analytics";
+import { analytics, resetUser } from "../lib/analytics";
 
 // Download/export requires headless Chrome + 2GB+ RAM — works locally but
 // OOMs on Render's Starter (512MB). Gate it behind an env var so it only
@@ -30,7 +42,8 @@ import {
   ChevronRight, ChevronLeft, Clock, BarChart2, BookOpen, AlertCircle,
   Award, TrendingUp, TrendingDown, ClipboardList, Trophy,
   X, Check, PanelLeft, PenSquare, GraduationCap, Loader2, Trash2, XCircle,
-  CreditCard, Zap, Minus, Plus, MessageSquare, Share2,
+  CreditCard, Zap, Minus, Plus, MessageSquare, Share2, Globe2,
+  User as UserIcon, LogOut, ChevronsUpDown,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -70,6 +83,11 @@ interface HistoryEntry {
   quizDone: boolean;
   questions: MCQQuestion[];
   isFreeTrialCourse?: boolean;
+  // Server-computed, enriched quiz result (score is re-derived server-side,
+  // never trusted from the client) — set once a submission round-trips or a
+  // prior attempt is restored on load. ResultsSection prefers this over
+  // recomputing from quizAnswers when present.
+  serverQuizResult?: QuizResult | null;
 }
 
 interface Lesson {
@@ -288,6 +306,7 @@ const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
 import { FeedbackModal } from "../feedback/FeedBackModel";
 import { ShareModal } from "../components/ShareModal";
+import { PublishModal } from "../components/PublishModal";
 import { PDFDocument } from "pdf-lib";
 
 function UploadPhase({ onGenerate, credits }: {
@@ -421,7 +440,7 @@ function UploadPhase({ onGenerate, credits }: {
                       <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" />
                     </svg>
                   </button>
-                  <span className="text-xs text-slate-400 ml-1 hidden sm:inline truncate">PDF (10MB, 30 pages max) · PPTX (convert to PDF before uploading)</span>
+                  <span className="text-xs text-slate-400 ml-1 hidden sm:inline truncate">PDF ({MAX_PAGES} pages max) · PPTX — up to 25MB</span>
                   <span className="text-xs text-slate-400 ml-1 sm:hidden">PDF/PPTX</span>
                 </div>
                 <button onClick={handleSubmit} disabled={!canSubmit} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all shrink-0 ${canSubmit ? "bg-slate-900 text-white hover:bg-slate-700" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}>
@@ -444,15 +463,81 @@ function UploadPhase({ onGenerate, credits }: {
   );
 }
 
+// A generation-in-progress preview, in the spirit of v0.dev's build
+// animation: instead of a bare spinner, it shows the thing actually being
+// assembled — a filmstrip of scene blocks lighting up in sequence (the
+// lesson's scenes being storyboarded), a narration waveform pulsing (the
+// voiceover being recorded), and a caption that cycles through the real
+// pipeline stages (scene plan -> audio -> animation code) rather than one
+// static "loading" message the whole time.
+const GENERATION_PHASES = ["Planning the scenes…", "Writing narration…", "Recording the voiceover…", "Animating the lesson…"];
+const SCENE_BLOCK_COUNT = 8;
+
+function GeneratingLessonPreview() {
+  const [phase, setPhase] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setPhase((p) => (p + 1) % GENERATION_PHASES.length), 3000);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="relative rounded-xl overflow-hidden shadow-xl border border-slate-800 bg-slate-950 aspect-video flex flex-col items-center justify-center text-center px-4 sm:px-6">
+      <style>{`
+        @keyframes lgp-shimmer { 0% { transform: translateX(-120%); } 100% { transform: translateX(220%); } }
+        @keyframes lgp-block { 0%, 100% { opacity: 0.35; transform: scaleY(0.85); } 50% { opacity: 1; transform: scaleY(1); } }
+        @keyframes lgp-wave { 0%, 100% { height: 18%; } 50% { height: 100%; } }
+        @keyframes lgp-drift { 0% { transform: translate(-10%, -10%); } 100% { transform: translate(10%, 10%); } }
+      `}</style>
+
+      {/* Ambient drifting glow, consistent with the app's dark-surface accents elsewhere */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div
+          className="absolute -top-1/2 left-1/2 h-[160%] w-[160%] rounded-full bg-blue-600/10 blur-3xl"
+          style={{ animation: "lgp-drift 6s ease-in-out infinite alternate" }}
+        />
+      </div>
+
+      {/* Filmstrip — scene blocks building in, staggered */}
+      <div className="relative z-10 flex items-center gap-1.5 sm:gap-2 mb-6">
+        {Array.from({ length: SCENE_BLOCK_COUNT }).map((_, i) => (
+          <div
+            key={i}
+            className="relative w-6 h-9 sm:w-8 sm:h-12 rounded-[3px] bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden"
+            style={{ animation: "lgp-block 2.4s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
+          >
+            <div
+              className="absolute inset-0 w-1/3 bg-gradient-to-r from-transparent via-white/40 to-transparent"
+              style={{ animation: "lgp-shimmer 2.4s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
+            />
+          </div>
+        ))}
+      </div>
+
+      {/* Narration waveform */}
+      <div className="relative z-10 flex items-end justify-center gap-[3px] h-7 sm:h-8 mb-5 w-40 sm:w-48">
+        {Array.from({ length: 20 }).map((_, i) => (
+          <div
+            key={i}
+            className="w-[3px] rounded-full bg-blue-400/80"
+            style={{ animation: "lgp-wave 1s ease-in-out infinite", animationDelay: `${(i % 7) * 0.09}s` }}
+          />
+        ))}
+      </div>
+
+      <p className="relative z-10 text-white font-semibold text-base sm:text-lg flex items-center gap-2">
+        <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 text-blue-400" />
+        {GENERATION_PHASES[phase]}
+      </p>
+      <p className="relative z-10 text-white/50 text-xs sm:text-sm mt-1">This usually takes about 6 minutes.</p>
+    </div>
+  );
+}
+
 function VideoPlayer({ lesson, onComplete, onRetry, retrying, courseId, lessonNumber }: { lesson: Lesson; onComplete: () => void; onRetry?: () => void; retrying?: boolean; courseId: string | null; lessonNumber: number }) {
   if (!lesson.code) {
     return (
       <div className="space-y-4">
-        <div className="rounded-xl overflow-hidden shadow-xl border border-slate-200 bg-slate-900 aspect-video flex flex-col items-center justify-center text-center px-4 sm:px-6">
-          <Loader2 className="h-8 w-8 sm:h-10 sm:w-10 text-blue-400 animate-spin mb-4" />
-          <p className="text-white font-semibold text-base sm:text-lg">Preparing this lesson…</p>
-          <p className="text-white/60 text-xs sm:text-sm mt-1">Your lesson is being generated. This usually takes about 6 minutes.</p>
-        </div>
+        <GeneratingLessonPreview />
         <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
           <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
           <ul className="space-y-2">
@@ -466,9 +551,17 @@ function VideoPlayer({ lesson, onComplete, onRetry, retrying, courseId, lessonNu
       </div>
     );
   }
+  const handleEnded = () => {
+    onComplete();
+    // Persists watched state server-side — before this, "completed" was
+    // pure client state (see the old markComplete) and reset to false on
+    // every refresh. courseId is null only for the pre-generation MOCK
+    // preview state, so this never fires for a course that doesn't exist yet.
+    if (courseId) markLessonWatched(courseId, lessonNumber).catch((err) => console.error("Failed to persist watched state:", err));
+  };
   return (
     <div className="space-y-4">
-      <DynamicPlayer key={`lesson-${lessonNumber}`} code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} onEnded={onComplete} onRetry={onRetry} retrying={retrying} />
+      <DynamicPlayer key={`lesson-${lessonNumber}`} code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} onEnded={handleEnded} onRetry={onRetry} retrying={retrying} />
       <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
         <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
         <ul className="space-y-2">
@@ -565,21 +658,40 @@ function QuizSection({ questions, onSubmit }: { questions: MCQQuestion[]; onSubm
   );
 }
 
-function ResultsSection({ answers, questions }: { answers: QuizAnswer[]; questions: MCQQuestion[] }) {
-  const score = answers.filter((a) => { const q = questions.find((q) => q.id === a.questionId); return q && q.correct === a.selected; }).length;
-  const pct = questions.length > 0 ? Math.round((score / questions.length) * 100) : 0;
-  const topicBreakdown = questions.reduce<Record<string, { correct: number; total: number }>>((acc, q) => {
-    const ans = answers.find((a) => a.questionId === q.id);
-    if (!acc[q.topic]) acc[q.topic] = { correct: 0, total: 0 };
-    acc[q.topic].total++;
-    if (ans && ans.selected === q.correct) acc[q.topic].correct++;
-    return acc;
-  }, {});
-  const topics = Object.entries(topicBreakdown).map(([topic, data]) => ({ topic, ...data, pct: Math.round((data.correct / data.total) * 100) })).sort((a, b) => b.pct - a.pct);
+function ResultsSection({
+  answers, questions, serverResult, courseId,
+}: {
+  answers: QuizAnswer[]; questions: MCQQuestion[]; serverResult?: QuizResult | null; courseId?: string | null;
+}) {
+  // Prefer the server-graded result (score is never trusted from the client
+  // — see quizController.js's scoreAnswers) once the submit round-trip has
+  // resolved; fall back to the client computation only for the brief window
+  // before that, so results still render instantly on submit.
+  const clientScore = answers.filter((a) => { const q = questions.find((q) => q.id === a.questionId); return q && q.correct === a.selected; }).length;
+  const clientPct = questions.length > 0 ? Math.round((clientScore / questions.length) * 100) : 0;
+  const clientTopics = Object.entries(
+    questions.reduce<Record<string, { correct: number; total: number }>>((acc, q) => {
+      const ans = answers.find((a) => a.questionId === q.id);
+      if (!acc[q.topic]) acc[q.topic] = { correct: 0, total: 0 };
+      acc[q.topic].total++;
+      if (ans && ans.selected === q.correct) acc[q.topic].correct++;
+      return acc;
+    }, {})
+  ).map(([topic, data]) => ({ topic, ...data, pct: Math.round((data.correct / data.total) * 100) })).sort((a, b) => b.pct - a.pct);
+
+  const score = serverResult?.score ?? clientScore;
+  const total = serverResult?.total ?? questions.length;
+  const pct = serverResult?.pct ?? clientPct;
+  const topics = serverResult
+    ? [...serverResult.topicBreakdown].sort((a, b) => b.pct - a.pct)
+    : clientTopics;
   const strengths = topics.filter((t) => t.pct >= 70);
   const weaknesses = topics.filter((t) => t.pct < 70);
-  const readinessLabel = pct >= 85 ? "Exam Ready" : pct >= 70 ? "Almost Ready" : pct >= 55 ? "Needs Review" : "Needs Tutoring";
+  const readinessLabel = serverResult?.readinessLabel ?? (pct >= 85 ? "Exam Ready" : pct >= 70 ? "Almost Ready" : pct >= 55 ? "Needs Review" : "Needs Tutoring");
   const readinessColor = pct >= 85 ? "emerald" : pct >= 70 ? "blue" : pct >= 55 ? "amber" : "red";
+
+  const [suggestions, setSuggestions] = useState<NextCourseSuggestion[] | null>(null);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -588,7 +700,7 @@ function ResultsSection({ answers, questions }: { answers: QuizAnswer[]; questio
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
               <h2 className="text-lg sm:text-2xl font-bold text-slate-900 flex items-center gap-2"><Award className={`h-5 w-5 sm:h-6 sm:w-6 text-${readinessColor}-600 shrink-0`} />Your Learning Readiness Score</h2>
-              <p className="text-muted-foreground mt-1 text-sm sm:text-base">{score} / {questions.length} correct</p>
+              <p className="text-muted-foreground mt-1 text-sm sm:text-base">{score} / {total} correct</p>
             </div>
             <div className="text-center">
               <div className={`text-4xl sm:text-5xl font-black text-${readinessColor}-600`}>{pct}%</div>
@@ -600,6 +712,13 @@ function ResultsSection({ answers, questions }: { answers: QuizAnswer[]; questio
               <div className={`bg-${readinessColor}-500 h-3 rounded-full transition-all duration-1000`} style={{ width: `${pct}%` }} />
             </div>
           </div>
+
+          {serverResult?.trend && (
+            <div className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+              <TrendingUp className={`h-4 w-4 ${serverResult.trend.delta >= 0 ? "text-emerald-600" : "text-red-500 rotate-180"}`} />
+              {serverResult.trend.delta > 0 ? "+" : ""}{serverResult.trend.delta}% vs. your last attempt ({serverResult.trend.previousPct}%) · attempt #{serverResult.trend.attemptNumber}
+            </div>
+          )}
         </div>
         <div className="p-4 sm:p-6">
           <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2 text-sm sm:text-base"><BarChart2 className="h-4 w-4 text-slate-500 shrink-0" /> Topic breakdown</h3>
@@ -642,11 +761,125 @@ function ResultsSection({ answers, questions }: { answers: QuizAnswer[]; questio
           )}
         </Card>
       </div>
+
+      {serverResult && serverResult.missedQuestions.length > 0 && (
+        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
+          <h3 className="font-semibold text-slate-800 mb-3 text-sm sm:text-base">Review missed questions ({serverResult.missedQuestions.length})</h3>
+          <div className="space-y-3">
+            {serverResult.missedQuestions.map((m) => (
+              <div key={m.questionId} className="border-l-2 border-red-300 pl-3">
+                <p className="text-sm font-medium text-slate-800">{m.question}</p>
+                <p className="text-xs text-slate-500 mt-1">Your answer: <span className="text-red-500">{m.yourAnswer ?? "No answer"}</span></p>
+                <p className="text-xs text-slate-500">Correct answer: <span className="text-emerald-600">{m.correctAnswer}</span></p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {courseId && (
+        <Card className="border-0 shadow-md bg-gradient-to-r from-blue-50 to-indigo-50 p-4 sm:p-5">
+          {!suggestions ? (
+            <button
+              onClick={() => {
+                setLoadingSuggestions(true);
+                getNextSuggestions(courseId).then(setSuggestions).catch(() => setSuggestions([])).finally(() => setLoadingSuggestions(false));
+              }}
+              disabled={loadingSuggestions}
+              className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-blue-700"
+            >
+              {loadingSuggestions ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              What should I learn next?
+            </button>
+          ) : (
+            <>
+              <h3 className="font-semibold text-slate-800 mb-3 text-sm flex items-center gap-2"><Sparkles className="h-4 w-4 text-blue-600" /> Continue your learning journey</h3>
+              {suggestions.length === 0 ? (
+                <p className="text-sm text-slate-500">Couldn't load suggestions right now.</p>
+              ) : (
+                <div className="space-y-2">
+                  {suggestions.map((s, i) => (
+                    <div key={i} className="bg-white rounded-lg border border-slate-100 p-3">
+                      <p className="text-sm font-medium text-slate-800">{s.topic}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">{s.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </Card>
+      )}
     </div>
   );
 }
 
-function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapsed, onToggle, loading, error, credits, onBuy, isMobile, onFeedback, hasMore, loadingMore, onLoadMore }: {
+// ChatGPT-style account button anchored at the bottom of the sidebar —
+// avatar + name, hover reveals a menu (same controlled-open pattern as the
+// top navbar's user menu in components/navbar/Navbar.tsx, kept in sync so
+// both feel like the same interaction across the app). Opens upward
+// (side="top") since the trigger sits at the bottom of the viewport.
+function SidebarUserMenu({ user, onLogout }: { user: { name: string; email: string; role?: string } | null; onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openMenu = () => { if (closeTimer.current) clearTimeout(closeTimer.current); setOpen(true); };
+  const scheduleClose = () => { if (closeTimer.current) clearTimeout(closeTimer.current); closeTimer.current = setTimeout(() => setOpen(false), 150); };
+  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
+
+  if (!user) return null;
+
+  return (
+    <div className="border-t border-slate-100 p-2">
+      <DropdownMenu open={open} onOpenChange={setOpen}>
+        <DropdownMenuTrigger asChild>
+          <button
+            onMouseEnter={openMenu}
+            onMouseLeave={scheduleClose}
+            className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-slate-100 transition-colors text-left"
+          >
+            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-sm font-semibold shrink-0">
+              {user.name?.charAt(0).toUpperCase() || "?"}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-slate-800 truncate">{user.name}</p>
+            </div>
+            <ChevronsUpDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+          </button>
+        </DropdownMenuTrigger>
+
+        <DropdownMenuContent
+          side="top"
+          align="start"
+          sideOffset={6}
+          className="w-64 p-2"
+          onMouseEnter={openMenu}
+          onMouseLeave={scheduleClose}
+        >
+          <DropdownMenuLabel className="px-2 py-1.5">
+            <p className="text-sm font-semibold text-slate-900 truncate">{user.name}</p>
+            <p className="text-xs text-slate-500 truncate">{user.email}</p>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild className="cursor-pointer rounded-md">
+            <a href="/profile" className="flex items-center gap-2 px-2 py-2">
+              <UserIcon className="h-4 w-4 text-purple-600" />
+              <span className="font-medium">Profile</span>
+            </a>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={onLogout} className="cursor-pointer text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md">
+            <div className="flex items-center gap-2 px-2 py-1">
+              <LogOut className="h-4 w-4" />
+              <span className="font-medium">Sign out</span>
+            </div>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapsed, onToggle, loading, error, credits, onBuy, isMobile, onFeedback, hasMore, loadingMore, onLoadMore, user, onLogout }: {
   history: HistoryEntry[]; activeId: string | null;
   onSelect: (entry: HistoryEntry) => void; onNew: () => void;
   onDelete: (id: string) => void; collapsed: boolean; onToggle: () => void;
@@ -657,6 +890,8 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
+  user: { name: string; email: string; role?: string } | null;
+  onLogout: () => void;
 }) {
   const groups = history.reduce<Record<string, HistoryEntry[]>>((acc, e) => {
     const diffDays = Math.floor((Date.now() - e.createdAt.getTime()) / 86400000);
@@ -799,6 +1034,7 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
           Send feedback
         </button>
       </div>
+      <SidebarUserMenu user={user} onLogout={onLogout} />
     </aside>
     </>
   );
@@ -827,6 +1063,7 @@ export default function AILearningPage() {
   const [quizAnswers, setQuizAnswers] = useState<QuizAnswer[]>([]);
   const [quizQuestions, setQuizQuestions] = useState<MCQQuestion[]>(MOCK_QUESTIONS);
   const [quizDone, setQuizDone] = useState(false);
+  const [serverQuizResult, setServerQuizResult] = useState<QuizResult | null>(null);
   const [courseSidebarOpen, setCourseSidebarOpen] = useState(true);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -863,12 +1100,24 @@ export default function AILearningPage() {
   const [unlockingCourse, setUnlockingCourse] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showPublishModal, setShowPublishModal] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
   const [failureBanner, setFailureBanner] = useState<{ lessonIndex: number; title: string; error: string | null } | null>(null);
   const seenFailuresRef = useRef<Set<number>>(new Set());
 
   const storedUser = localStorage.getItem("user");
   const user = storedUser ? JSON.parse(storedUser) : null;
+
+  // Same sign-out sequence as Profile.tsx's handleLogout — clears the real
+  // session keys (auth-context's signOut clears a different, unused
+  // "levelup_user" key, so it's not reused here).
+  const handleLogout = () => {
+    analytics.loggedOut();
+    resetUser();
+    localStorage.removeItem("user");
+    localStorage.removeItem("token");
+    router("/login");
+  };
 
   const bgTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const pollCancelRef = useRef<(() => void) | null>(null);
@@ -952,6 +1201,34 @@ export default function AILearningPage() {
         if (courses.length === 0) { setHistoryLoading(false); return; }
         const entries: HistoryEntry[] = courses.map(mapCourseToEntry);
         if (!cancelled) { setHistory(entries); setHistoryLoading(false); }
+
+        // Restore watched/quiz state from the server — mapCourseToEntry
+        // above always starts every lesson "not watched" and every quiz
+        // "not done" (it has no server data yet), which is exactly why
+        // that state used to vanish on every refresh. This background pass
+        // fills it back in per-course without blocking the initial render.
+        // The full enriched result (not just the score) is stashed on the
+        // entry so ResultsSection can render it without recomputing from
+        // scratch — the raw per-question answers aren't sent back down for
+        // an already-graded attempt, only the graded result.
+        entries.forEach((entry) => {
+          Promise.all([
+            getProgress(entry.id).catch(() => null),
+            getLatestAttempt(entry.id).catch(() => null),
+          ]).then(([progress, attempt]) => {
+            if (cancelled || (!progress?.lessons.length && !attempt)) return;
+            setHistory((prev) => prev.map((e) => {
+              if (e.id !== entry.id) return e;
+              const lessons = progress?.lessons.length
+                ? e.lessons.map((l) => ({ ...l, completed: !!progress!.lessons.find((p) => p.lessonNumber === l.id)?.watched }))
+                : e.lessons;
+              return attempt
+                ? { ...e, lessons, quizDone: true, quizScore: attempt.pct, serverQuizResult: attempt }
+                : { ...e, lessons };
+            }));
+          });
+        });
+
         const stillGenerating = courses.find((c) => c.status === "generating");
         if (stillGenerating && !cancelled) {
           pollCancelRef.current = pollCourse(stillGenerating._id, (course: CourseFromAPI) => {
@@ -1095,7 +1372,7 @@ export default function AILearningPage() {
     file: File | null | undefined,
     level: "beginner" | "intermediate" | "advanced" | null
   ) => {
-    analytics.courseStarted({ topic: name, source: file ? "pdf" : "topic" });
+    analytics.courseStarted({ topic: name, source: file ? (file.name.toLowerCase().endsWith(".pptx") ? "pptx" : "pdf") : "topic" });
     bgTimersRef.current.forEach(clearTimeout); bgTimersRef.current = [];
     if (pollCancelRef.current) pollCancelRef.current();
     // Jump straight into the course view (not a separate "generating" screen) —
@@ -1148,6 +1425,7 @@ export default function AILearningPage() {
     setActiveCourseIsFreeTrial(!!entry.isFreeTrialCourse);
     setLessonStatuses(entry.lessonStatuses ?? entry.lessons.map(() => "ready"));
     setQuizAnswers(entry.quizAnswers); setQuizDone(entry.quizDone); setQuizQuestions(entry.questions ?? []);
+    setServerQuizResult(entry.serverQuizResult ?? null);
     setActiveSection(entry.quizDone ? "results" : "video"); setActiveLesson(0); setPhase("course");
     if (entry.lessonStatuses?.some((s) => s === "generating")) {
       pollCancelRef.current = pollCourse(entry.id, (course: CourseFromAPI) => {
@@ -1166,7 +1444,7 @@ export default function AILearningPage() {
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => { setPendingGeneration(null); setPhase("upload"); }} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => { setPendingGeneration(null); setPhase("upload"); }} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
           <div className="flex-1 overflow-hidden flex flex-col bg-white/40">
             <LevelAssessmentChat
@@ -1186,7 +1464,7 @@ export default function AILearningPage() {
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
           <div className="flex-1 overflow-y-auto"><UploadPhase onGenerate={startNewCourse} credits={credits} /></div>
         </div>
@@ -1199,6 +1477,7 @@ export default function AILearningPage() {
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         {showShareModal && activeHistoryId && <ShareModal courseId={activeHistoryId} onClose={() => setShowShareModal(false)} />}
+        {showPublishModal && activeHistoryId && <PublishModal courseId={activeHistoryId} onClose={() => setShowPublishModal(false)} />}
       <Helmet>
         {/* ── Primary ── */}
         <title>{fileName ? `${fileName.replace(/\.(pdf|pptx)$/i, "")} — Level Up AI` : "Your AI Course — Level Up AI"}</title>
@@ -1247,7 +1526,7 @@ export default function AILearningPage() {
         })}</script>
       </Helmet>
       <div className="flex h-screen relative">
-        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} />
+        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
         {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
 
         {isMobile && courseSidebarOpen && (
@@ -1398,6 +1677,15 @@ export default function AILearningPage() {
                       <Share2 className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Share</span>
                     </Button>
                   )}
+                  {activeHistoryId && allLessonsReady && (
+                    <Button
+                      variant="outline"
+                      className="text-xs sm:text-sm px-3 sm:px-4 shrink-0 border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+                      onClick={() => setShowPublishModal(true)}
+                    >
+                      <Globe2 className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Publish</span>
+                    </Button>
+                  )}
                   {activeLesson < lessons.length - 1 ? (
                     lessonStatuses[activeLesson + 1] === "locked" ? (
                       <Button
@@ -1430,6 +1718,16 @@ export default function AILearningPage() {
             )}
             {activeSection === "quiz" && <QuizSection questions={quizQuestions} onSubmit={(answers) => {
               setQuizAnswers(answers); setQuizDone(true); setActiveSection("results");
+              // Score is recomputed and stored server-side — the client-sent
+              // answers are never trusted as-is for the score itself. This is
+              // also what makes the quiz score survive a refresh (previously
+              // pure client state, gone the moment the page reloaded).
+              setServerQuizResult(null); // stale prior result, if any, while the fresh one loads
+              if (activeHistoryId) {
+                submitQuizApi(activeHistoryId, answers)
+                  .then(setServerQuizResult)
+                  .catch((err) => console.error("Failed to persist quiz result:", err));
+              }
               // The free trial now includes the full course + quiz. Right after
               // the user sees their results is the natural moment to ask for
               // feedback — they've just experienced the complete product. The
@@ -1441,7 +1739,7 @@ export default function AILearningPage() {
             }} />}
             {activeSection === "results" && (
               <>
-                <ResultsSection answers={quizAnswers} questions={quizQuestions} />
+                <ResultsSection answers={quizAnswers} questions={quizQuestions} serverResult={serverQuizResult} courseId={activeHistoryId} />
                 <Card className="border-0 shadow-md bg-gradient-to-r from-blue-50 to-indigo-50 p-4 sm:p-5 mt-6">
                   <div className="flex items-start gap-3 sm:gap-4">
                     <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">

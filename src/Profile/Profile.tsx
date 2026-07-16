@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { analytics, resetUser } from "../lib/analytics";
 import { useAuth } from "@/lib/auth-context";
 import { Navbar } from "@/components/navbar/Navbar";
+import { PageMeta } from "@/components/PageMeta";
 import {
   Card,
   CardContent,
@@ -178,6 +179,7 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
+      <PageMeta title="Your Profile | Level Up AI" noindex />
       <Navbar />
 
       <div className="container mx-auto px-4 py-8 max-w-5xl">

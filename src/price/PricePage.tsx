@@ -3,7 +3,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Check, ArrowRight, Sparkles, Plus, Minus } from "lucide-react";
+import { Helmet } from "react-helmet-async";
 import { analytics } from "../lib/analytics";
+import { PageMeta } from "../components/PageMeta";
 
 // Same "Cutting Room" tokens used across the rest of the site, for
 // consistency when a visitor lands here directly (e.g. from an ad or a
@@ -45,8 +47,25 @@ export default function PricingPage() {
 
   return (
     <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif" }} className="min-h-screen flex flex-col">
+      <PageMeta
+        title="Pricing — $4.99 per Course, No Subscription | Level Up AI"
+        description="One flat price per course: six animated video lessons with narration plus a 20-question quiz. First lesson always free, no subscription, no expiring credits."
+        canonical="/price"
+      />
+      <Helmet>
+        <script type="application/ld+json">
+          {JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "FAQPage",
+            mainEntity: faqs.map((f) => ({
+              "@type": "Question",
+              name: f.q,
+              acceptedAnswer: { "@type": "Answer", text: f.a },
+            })),
+          })}
+        </script>
+      </Helmet>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
         ::selection { background: ${CORAL}; color: #fff; }
       `}</style>
 

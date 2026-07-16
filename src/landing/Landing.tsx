@@ -231,6 +231,18 @@ export default function LandingPage() {
         }
       })}</script>
 
+      {/* ── Structured Data: Organization (separate top-level entity, not just
+           nested under WebApplication.publisher — this is what Google's docs
+           point to for brand/Knowledge Panel eligibility) ── */}
+      <script type="application/ld+json">{JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Level Up AI",
+        "url": "https://leveluppedu.app",
+        "logo": "https://leveluppedu.app/logo.png",
+        "description": "Level Up AI turns any topic or PDF into animated, narrated video courses with a readiness quiz."
+      })}</script>
+
       {/* ── Structured Data: FAQPage (matches your FAQ section) ── */}
       <script type="application/ld+json">{JSON.stringify({
         "@context": "https://schema.org",
@@ -281,7 +293,6 @@ export default function LandingPage() {
     </Helmet>
     <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif", minHeight: "100vh", width: "100%", maxWidth: "100vw" }} className="overflow-x-hidden">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
         ::selection { background: ${CORAL}; color: #fff; }
         html, body, #root { 
           margin: 0; 

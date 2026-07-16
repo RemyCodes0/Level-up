@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { PageMeta } from "../components/PageMeta";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
 import {
   Users, BookOpen, CheckCircle, XCircle, Loader2, Clock,
@@ -127,6 +128,7 @@ export default function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      <PageMeta title="AI Admin | Level Up AI" noindex />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">

@@ -11,6 +11,10 @@ const {
   generateShareLinkHandler,
   unshareCourseHandler,
   getSharedCourseHandler,
+  publishCourseHandler,
+  unpublishCourseHandler,
+  listPublicCoursesHandler,
+  getNextSuggestionsHandler,
 } = require("../controllers/courseController");
 
 // TODO: import YOUR existing auth middleware here.
@@ -21,8 +25,22 @@ const {
 const { protect } = require("../middleware/authMiddleware");
 const { checkCredits } = require("../middleware/checkCredits");
 
+const ACCEPTED_COURSE_FILE_TYPES = new Set([
+  "application/pdf",
+  // .pptx — legacy .ppt (application/vnd.ms-powerpoint) isn't supported;
+  // it's a different binary format the extraction pipeline doesn't parse.
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+]);
+
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB — decks with embedded images run bigger than text-only PDFs
+  fileFilter: (req, file, cb) => {
+    if (ACCEPTED_COURSE_FILE_TYPES.has(file.mimetype)) return cb(null, true);
+    cb(new Error("Only PDF and PPTX files are supported."));
+  },
+});
 
 // Public — no auth required, used by the marketing showcase page
 router.get("/showcase", getShowcaseCoursesHandler);
@@ -32,15 +50,32 @@ router.get("/showcase", getShowcaseCoursesHandler);
 // WITHOUT `protect` — that's the whole point of a public share link.
 router.get("/shared/:shareToken", getSharedCourseHandler);
 
+// Public — no auth required. The searchable, paginated public course
+// gallery — anyone can browse what other users have published.
+router.get("/public", listPublicCoursesHandler);
+
+// multer's fileFilter/limits errors call next(err) — with no global Express
+// error handler in app.js, that error would otherwise fall through to
+// Express's default HTML error page instead of a clean JSON response.
+function handleCourseFileUpload(req, res, next) {
+  upload.single("file")(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || "Invalid file upload" });
+    next();
+  });
+}
+
 // All other course routes require a logged-in user (so req.user exists)
-router.post("/generate", protect, checkCredits, upload.single("file"), generateCourseHandler);
+router.post("/generate", protect, checkCredits, handleCourseFileUpload, generateCourseHandler);
 router.post("/:courseId/share", protect, generateShareLinkHandler);
 router.delete("/:courseId/share", protect, unshareCourseHandler);
+router.post("/:courseId/publish", protect, publishCourseHandler);
+router.delete("/:courseId/publish", protect, unpublishCourseHandler);
 
 router.post("/:courseId/retry/:lessonIndex", protect, retryLessonHandler);
 router.post("/:courseId/unlock", protect, unlockRemainingLessonsHandler);
 router.get("/status/:courseId", protect, getCourseStatusHandler);
 router.get("/list", protect, listCoursesHandler);
+router.get("/:courseId/next-suggestions", protect, getNextSuggestionsHandler);
 router.delete("/:courseId", protect, deleteCourseHandler);
 
 module.exports = router;

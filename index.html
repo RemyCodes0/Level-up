@@ -36,6 +36,26 @@
     <!-- Preconnect to font CDN for faster load -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <!-- App font stylesheet, loaded non-render-blocking (media="print" swapped
+         to "all" onload — the standard pattern for an async CSS load without
+         a FOUC-prone deferred JS import). Previously this was loaded via a
+         render-blocking @import inside a React component's inline <style>
+         tag, which meant the browser couldn't even discover the font request
+         until after JS parsed and rendered that component — strictly worse
+         than this, despite the preconnect hints above already being here. -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      />
+    </noscript>
   </head>
   <body>
     <div id="root"></div>

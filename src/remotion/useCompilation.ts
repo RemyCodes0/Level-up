@@ -88,7 +88,13 @@ function collectTopLevelDeclarations(source: string): Set<string> {
   return declared;
 }
 
-export function useCompilation(code: string): CompilationResult {
+export function useCompilation(
+  code: string,
+  // Optional Audio override. The Player passes nothing (uses BufferedAudio). The
+  // client-side EXPORT passes @remotion/media's <Audio>, which the web renderer
+  // requires. Must be a stable module-level ref so the memo stays valid.
+  audioOverride?: React.ComponentType<any>,
+): CompilationResult {
   return useMemo(() => {
     if (!code?.trim()) return { Component: null, error: null };
 
@@ -179,7 +185,8 @@ export function useCompilation(code: string): CompilationResult {
         `"use strict";\n${transpiled}\nreturn ${exportedName};`
       );
 
-      const Component = factory(React, SCOPE);
+      const scope = audioOverride ? { ...SCOPE, Audio: audioOverride } : SCOPE;
+      const Component = factory(React, scope);
 
       if (typeof Component !== "function") {
         return { Component: null, error: `Expected a function, got ${typeof Component}` };
@@ -192,5 +199,5 @@ export function useCompilation(code: string): CompilationResult {
         error: err instanceof Error ? err.message : "Unknown compilation error",
       };
     }
-  }, [code]);
+  }, [code, audioOverride]);
 }

@@ -7,7 +7,8 @@ exports.getReviewsByTutor = async (req, res) => {
     const tutorId = req.params.tutorId;
     const reviews = await Review.find({ tutor: tutorId })
       .populate("student", "name email")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.status(200).json(reviews);
   } catch (err) {
@@ -17,20 +18,15 @@ exports.getReviewsByTutor = async (req, res) => {
 
 exports.getReviewsByUser = async (req, res) => {
   try {
-    console.log("=== getReviewsByUser Debug ===");
-    console.log("req.user:", req.user);
-    console.log("req.user._id:", req.user._id);
-    
     const reviews = await Review.find({ tutor: req.user._id })
       .populate("student", "name email")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
-    console.log("Found reviews:", reviews.length);
-    
     res.status(200).json(reviews);
   } catch (err) {
     console.error("Error in getReviewsByUser:", err);
-    res.status(500).json({ message: err.message, stack: err.stack });
+    res.status(500).json({ message: err.message });
   }
 };
 

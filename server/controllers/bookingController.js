@@ -12,7 +12,9 @@ exports.getAllBookings = async (req, res) => {
         populate: { path: "user", select: "name email" },
       })
       .populate({ path: "student", select: "name email" })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean();
 
     res.status(200).json(bookings);
   } catch (err) {
@@ -36,7 +38,8 @@ exports.getBookingByTutor = async (req, res) => {
         populate: { path: "user", select: "name email" },
       })
       .populate("student", "name email")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.status(200).json(bookings);
   } catch (err) {
@@ -54,7 +57,8 @@ exports.getBookingByStudent = async (req, res) => {
         populate: { path: "user", select: "name email" },
       })
       .populate("student", "name email")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.status(200).json(bookings);
   } catch (err) {
@@ -209,7 +213,7 @@ exports.hasBookedTutor = async (req, res) => {
       tutor: req.params.tutorId,
       student: req.user._id,
       status: { $in: ["pending", "confirmed", "completed"] },
-    });
+    }).select("_id").lean();
 
     res.json({ hasBooked: !!booking });
   } catch (err) {

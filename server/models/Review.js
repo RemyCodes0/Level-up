@@ -26,5 +26,10 @@ const reviewSchema = new mongoose.Schema(
     {timestamps:true}
 )
 
+// tutor is the single most-queried field (tutor profile pages, the ratings
+// aggregate in tutorController, addReview's duplicate check); student is
+// queried on the "my reviews" and duplicate-review-check paths.
+reviewSchema.index({ tutor: 1 })
+reviewSchema.index({ student: 1 })
 
 module.exports = mongoose.model("Review", reviewSchema)

@@ -43,5 +43,10 @@ const bookingSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
+// Every booking list endpoint filters by tutor or student and sorts by
+// createdAt (bookingController.js) — without these, each query is a full
+// collection scan.
+bookingSchema.index({ tutor: 1, createdAt: -1 });
+bookingSchema.index({ student: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Booking", bookingSchema)

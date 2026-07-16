@@ -33,28 +33,33 @@ exports.getTutors = async (req, res) => {
     if (tutors.length === 0) {
       return res.status(404).json({ message: "No tutors found" })
     }
-      for (let t of tutors) {
-      const reviews = await Review.find({ tutor: t._id });
-      if (reviews.length > 0) {
-        t.averageRating = reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length;
-      } else {
-        t.averageRating = 0;
-      }
-    }
- const tutorsWithSessions = await Promise.all(
-  tutors.map(async (tutor) => {
-    const totalSessions = await Booking.countDocuments({
-      tutor: tutor._id,
-      status: { $in: ["pending", "confirmed", "completed"] }
-    });
-    return {
-      ...tutor,
-      totalSessions
-    };
-  })
-);
 
-res.json(tutorsWithSessions);
+    const tutorIds = tutors.map((t) => t._id);
+
+    // Two aggregates instead of 2N sequential/parallel queries — ratings and
+    // session counts for every tutor come back in one round-trip each,
+    // regardless of how many tutors there are.
+    const [reviewStats, sessionCounts] = await Promise.all([
+      Review.aggregate([
+        { $match: { tutor: { $in: tutorIds } } },
+        { $group: { _id: "$tutor", avgRating: { $avg: "$rating" } } },
+      ]),
+      Booking.aggregate([
+        { $match: { tutor: { $in: tutorIds }, status: { $in: ["pending", "confirmed", "completed"] } } },
+        { $group: { _id: "$tutor", total: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const ratingById = new Map(reviewStats.map((r) => [r._id.toString(), r.avgRating]));
+    const sessionsById = new Map(sessionCounts.map((s) => [s._id.toString(), s.total]));
+
+    const tutorsWithSessions = tutors.map((tutor) => ({
+      ...tutor,
+      averageRating: ratingById.get(tutor._id.toString()) || 0,
+      totalSessions: sessionsById.get(tutor._id.toString()) || 0,
+    }));
+
+    res.json(tutorsWithSessions);
 
   } catch (err) {
     console.error(err)
@@ -64,7 +69,7 @@ res.json(tutorsWithSessions);
 
 exports.updateProfile = async (req, res)=>{ 
     try{
-        const user = await User.findById(req.user.id);
+        const user = await User.findById(req.user._id);
         if(!user) return res.status(404).json({message: 'User not found'});
 
         if (req.body.name) user.name = req.body.name;
@@ -137,7 +142,11 @@ if (req.files?.idCard && req.files.idCard[0]) {
 
 exports.getApplications = async(req, res) =>{
     try{
-        const applications = await TutorApplication.find().populate("user", "name email")
+        const applications = await TutorApplication.find()
+          .populate("user", "name email")
+          .sort({ createdAt: -1 })
+          .limit(500)
+          .lean()
         res.status(200).json(applications)
     }catch(err){
         res.status(500).json(err)

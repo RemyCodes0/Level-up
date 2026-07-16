@@ -1,62 +1,75 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-
-  <!-- Landing page — highest priority, this is what Google should rank -->
   <url>
     <loc>https://leveluppedu.app/</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-07-16</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
-
-  <!-- Pricing page — indexed, answers "how much does Level Up AI cost" -->
   <url>
-    <loc>https://leveluppedu.app/pricing</loc>
-    <lastmod>2026-07-03</lastmod>
+    <loc>https://leveluppedu.app/price</loc>
+    <lastmod>2026-07-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
-
-  <!-- Signup — entry point for new users -->
+  <url>
+    <loc>https://leveluppedu.app/tutors</loc>
+    <lastmod>2026-07-16</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://leveluppedu.app/gallery</loc>
+    <lastmod>2026-07-16</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://leveluppedu.app/ai_showcase</loc>
+    <lastmod>2026-07-16</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://leveluppedu.app/apply</loc>
+    <lastmod>2026-07-16</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
   <url>
     <loc>https://leveluppedu.app/signup</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-07-16</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
-
-  <!-- Login -->
   <url>
     <loc>https://leveluppedu.app/login</loc>
-    <lastmod>2026-07-03</lastmod>
+    <lastmod>2026-07-16</lastmod>
     <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
+    <priority>0.4</priority>
   </url>
-
-  <!-- Legal pages — low priority but should be crawlable -->
   <url>
     <loc>https://leveluppedu.app/terms.html</loc>
-    <lastmod>2026-06-20</lastmod>
+    <lastmod>2026-07-16</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
-
   <url>
     <loc>https://leveluppedu.app/privacy-policy.html</loc>
-    <lastmod>2026-06-20</lastmod>
+    <lastmod>2026-07-16</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
-
   <url>
     <loc>https://leveluppedu.app/refund-policy.html</loc>
-    <lastmod>2026-06-20</lastmod>
+    <lastmod>2026-07-16</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
-
-  <!-- NOTE: /ai_tutor is intentionally excluded — it's auth-gated and
-       marked noindex/nofollow in its Helmet. Adding it here would
-       conflict with that signal and confuse Google. -->
-
+  <url>
+    <loc>https://leveluppedu.app/tutors/698e989c911a43018f6a7acb</loc>
+    <lastmod>2026-07-16</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.6</priority>
+  </url>
 </urlset>

@@ -190,15 +190,31 @@ export default function TutorProfilePage() {
 
       <meta
         property="og:url"
-        content={`https://levelup-snowy.vercel.app/tutors/${id}`}
+        content={`https://leveluppedu.app/tutors/${id}`}
       />
 
       <meta property="og:type" content="profile" />
 
       <link
         rel="canonical"
-        href={`https://levelup-snowy.vercel.app/tutors/${id}`}
+        href={`https://leveluppedu.app/tutors/${id}`}
       />
+
+      <script type="application/ld+json">{JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "Person",
+        "name": tutor.user.name,
+        "url": `https://leveluppedu.app/tutors/${id}`,
+        "jobTitle": `${subjects} Tutor`,
+        "description": tutor.bio || `${tutor.user.name} teaches ${subjects} through Level Up.`,
+        ...(averageRating > 0 ? {
+          "aggregateRating": {
+            "@type": "AggregateRating",
+            "ratingValue": String(averageRating),
+            "reviewCount": String(reviews.length || 1),
+          },
+        } : {}),
+      })}</script>
     </Helmet>
 
     

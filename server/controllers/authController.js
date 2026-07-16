@@ -193,7 +193,11 @@ exports.loginUser = async (req, res) => {
 
 exports.getUsers = async (req, res) => {
   try {
-    const user = await User.find();
+    // .select("-password"): this was returning full documents, hashes
+    // included, to every caller. .limit(): an unbounded find() over the
+    // whole collection turns into a full scan + full-collection
+    // serialization as the user count grows.
+    const user = await User.find().select("-password").limit(1000).lean();
     res.status(200).json({ user });
   } catch (err) {
     res.status(500).json({ message: err.message });

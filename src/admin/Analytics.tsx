@@ -3,6 +3,7 @@
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { Navbar } from "@/components/navbar/Navbar";
+import { PageMeta } from "@/components/PageMeta";
 import {
   Card,
   CardContent,
@@ -204,6 +205,7 @@ export default function AdminAnalyticsPage() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        <PageMeta title="Admin — Analytics | Level Up AI" noindex />
         <Navbar />
         <div className="container mx-auto px-4 py-8">
           <div className="flex items-center justify-center h-96">
@@ -219,6 +221,7 @@ export default function AdminAnalyticsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-indigo-50/30 to-blue-50/30">
+      <PageMeta title="Admin — Analytics | Level Up AI" noindex />
       <Navbar />
       <div className="container mx-auto px-4 py-8">
         {/* Back Button */}

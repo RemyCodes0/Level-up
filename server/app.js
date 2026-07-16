@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const path = require("path");
 
 const { SitemapStream, streamToPromise } = require('sitemap');
@@ -24,6 +25,10 @@ app.use(cors({
     : true,
   credentials: true,
 }));
+
+// gzip/brotli every JSON/text response — cheap CPU cost, meaningfully cuts
+// bandwidth and time-to-first-byte for course/booking/tutor list payloads.
+app.use(compression());
 
 // ──────────────────────────────────────────────────────────────────────────
 // IMPORTANT: paymentRoutes is mounted BEFORE express.json().
@@ -52,10 +57,14 @@ app.use('/api/export', exportRoutes)
 app.use('/api/assessment', require('./routes/assessment'))
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/admin/email', require('./routes/adminEmail'));
+app.use('/api/ads', require('./routes/ads'));
 app.use('/api/email', require('./routes/email'));
 app.use('/api/showcase', require('./routes/showcase'));
 app.use('/api/payment', require('./routes/payment'));
 app.use('/api/referral', require('./routes/referral'))
+app.use('/api/collab', require('./routes/collab'));
+app.use('/api/progress', require('./routes/progress'));
+app.use('/api/quiz', require('./routes/quiz'));
 // app.use('/api', checkoutRouter);
 
 // Serve audio files for browser playback at /audio/*
@@ -65,6 +74,18 @@ const audioDir = process.env.NODE_ENV === "production"
   : path.resolve(__dirname, "../remotion-render/public/audio");
 
 app.use("/audio", express.static(audioDir));
+
+// Uploaded brand assets for ads (logos, screenshots). Same disk pattern as audio.
+const uploadsDir = process.env.NODE_ENV === "production"
+  ? "/data/uploads"
+  : path.resolve(__dirname, "../remotion-render/public/uploads");
+app.use("/uploads", (req, res, next) => {
+  const origin = req.headers.origin;
+  res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  if (origin) res.setHeader("Vary", "Origin");
+  next();
+});
+app.use("/uploads", express.static(uploadsDir));
 
 // ──────────────────────────────────────────────────────────────────────────
 // EXPLICIT 404 for missing audio files.
@@ -87,10 +108,23 @@ app.use("/audio", (req, res) => {
   res.status(404).end();
 });
 
+// NOTE: this route is very likely unreachable by real crawlers. The frontend
+// (leveluppedu.app) and this API server are separate origins — a request to
+// https://leveluppedu.app/sitemap.xml is served by the STATIC public/sitemap.xml
+// file in the frontend build, not by this Express route, since there's no
+// proxy/rewrite from the frontend domain to this server for that path (see
+// vercel.json — its only rule is the SPA catch-all rewrite to index.html,
+// and Vercel serves an existing static file over a rewrite regardless). This
+// route only actually serves a sitemap if something requests THIS server's
+// own origin directly. Kept (and its hostname corrected) rather than removed,
+// since deleting a live route on request is a bigger call than fixing one —
+// but the dynamic tutor/course entries it lists are why scripts/generate-sitemap.mjs
+// exists: it bakes the same dynamic data into the static file at build time,
+// which crawlers actually reach.
 app.get('/sitemap.xml', async (req, res) => {
   try {
     const smStream = new SitemapStream({
-      hostname: 'https://levelup-snowy.vercel.app'
+      hostname: 'https://leveluppedu.app'
     });
 
     smStream.write({ url: '/', changefreq: 'daily', priority: 1.0 });
@@ -121,7 +155,7 @@ app.get('/robots.txt', (req, res) => {
   res.send(
 `User-agent: *
 Allow: /
-Sitemap: https://level-up-nnee.onrender.com/sitemap.xml`
+Sitemap: https://leveluppedu.app/sitemap.xml`
   );
 });
 

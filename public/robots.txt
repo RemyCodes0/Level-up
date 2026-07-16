@@ -1,0 +1,18 @@
+User-agent: *
+Allow: /
+Disallow: /ai_tutor
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /bookings
+Disallow: /messages
+Disallow: /ad-studio
+Disallow: /ai_admin
+Disallow: /admin/
+Disallow: /tutor/dashboard
+Disallow: /tutor/earnings
+Disallow: /tutor/availability
+Disallow: /tutor/profile
+Disallow: /tutor/sessions
+Disallow: /book/
+
+Sitemap: https://leveluppedu.app/sitemap.xml

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/generate-sitemap.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -28,7 +29,7 @@
     "@radix-ui/react-slider": "^1.4.0",
     "@radix-ui/react-slot": "^1.2.5",
     "@radix-ui/react-tabs": "^1.1.13",
-    "@remotion/media": "^4.0.487",
+    "@remotion/media": "4.0.487",
     "@remotion/player": "4.0.487",
     "@remotion/web-renderer": "4.0.487",
     "@tailwindcss/vite": "^4.1.14",

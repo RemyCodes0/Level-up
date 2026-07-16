@@ -20,6 +20,7 @@ import AdminSessionsPage from './admin/Sessions'
 import AdminApplicationsPage from './admin/Application'
 import AdminAnalyticsPage from './admin/Analytics'
 import AdminEmailPage from './admin/EmailComposer'
+import AdStudio from './ads/AdStudio'
 import TutorProfilePage from './tutors/tutors-detail/tutors-detail'
 import MessagesPage from './messages/Messages'
 import BookSessionPage from './book/Book'
@@ -31,6 +32,11 @@ import VerifyEmailPage from './signup/Verifyemailpage'
 import AdminDashboard from './ai/AdminDashboard'
 import PricingPage from './price/PricePage'
 import SharedCoursePage from './share/SharePage'
+import PublicGallery from './gallery/PublicGallery'
+import CollabHome from './collab/CollabHome'
+import CreateCollabRoom from './collab/CreateCollabRoom'
+import CollabRoomPage from './collab/CollabRoomPage'
+import JoinCollabRoom from './collab/JoinCollabRoom'
 import { CookieConsent } from './lib/CookieConsent'
 function App() {
 
@@ -49,6 +55,11 @@ function App() {
       <Route path="/signup" element={<SignupPage/>}/>
       <Route path="/verify-email" element={<VerifyEmailPage/>}/>
       <Route path="/shared/:shareToken" element={<SharedCoursePage />} />
+      <Route path="/gallery" element={<PublicGallery/>}/>
+      <Route path="/collab" element={<CollabHome/>}/>
+      <Route path="/collab/new" element={<CreateCollabRoom/>}/>
+      <Route path="/collab/invite/:shareToken" element={<JoinCollabRoom/>}/>
+      <Route path="/collab/:roomId" element={<CollabRoomPage/>}/>
       <Route path="/tutors/:id" element={<TutorProfilePage/>}/>
       <Route path="/tutors" element={<TutorsPage/>}/>
       <Route path="/ai_tutor" element={<AILearningPage/>}/>
@@ -67,6 +78,7 @@ function App() {
       <Route path="/admin/applications" element={<AdminApplicationsPage/>}/>
       <Route path="/admin/analytics" element={<AdminAnalyticsPage/>}/>
       <Route path="/admin/email" element={<AdminEmailPage/>}/>
+      <Route path="/ad-studio" element={<AdStudio/>}/>
       <Route path="/messages" element={<MessagesPage/>}/>
       <Route path="/book/:id" element={<BookSessionPage/>}/>
       <Route path="/apply" element={<ApplyTutorPage/>}/>

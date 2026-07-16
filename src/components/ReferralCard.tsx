@@ -1,7 +1,7 @@
 // components/ReferralCard.tsx
 import { useState, useEffect } from "react";
 import { analytics } from "../lib/analytics";
-import { Copy, Check, Users, Gift, X, ArrowRight, Sparkles } from "lucide-react";
+import { Copy, Check, Users, Gift, X, Sparkles } from "lucide-react";
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
@@ -174,7 +174,6 @@ export function ReferralCard() {
             style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 2px 8px rgba(99,102,241,0.4)" }}>
             <Sparkles className="h-3.5 w-3.5" />
             Invite a friend & earn a credit
-            <ArrowRight className="h-3.5 w-3.5 ml-auto" />
           </button>
 
           {/* Stats */}

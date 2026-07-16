@@ -4,6 +4,7 @@ import { useAuth } from "@/lib/auth-context"
 import { useNavigate } from "react-router-dom"
 import { useEffect } from "react"
 import { Navbar } from "@/components/navbar/Navbar"
+import { PageMeta } from "@/components/PageMeta"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -67,6 +68,7 @@ export default function TutorEarningsPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      <PageMeta title="Earnings | Level Up AI" noindex />
       <Navbar />
       <div className="container mx-auto px-4 py-8">
         <Button variant="ghost" onClick={() => router("/tutor/dashboard")} className="mb-6">

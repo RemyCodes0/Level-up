@@ -12,10 +12,10 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { 
-  Menu, 
-  MessageCircle, 
-  LogOut, 
+import {
+  Menu,
+  MessageCircle,
+  LogOut,
   User as UserIcon,
   LayoutDashboard,
   BookOpen,
@@ -25,10 +25,11 @@ import {
   Users,
   FileText,
   Calendar,
-  Sparkles
+  Sparkles,
+  ChevronDown
 } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 export function Navbar() {
   const [unreadCount, setUnreadCount] = useState(0)
@@ -43,6 +44,23 @@ export function Navbar() {
   
   const [user, setUser] = useState<User | null>(null)
   const { signOut } = useAuth()
+
+  // Hover-to-open user menu, ChatGPT-style — a short close delay so moving
+  // the pointer from the trigger button into the dropdown content (which
+  // Radix portals elsewhere in the DOM, so it isn't a child of the trigger)
+  // doesn't flicker the menu shut in the gap between them. Click still works
+  // too, since DropdownMenu is just a controlled `open` state either way.
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const closeMenuTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const openUserMenu = () => {
+    if (closeMenuTimer.current) clearTimeout(closeMenuTimer.current)
+    setUserMenuOpen(true)
+  }
+  const scheduleCloseUserMenu = () => {
+    if (closeMenuTimer.current) clearTimeout(closeMenuTimer.current)
+    closeMenuTimer.current = setTimeout(() => setUserMenuOpen(false), 150)
+  }
+  useEffect(() => () => { if (closeMenuTimer.current) clearTimeout(closeMenuTimer.current) }, [])
 
   useEffect(() => {
     const storedUser = localStorage.getItem("user")
@@ -86,11 +104,25 @@ export function Navbar() {
         Find Tutors
         <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-gradient-to-r from-blue-600 to-purple-600 group-hover:w-full transition-all duration-300" />
       </a>
-      <a 
-        href="/dashboard" 
+      <a
+        href="/dashboard"
         className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors relative group"
       >
         Dashboard
+        <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-gradient-to-r from-blue-600 to-purple-600 group-hover:w-full transition-all duration-300" />
+      </a>
+      <a
+        href="/collab"
+        className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors relative group"
+      >
+        Study Groups
+        <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-gradient-to-r from-blue-600 to-purple-600 group-hover:w-full transition-all duration-300" />
+      </a>
+      <a
+        href="/gallery"
+        className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors relative group"
+      >
+        Course Gallery
         <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-gradient-to-r from-blue-600 to-purple-600 group-hover:w-full transition-all duration-300" />
       </a>
       {(user?.role === "tutor" || user?.role === "both") && (
@@ -181,11 +213,13 @@ export function Navbar() {
           )} */}
 
           {user ? (
-            <DropdownMenu>
+            <DropdownMenu open={userMenuOpen} onOpenChange={setUserMenuOpen}>
               <DropdownMenuTrigger asChild>
-                <Button 
-                  variant="ghost" 
+                <Button
+                  variant="ghost"
                   className="relative h-10 w-auto rounded-full pl-2 pr-3 hover:bg-gray-100 transition-all"
+                  onMouseEnter={openUserMenu}
+                  onMouseLeave={scheduleCloseUserMenu}
                 >
                   <div className="flex items-center gap-2">
                     <Avatar className="h-8 w-8 ring-2 ring-offset-2 ring-blue-500">
@@ -194,18 +228,21 @@ export function Navbar() {
                         {user.name.charAt(0).toUpperCase()}
                       </AvatarFallback>
                     </Avatar>
-                    <div className="hidden lg:block text-left">
+                    <div className="hidden lg:flex items-center gap-1 text-left">
                       <p className="text-sm font-semibold text-gray-900">
                         {user.name.split(' ')[0]}
                       </p>
+                      <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform ${userMenuOpen ? "rotate-180" : ""}`} />
                     </div>
                   </div>
                 </Button>
               </DropdownMenuTrigger>
-              
-              <DropdownMenuContent 
-                align="end" 
+
+              <DropdownMenuContent
+                align="end"
                 className="w-72 p-2 shadow-xl border-0 bg-white/95 backdrop-blur-sm"
+                onMouseEnter={openUserMenu}
+                onMouseLeave={scheduleCloseUserMenu}
               >
                 <DropdownMenuLabel className="p-3">
                   <div className="flex items-center gap-3">

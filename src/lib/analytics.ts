@@ -238,7 +238,7 @@ export const analytics = {
   loggedOut: () => track("user_logged_out"),
   emailVerified: () => track("email_verified"),
 
-  courseStarted: (p?: { topic?: string; source?: "topic" | "pdf" }) =>
+  courseStarted: (p?: { topic?: string; source?: "topic" | "pdf" | "pptx" }) =>
     track("course_generation_started", p),
   courseCompleted: (p?: Record<string, unknown>) => track("course_completed", p),
   lessonViewed: (p?: { lesson?: number }) => track("lesson_viewed", p),

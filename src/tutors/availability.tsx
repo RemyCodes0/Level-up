@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Navbar } from "@/components/navbar/Navbar";
+import { PageMeta } from "@/components/PageMeta";
 import {
   Card,
   CardContent,
@@ -156,6 +157,7 @@ export default function TutorAvailabilityPage() {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/30">
+        <PageMeta title="Availability | Level Up AI" noindex />
         <Navbar />
         <div className="container mx-auto px-4 py-8 max-w-4xl">
           <div className="flex items-center justify-center h-96">
@@ -173,6 +175,7 @@ export default function TutorAvailabilityPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/30">
+      <PageMeta title="Availability | Level Up AI" noindex />
       <Navbar />
 
       <div className="container mx-auto px-4 py-8 max-w-4xl">
