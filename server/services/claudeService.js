@@ -3,6 +3,7 @@ const pdfParse = require("pdf-parse");
 const JSZip = require("jszip");
 const { validateGeneratedCode } = require("./validateCode");
 const { reviewGeneratedCode } = require("./codeCriticService");
+const { createLimiter } = require("../utils/concurrencyLimiter");
 
 // GLM-5.2 client for lesson code generation — OpenAI-compatible
 const glmClient = new OpenAI({
@@ -139,7 +140,7 @@ async function backoffDelay(attempt, baseMs = 500, capMs = 8000) {
   await sleep(exp + jitter);
 }
 
-// ── Tiny concurrency limiter (no new dependency) ────────────────────────────
+// ── Tiny concurrency limiter ─────────────────────────────────────────────────
 // If multiple lessons generate code in parallel, each one calls
 // generateLessonCode independently with no awareness of the others. If the
 // GLM endpoint enforces a max-simultaneous-connections limit, firing 5-6
@@ -157,29 +158,8 @@ async function backoffDelay(attempt, baseMs = 500, capMs = 8000) {
 // you can end up with far more than N sockets actually open at once,
 // which defeats the entire point. generateLessonCode therefore passes the
 // full "open stream + consume every chunk" operation into limit().
-function createLimiter(maxConcurrent) {
-  let active = 0;
-  const queue = [];
-
-  const next = () => {
-    if (active >= maxConcurrent || queue.length === 0) return;
-    active++;
-    const { fn, resolve, reject } = queue.shift();
-    fn()
-      .then(resolve, reject)
-      .finally(() => {
-        active--;
-        next();
-      });
-  };
-
-  return function limit(fn) {
-    return new Promise((resolve, reject) => {
-      queue.push({ fn, resolve, reject });
-      next();
-    });
-  };
-}
+// (Implementation lives in utils/concurrencyLimiter.js — exportController.js
+// reuses the exact same one for video-render concurrency.)
 
 // Cap simultaneous in-flight requests to GLM (lesson code — high volume,
 // 6 per course). Adjust via env var if the provider's actual limit turns out
@@ -748,12 +728,12 @@ const CODE_GEN_STATIC_RULES = `
 
 You are a world-class Remotion motion-graphics developer creating visually astonishing educational animations. This is a premium learning product — every scene must feel alive, dynamic, and visually connected to the concept being taught.
 
-HOW TO WORK — this is where quality comes from, so USE YOUR REASONING for it. Before you write ANY code, plan each scene in your reasoning to the richness bar below. For EACH scene, decide:
+HOW TO WORK — WRITE THE PLAN AS A COMMENT, THEN THE CODE. This model runs with extended thinking OFF — there is no private scratchpad, so a plan that only exists "in your head" doesn't actually happen; it has to be written down to be real. For EACH scene, immediately above that scene's component function, write a comment block that answers:
   1. THE MECHANISM: what process does this scene teach, and what BEFORE → AFTER transformation must visibly happen on screen across the scene? (rule 10b)
   2. THE CAST: list the specific elements — aim for 10+ independently-moving things — the main diagram parts, secondary/orbiting motion, a 30-40 particle background field, energy rings / connectors, and for EACH one, HOW it moves (which Math.sin/cos period, which spring, which stagger).
   3. THE PACING: the 3-5 staged reveals spread across the FULL duration, and what new thing appears or changes at each. (rule 7b)
   4. THE LAYOUT: the shared position anchors so connectors/labels/contents line up, and confirm every position will be clamped to SAFE. (rules 10c, 14)
-Only once a scene is designed to that density do you implement it. A scene you did not deliberately design rich WILL come out basic. The WORKED EXAMPLE below is the MINIMUM density to match or exceed in EVERY scene — never simpler than that. Your visible output is still code ONLY (starting with "import"); all of this planning happens in your private reasoning, never in the output.
+Only once that comment is written do you implement the scene's JSX below it — the comment is a real planning step, not decoration added after the fact, and the code that follows must actually deliver what the comment describes. A scene you did not plan this way WILL come out basic. The WORKED EXAMPLE below is the MINIMUM density to match or exceed in EVERY scene — never simpler than that, and it shows exactly this pattern (see AtomScene's plan comment). This is still the ONLY place planning prose appears — the plan comment stays inside the code as a normal double-slash comment; nothing outside the code block (no preamble, no summary after) is ever written.
 
 Generate a complete, self-contained Remotion composition for a lesson. Each scene has an EXACT frame duration (measured from its voiceover audio) and you MUST build each scene to that exact duration.
 
@@ -768,7 +748,16 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 4. Structure: a single <Series> with one <Series.Sequence> per scene, IN ORDER. Do NOT use a bare <Sequence> anywhere, including inside a scene component. A <Sequence from={...} durationInFrames={...}> nested inside a scene will UNMOUNT its children once its own duration elapses — even if that's shorter than the scene's real duration — which makes the visual disappear while the audio (in the parent Series.Sequence) keeps playing. If part of a scene should only show for a portion of the scene, control that with interpolate()-driven opacity/scale on an always-mounted element, never by wrapping it in a shorter-lived Sequence.
 4b. FRAME NUMBERS ARE PER-SCENE, NOT GLOBAL. useCurrentFrame() inside a <Series.Sequence> is RELATIVE to that scene's own start — it reads 0 on the scene's first frame, in EVERY scene. NEVER offset animation timings by the durations of earlier scenes. A scene-5 entrance written as interpolate(frame, [1240, 1270], [0, 1]) will NEVER fire — frame inside that scene only ever runs from 0 to that scene's own duration, so the element stays invisible for the whole scene. Every inputRange number is local to its scene: entrances near [0, 30], exits near [sceneDuration - 30, sceneDuration] written as plain literals of THAT scene's duration.
 5. Each <Series.Sequence durationInFrames={EXACT_NUMBER}> — copy the number EXACTLY. Never compute or round it.
-6. Inside each sequence: <Audio src={"EXACT_URL"} /> — copy URLs exactly, NO staticFile() wrapper.
+6. Inside each sequence: <Audio src={"EXACT_URL"} /> — copy URLs exactly, NO staticFile() wrapper. These URLs contain long random hex IDs — a single mistyped character silently breaks that scene's audio. Copy each one character-for-character from the scene table, then re-check it before moving to the next scene.
+
+⚠️ EXACT MISTAKES THIS MODEL MAKES — READ EVERY ONE, THEN NEVER DO THEM:
+6b. JSX INLINE STYLE OBJECTS USE CAMELCASE, NEVER CSS KEBAB-CASE. style={{ }} is a JavaScript object, not a CSS stylesheet — its keys follow JS identifier rules. Writing a kebab-case key is a silent bug (React ignores it — the browser gets no error, the property just never applies) or an outright syntax error, depending on how it's written. The exact properties this model tends to get wrong, kebab (WRONG) -> camelCase (RIGHT): transform-origin -> transformOrigin, background-color -> backgroundColor, font-size -> fontSize, font-weight -> fontWeight, font-family -> fontFamily, border-radius -> borderRadius, box-shadow -> boxShadow, text-shadow -> textShadow, letter-spacing -> letterSpacing, line-height -> lineHeight, text-align -> textAlign, z-index -> zIndex, flex-direction -> flexDirection, justify-content -> justifyContent, align-items -> alignItems, pointer-events -> pointerEvents. Before finishing, scan every style={{ }} object you wrote and confirm every key is camelCase.
+6c. SVG JSX ATTRIBUTES USE CAMELCASE TOO — this is a separate trap from 6b (these appear as JSX attributes like strokeWidth={2}, not inside a style object, but the same kebab-case instinct breaks them the same way). WRONG -> RIGHT: stroke-width -> strokeWidth, stroke-linecap -> strokeLinecap, stroke-linejoin -> strokeLinejoin, stroke-dasharray -> strokeDasharray, stroke-dashoffset -> strokeDashoffset, stroke-opacity -> strokeOpacity, fill-opacity -> fillOpacity, text-anchor -> textAnchor, dominant-baseline -> dominantBaseline, clip-path -> clipPath.
+6d. HTML ATTRIBUTE NAMES DIFFER IN JSX: the plain-HTML attribute class is className in JSX, and for is htmlFor. Writing plain HTML attribute names here is a common slip from HTML training data leaking in — this is React, not HTML, even though the syntax looks similar.
+6e. durationInFrames IS NEVER A GLOBAL OR AMBIENT VALUE — it does not exist as a bare identifier anywhere in scope, and useVideoConfig()'s durationInFrames field is a DIFFERENT number than you probably want: it's the WHOLE composition's total duration across every scene, not the current scene's own duration (that trap is exactly why it's easy to reach for). If a helper component needs to know a scene's duration, the parent scene component must pass it in explicitly as a real prop with its own name (e.g. sceneDuration), computed from the literal number given to you for that scene — never assume it's available for free.
+6f. NEVER USE RAW Math.random() * 1920 OR Math.random() * 1080 AS A POSITION. This produces a value spanning the ENTIRE frame edge-to-edge, which after clamping just piles every element onto the SAFE boundary instead of distributing them naturally through the safe area — clamping is a last-resort backstop (rule 14), not a substitute for generating sane values to begin with. Generate positions already inset within SAFE from the start: SAFE.xMin + Math.random() * (SAFE.xMax - SAFE.xMin), and the same pattern for y with SAFE.yMin/SAFE.yMax — then still clamp the final value per rule 14.
+6g. interpolate() INPUT RANGES MUST BE STRICTLY INCREASING WITH NO REPEATED VALUES — this is restated here because it is the single most common crash this model produces despite rule 11 below. Before finishing, look at literally every interpolate() call you wrote and manually confirm each number in the 2nd argument's array is strictly larger than the one before it. [0, 30, 60, 60] and [300, 320, 466, 466] are both real crashes from a duplicated final value — if a scene's last two reveals would naturally land on the same frame, offset the later one by at least 1.
+6h. TEMPLATE LITERAL DISCIPLINE — prefer plain string concatenation ("a" + b + "c") over template literals for building dynamic strings (colors, transforms, paths); it has the exact same result with zero risk of an unbalanced backtick. If you do use a template literal, every opening backtick must have a matching closing backtick — count them before finishing. An unterminated template literal doesn't just break one line, it corrupts everything after it in the file.
 
 ANIMATION QUALITY — THIS IS THE MOST CRITICAL REQUIREMENT. A boring animation is a failed animation.
 The user is paying for animated video lessons. If the animations are generic, static, or visually uninteresting, the product fails entirely. Every scene must feel like a professional motion graphics studio made it.
@@ -1007,12 +996,22 @@ function EnergyRing({ radius, color, appearAt }: { radius: number; color: string
   );
 }
 
-// The main scene. Count the moving elements: 36 background particles + nucleus
-// + 5 electrons + 5 electron-moons + 3 energy rings + 2 staged text blocks =
-// ~52 elements, with SIX independent motion sources (spring entrance, nucleus
-// pulse, 5 orbit speeds, 5 moon orbits, ring pulses, particle drift/twinkle)
-// and staged reveals across the whole duration. THIS is the minimum density —
-// never ship a scene simpler than this.
+// SCENE PLAN (this is the format every scene's plan comment follows):
+// 1. MECHANISM: electrons occupy discrete energy shells around a nucleus —
+//    the BEFORE/AFTER here is the structure ASSEMBLING (rings and electrons
+//    appearing in stages) rather than existing fully-formed from frame 0.
+// 2. CAST: nucleus (spring entrance + pulse), 5 electrons each orbiting at a
+//    different radius/speed/phase, 5 electron-moons each orbiting THEIR
+//    electron, 3 energy rings revealed in a stagger, 36 background particles
+//    drifting independently, 2 staged text blocks. ~52 elements, 6 distinct
+//    motion sources (spring, nucleus pulse, 5 orbit speeds, 5 moon orbits,
+//    ring pulses, particle drift/twinkle) — never ship a scene simpler than this.
+// 3. PACING: rings reveal at frames 0/45/90 (staggered, not simultaneous),
+//    title text at 30-60, sublabel at 70-100 — the structure keeps building
+//    for the first third of the scene, not all at once.
+// 4. LAYOUT: everything shares centerX=960/centerY=540 as its one anchor;
+//    every electron/moon position is clamped to SAFE after computing its
+//    orbit (rules 10c, 14).
 function AtomScene({ label, sublabel }: { label: string; sublabel: string }) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -1131,9 +1130,11 @@ FINAL SELF-CHECK — before finishing, make ONE verification pass over your code
 9b. RICHNESS GATE: can you count ~10 or more independently-moving elements on screen at once (main diagram parts + orbiting/secondary motion + 30-40 background particles), with several DIFFERENT motion sources? If it's fewer than that, or the scene is a few shapes with a label, it is TOO BASIC — add more elements, more motion, and more staged reveals before returning it (see the BASIC-vs-REQUIRED contrast under ANIMATION QUALITY).
 10. All animation timings use scene-LOCAL frame numbers starting at 0 — no offsets from earlier scenes' durations (rule 4b).
 11. No property read (.x, .y, etc.) on the result of arr[i + 1], find(), filter()[0], or a keyed lookup without a bounds/existence guard (rule 12c) — every loop whose body reads [i + 1] iterates only to length - 1.
+12. Scan every style={{ }} object for a stray kebab-case key, every SVG attribute for a stray kebab-case name, and every plain-HTML class=/for= that should be className=/htmlFor= (rules 6b, 6c, 6d). Confirm durationInFrames never appears as a bare identifier or a useVideoConfig() destructure standing in for a scene's own duration (rule 6e). Confirm no Math.random() * 1920 or * 1080 was used directly as a position (rule 6f). Recount every interpolate() inputRange for strictly-increasing, no-duplicate values (rule 6g). Count every backtick in the file — the total must be even (rule 6h).
+13. Every scene component has its plan comment directly above it, and the JSX actually delivers what that comment describes (see HOW TO WORK above).
 If any check fails, fix the code before returning it. Do not return code that fails a check.
 
-Begin with imports, then the CLAMP constant and the FRAME / SAFE / clamp position constants (rule 14), then shared helper components, then the main component.
+Begin with imports, then the CLAMP constant and the FRAME / SAFE / clamp position constants (rule 14), then shared helper components, then the main component. Your ENTIRE response is the code file, starting with the word "import" as its literal first characters and ending with the final line of code — no text before it, no text after it, no markdown fences around it.
 `;
 
 function buildPerLessonContent(lesson, componentName, scenes, totalFrames) {

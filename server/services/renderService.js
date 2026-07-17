@@ -66,11 +66,89 @@ class LessonErrorBoundary extends React.Component {
   }
 }
 
+// Small corner watermark, baked directly into the composition so it's part
+// of the rendered pixels — same headless-Chrome pass that renders the
+// animation, no extra ffmpeg/post-processing step needed, and it applies to
+// every export format automatically (vertical/square are produced by
+// scaling+padding this same 1920x1080 render — see padToFormat below — so
+// whatever's in this frame, watermark included, carries through unchanged).
+// Only ever appears in the DOWNLOADED file — the in-app DynamicPlayer
+// preview renders the lesson component directly and never touches this file.
+// A dark pill behind a gradient brand badge + full-opacity text — legible
+// over any scene background, not just dark ones, unlike a bare translucent
+// text label sitting directly on the animation.
+const Watermark = () =>
+  React.createElement(
+    "div",
+    {
+      style: {
+        position: "absolute",
+        top: 28,
+        left: 28,
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 18px 8px 8px",
+        borderRadius: 999,
+        backgroundColor: "rgba(15,15,20,0.55)",
+        zIndex: 9999,
+        pointerEvents: "none",
+      },
+    },
+    React.createElement(
+      "div",
+      {
+        style: {
+          width: 36,
+          height: 36,
+          borderRadius: "50%",
+          background: "linear-gradient(135deg, #2563eb, #9333ea)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+          boxShadow: "0 2px 10px rgba(37,99,235,0.6)",
+        },
+      },
+      React.createElement(
+        "span",
+        {
+          style: {
+            color: "#fff",
+            fontWeight: 800,
+            fontSize: 19,
+            fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+          },
+        },
+        "L"
+      )
+    ),
+    React.createElement(
+      "span",
+      {
+        style: {
+          color: "#fff",
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+          fontSize: 25,
+          fontWeight: 700,
+          letterSpacing: 0.3,
+          textShadow: "0 1px 3px rgba(0,0,0,0.4)",
+        },
+      },
+      "leveluppedu.app"
+    )
+  );
+
 const WrappedLesson = (props) =>
   React.createElement(
     LessonErrorBoundary,
     null,
-    React.createElement(${componentName}, props)
+    React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(${componentName}, props),
+      React.createElement(Watermark, null)
+    )
   );
 
 const RemotionRoot = () => (

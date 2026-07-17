@@ -15,7 +15,7 @@ const FORMAT_OPTIONS: { value: ExportFormat; label: string; sublabel: string; ic
 ];
 
 export function DownloadLessonButton({ courseId, lessonNumber, lessonTitle }: DownloadLessonButtonProps) {
-  const [state, setState] = useState<"idle" | "rendering" | "ready" | "failed">("idle");
+  const [state, setState] = useState<"idle" | "queued" | "rendering" | "ready" | "failed">("idle");
   const [progress, setProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -33,9 +33,13 @@ export function DownloadLessonButton({ courseId, lessonNumber, lessonTitle }: Do
 
   const startExport = async (format: ExportFormat) => {
     setMenuOpen(false);
-    if (state === "rendering") return;
+    if (state === "rendering" || state === "queued") return;
 
-    setState("rendering");
+    // Server-side, this may actually sit queued behind another in-flight
+    // render rather than start immediately (renders are capped to run one
+    // at a time — see exportController.js) — reflect that honestly instead
+    // of showing "Rendering… 0%" while nothing is happening yet.
+    setState("queued");
     setProgress(0);
     setErrorMsg("");
 
@@ -44,6 +48,10 @@ export function DownloadLessonButton({ courseId, lessonNumber, lessonTitle }: Do
 
       pollExport(jobId, async (status) => {
         setProgress(status.progress);
+
+        if (status.status === "queued" || status.status === "rendering") {
+          setState(status.status);
+        }
 
         if (status.status === "ready") {
           setState("ready");
@@ -73,8 +81,8 @@ export function DownloadLessonButton({ courseId, lessonNumber, lessonTitle }: Do
     <div className="flex flex-col items-stretch gap-1.5" ref={menuRef}>
       <div className="relative">
         <button
-          onClick={() => state !== "rendering" && setMenuOpen((o) => !o)}
-          disabled={state === "rendering"}
+          onClick={() => state !== "rendering" && state !== "queued" && setMenuOpen((o) => !o)}
+          disabled={state === "rendering" || state === "queued"}
           className={`inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
             state === "ready"
               ? "bg-emerald-100 text-emerald-700"
@@ -85,6 +93,9 @@ export function DownloadLessonButton({ courseId, lessonNumber, lessonTitle }: Do
         >
           {state === "idle" && (
             <><Download className="h-4 w-4" /> Download video <ChevronDown className="h-3.5 w-3.5 opacity-70" /></>
+          )}
+          {state === "queued" && (
+            <><Loader2 className="h-4 w-4 animate-spin" /> Queued…</>
           )}
           {state === "rendering" && (
             <><Loader2 className="h-4 w-4 animate-spin" /> Rendering… {progress}%</>

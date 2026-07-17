@@ -533,7 +533,39 @@ function GeneratingLessonPreview() {
   );
 }
 
-function VideoPlayer({ lesson, onComplete, onRetry, retrying, courseId, lessonNumber }: { lesson: Lesson; onComplete: () => void; onRetry?: () => void; retrying?: boolean; courseId: string | null; lessonNumber: number }) {
+// 5 seconds before a lesson ends, if the next one is already generated, show
+// a Coursera-style "Up next" prompt the user can click to jump ahead early
+// instead of waiting for playback to finish naturally.
+const UP_NEXT_THRESHOLD_SEC = 5;
+const FPS = 30;
+
+function VideoPlayer({
+  lesson, onComplete, onRetry, retrying, courseId, lessonNumber,
+  nextLessonTitle, nextLessonReady, onPlayNext,
+}: {
+  lesson: Lesson; onComplete: () => void; onRetry?: () => void; retrying?: boolean; courseId: string | null; lessonNumber: number;
+  nextLessonTitle?: string | null; nextLessonReady?: boolean; onPlayNext?: () => void;
+}) {
+  const [showUpNext, setShowUpNext] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+
+  // New lesson (including moving to the next one) — reset both so the
+  // prompt can appear again on THIS lesson's own final seconds, not stay
+  // dismissed forever from a previous lesson.
+  useEffect(() => { setShowUpNext(false); setDismissed(false); }, [lessonNumber]);
+
+  const handleFrameUpdate = (frame: number) => {
+    if (!lesson.totalFrames || !nextLessonTitle || !nextLessonReady || dismissed) return;
+    const secondsRemaining = (lesson.totalFrames - frame) / FPS;
+    setShowUpNext(secondsRemaining > 0 && secondsRemaining <= UP_NEXT_THRESHOLD_SEC);
+  };
+
+  const playNext = () => {
+    setDismissed(true);
+    setShowUpNext(false);
+    onPlayNext?.();
+  };
+
   if (!lesson.code) {
     return (
       <div className="space-y-4">
@@ -561,7 +593,40 @@ function VideoPlayer({ lesson, onComplete, onRetry, retrying, courseId, lessonNu
   };
   return (
     <div className="space-y-4">
-      <DynamicPlayer key={`lesson-${lessonNumber}`} code={lesson.code} durationInFrames={lesson.totalFrames ?? 3600} onEnded={handleEnded} onRetry={onRetry} retrying={retrying} />
+      <div className="relative">
+        <DynamicPlayer
+          key={`lesson-${lessonNumber}`}
+          code={lesson.code}
+          durationInFrames={lesson.totalFrames ?? 3600}
+          onEnded={handleEnded}
+          onRetry={onRetry}
+          retrying={retrying}
+          onFrameUpdate={handleFrameUpdate}
+        />
+        {showUpNext && (
+          <div className="absolute bottom-4 right-4 z-10 bg-slate-900/95 backdrop-blur rounded-xl shadow-xl border border-white/10 p-3 flex items-center gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <div className="min-w-0">
+              <p className="text-[11px] text-slate-400 font-medium">Up next</p>
+              <p className="text-sm text-white font-semibold truncate max-w-[180px]">{nextLessonTitle}</p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => { setDismissed(true); setShowUpNext(false); }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+                aria-label="Dismiss"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={playNext}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors"
+              >
+                <Play className="h-3 w-3 fill-white" /> Play next
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
       <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
         <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
         <ul className="space-y-2">
@@ -1658,7 +1723,17 @@ export default function AILearningPage() {
             </button>
             {activeSection === "video" && (
               <div className="space-y-6">
-                <VideoPlayer lesson={lessons[activeLesson]} onComplete={() => markComplete(lessons[activeLesson].id)} onRetry={() => handleRetryLesson(activeLesson)} retrying={retryingLesson === activeLesson} courseId={activeHistoryId} lessonNumber={activeLesson + 1} />
+                <VideoPlayer
+                  lesson={lessons[activeLesson]}
+                  onComplete={() => markComplete(lessons[activeLesson].id)}
+                  onRetry={() => handleRetryLesson(activeLesson)}
+                  retrying={retryingLesson === activeLesson}
+                  courseId={activeHistoryId}
+                  lessonNumber={activeLesson + 1}
+                  nextLessonTitle={lessons[activeLesson + 1]?.title}
+                  nextLessonReady={lessonStatuses[activeLesson + 1] === "ready" && !!lessons[activeLesson + 1]?.code}
+                  onPlayNext={() => setActiveLesson((i) => i + 1)}
+                />
                 <div className="flex items-center justify-between gap-2 pt-2">
                   <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className="text-xs sm:text-sm px-3 sm:px-4 shrink-0"><ChevronLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
                   {DOWNLOAD_ENABLED && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (

@@ -21,6 +21,11 @@ interface DynamicPlayerProps {
   // "which scene got replayed" using the lesson's persisted scene
   // boundaries. Used for collaborative-room replay analytics.
   onSeekBack?: (frame: number) => void;
+  // Fires on every frame update during normal playback — a plain pass-through
+  // of the Player's own "frameupdate" event, no policy baked in here. Used
+  // by callers that need to react to playback position, e.g. showing an
+  // "Up next" prompt a few seconds before the lesson ends.
+  onFrameUpdate?: (frame: number) => void;
 }
 
 const FPS = 30;
@@ -283,6 +288,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   onRetry,
   retrying,
   onSeekBack,
+  onFrameUpdate,
 }) => {
   const playerRef = useRef<PlayerRef>(null);
   // Wraps BOTH the Player and the controls overlay — this is the element we
@@ -426,14 +432,25 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
     const player = playerRef.current;
     if (!player || !onSeekBack) return;
     let lastFrame = 0;
-    const onFrameUpdate = (e: { detail: { frame: number } }) => {
+    const handleFrameUpdate = (e: { detail: { frame: number } }) => {
       const frame = e.detail.frame;
       if (lastFrame - frame > 45) onSeekBack(frame);
       lastFrame = frame;
     };
-    player.addEventListener("frameupdate", onFrameUpdate as any);
-    return () => player.removeEventListener("frameupdate", onFrameUpdate as any);
+    player.addEventListener("frameupdate", handleFrameUpdate as any);
+    return () => player.removeEventListener("frameupdate", handleFrameUpdate as any);
   }, [onSeekBack, Component]);
+
+  // Plain frame-position pass-through for callers that need it (e.g. an
+  // "Up next" prompt a few seconds before the lesson ends) — no policy here,
+  // just the raw current frame on every update.
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player || !onFrameUpdate) return;
+    const handleFrameUpdate = (e: { detail: { frame: number } }) => onFrameUpdate(e.detail.frame);
+    player.addEventListener("frameupdate", handleFrameUpdate as any);
+    return () => player.removeEventListener("frameupdate", handleFrameUpdate as any);
+  }, [onFrameUpdate, Component]);
 
   // ── Render-time crash state ────────────────────────────────────────────────
   // useCompilation only catches COMPILE-time errors. Generated code can still
