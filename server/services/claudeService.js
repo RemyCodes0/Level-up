@@ -14,8 +14,7 @@ const glmClient = new OpenAI({
 });
 
 // DeepSeek client for lesson code generation — also OpenAI-compatible, so the
-// same SDK works with just a different baseURL/key. DeepSeek V4 Pro
-// (deepseek-v4-pro) is strong at math/reasoning-heavy generation.
+// same SDK works with just a different baseURL/key.
 const deepseekClient = new OpenAI({
   apiKey: process.env.DEEPSEEK_API_KEY,
   baseURL: "https://api.deepseek.com",
@@ -38,15 +37,15 @@ const fableClient = new OpenAI({
 // ── Code-gen provider table ───────────────────────────────────────────────────
 // Each entry bundles everything that differs between providers so the
 // generation code below stays provider-agnostic. Lesson code and ad code are
-// selected INDEPENDENTLY (see LESSON_CODE_PROVIDER / AD_CODE_PROVIDER below) —
-// they used to share one global CODE_MODEL switch, which meant you couldn't
-// run different models for lessons vs ads at the same time.
+// selected INDEPENDENTLY (see LESSON_CODE_PROVIDER / AD_CODE_PROVIDER below).
 const CODE_PROVIDERS = {
   glm: {
     client: glmClient,
     model: "glm-5.2",
-    // GLM-specific request extras. thinking disabled = faster, cheaper; the
-    // long crash-safety prompt does the heavy lifting, not model reasoning.
+    // thinking disabled = faster + cheaper. The prompt now leans on a short,
+    // coherence-first rule set (not brute reasoning) to do the heavy lifting,
+    // so extra chain-of-thought buys little here and costs latency on the
+    // high-volume 6-lessons-per-course path.
     extraParams: { thinking: { type: "disabled" } },
     maxTokens: 100000,
     keyEnv: "ZAI_API_KEY",
@@ -54,21 +53,22 @@ const CODE_PROVIDERS = {
   deepseek: {
     client: deepseekClient,
     model: "deepseek-v4-pro",
-    // DeepSeek V4 Pro tuning for RICH, creative animation code:
-    //  - temperature 1.0 / top_p 1.0 = DeepSeek's own recommended settings for
-    //    V4 Pro, and the key lever for variety/ambition. Low temperature (its
-    //    code default) produces safe, repetitive, BASIC scenes — exactly the
-    //    failure we're fixing. The autofix/validate/critic/retry net catches any
-    //    crash-safety slips this introduces, so we can afford the creativity.
-    //  - reasoning_effort "high" = use DeepSeek's core strength (chain-of-thought)
-    //    to DESIGN each scene before coding it (the prompt's HOW TO WORK block
-    //    directs that reasoning at richness). "high" is DeepSeek's default depth;
-    //    bump to "max" for even more planning at higher latency/cost.
+    // Tuning notes:
+    //  - temperature 0.9 / top_p 0.95: enough variety for distinct, concept-
+    //    driven scenes without the wild swings temp 1.0 produced (which the
+    //    old "cram in maximum density" prompt leaned on but which also fed the
+    //    off-model, incoherent output we're now designing against).
+    //  - reasoning_effort "high" (was "max"): the new prompt asks the model to
+    //    illustrate ONE concept coherently per scene rather than plan a 50-
+    //    element pile-up, so it needs far less planning budget. "high" recovers
+    //    most of "max"'s planning depth at a fraction of the latency — the
+    //    single biggest lever on the "slow to generate" complaint. Bump back to
+    //    "max" per-deploy only if a specific topic class regresses.
     extraParams: {
       reasoning_effort: "high",
       thinking: { type: "enabled" },
-      temperature: 1.0,
-      top_p: 1.0,
+      temperature: 0.9,
+      top_p: 0.95,
     },
     maxTokens: 100000,
     keyEnv: "DEEPSEEK_API_KEY",
@@ -107,15 +107,11 @@ console.log(
 );
 
 // ── Error classification ─────────────────────────────────────────────────────
-// Two kinds of failure need different handling:
-//   - Transport errors (connection reset, rate limit, 5xx): retry as-is,
-//     the same prompt may well succeed next time.
-//   - Content errors (bad JSON, failed validation, critic rejection): the
-//     model produced wrong OUTPUT. Retrying with the identical prompt often
-//     reproduces the identical mistake — so content errors are fed back into
-//     the retry prompt (see generateLessonCode).
-//   - Non-retryable errors (401/403 auth): retrying is pure wasted time and
-//     log noise. Fail immediately.
+//   - Transport errors (connection reset, rate limit, 5xx): retry as-is.
+//   - Content errors (bad JSON, failed validation, critic rejection): the model
+//     produced wrong OUTPUT; fed back into the retry prompt so the next attempt
+//     is corrective, not a blind reroll.
+//   - Non-retryable errors (401/403 auth): fail immediately.
 function contentError(message) {
   const err = new Error(message);
   err.isContentError = true;
@@ -128,8 +124,6 @@ function isNonRetryable(err) {
 }
 
 // ── Retry helper with exponential backoff + jitter ──────────────────────────
-// Hammering a rate-limited or momentarily-overloaded API with zero delay
-// makes correlated failures across all attempts more likely, not less.
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -140,53 +134,20 @@ async function backoffDelay(attempt, baseMs = 500, capMs = 8000) {
   await sleep(exp + jitter);
 }
 
-// ── Tiny concurrency limiter ─────────────────────────────────────────────────
-// If multiple lessons generate code in parallel, each one calls
-// generateLessonCode independently with no awareness of the others. If the
-// GLM endpoint enforces a max-simultaneous-connections limit, firing 5-6
-// requests at once can produce instant "Connection error." failures that
-// look like network flakiness but are actually a self-inflicted concurrency
-// spike. This wraps the actual API call so no matter how many lessons are
-// kicked off concurrently by the caller, only N requests to GLM are ever
-// in flight at once — everything else queues.
-//
-// IMPORTANT: the limited function must cover the ENTIRE lifetime of the
-// request, including consuming the response stream. With streaming, the
-// create() promise resolves as soon as response headers arrive — the HTTP
-// connection then stays open for the whole (potentially minutes-long)
-// stream. If the limiter releases its slot at create()-resolution time,
-// you can end up with far more than N sockets actually open at once,
-// which defeats the entire point. generateLessonCode therefore passes the
-// full "open stream + consume every chunk" operation into limit().
-// (Implementation lives in utils/concurrencyLimiter.js — exportController.js
-// reuses the exact same one for video-render concurrency.)
-
-// Cap simultaneous in-flight requests to GLM (lesson code — high volume,
-// 6 per course). Adjust via env var if the provider's actual limit turns out
-// to be higher or lower than this default. Raised default from 3 to 6 —
-// GLM-5.2 is a sparse MoE model (~40B active of 743B total params per token),
-// which is specifically designed to handle concurrent requests efficiently
-// since serving infra (vLLM/SGLang) routes experts per-request rather than
-// one request blocking the whole model. A 6-lesson course was being
-// artificially serialized into two waves of 3; this lets all 6 lessons
-// reason + generate in parallel. If this trips rate limits on Z.AI's shared
-// endpoint, lower via the GLM_MAX_CONCURRENT env var.
+// ── Concurrency limiters ─────────────────────────────────────────────────────
+// The limited function must cover the ENTIRE request lifetime (open stream +
+// consume every chunk), so a slot is held for as long as the socket is open —
+// releasing at create()-resolution would allow far more than N sockets at once.
+// (Implementation in utils/concurrencyLimiter.js; exportController reuses it.)
 const GLM_MAX_CONCURRENT = Number(process.env.GLM_MAX_CONCURRENT) || 6;
 const limitLessonCodeCall = createLimiter(GLM_MAX_CONCURRENT);
 
-// Separate, smaller limiter for ad code (Fable 5 / Anthropic by default — a
-// different provider with different rate limits, and much lower volume: one
-// ad per user action vs. six lessons per course). This used to share the GLM
-// limiter, which meant ad requests were throttled by a cap tuned for a
-// completely different provider's concurrency characteristics.
 const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;
 const limitAdCodeCall = createLimiter(AD_CODE_MAX_CONCURRENT);
 
 // Pull the useful bits out of a connection-level failure. The OpenAI SDK
-// collapses network errors (DNS, TLS, ECONNRESET, connection refused, etc.)
-// into a generic "Connection error." message and stashes the actual cause
-// on err.cause — which the old code never logged, making these failures
-// indistinguishable from each other.
+// collapses network errors into a generic "Connection error." and stashes the
+// real cause on err.cause.
 function describeError(err) {
   const cause = err?.cause;
   if (!cause) return err.message;
@@ -196,12 +157,9 @@ function describeError(err) {
 }
 
 // ── Safer JSON extraction ────────────────────────────────────────────────────
-// Walks the text from a given "{" tracking bracket depth and string state,
-// so it finds the actual matching close brace for that object — immune to
-// stray braces inside string values or trailing commentary.
-//
-// Returns the balanced slice, or null if that "{" is never closed
-// (truncated response, or a prose brace with no matching close).
+// Walks from a given "{" tracking bracket depth and string state to find the
+// actual matching close brace — immune to stray braces inside string values or
+// trailing commentary. Returns the balanced slice, or null if never closed.
 function extractJsonObjectFrom(text, start) {
   let depth = 0;
   let inString = false;
@@ -240,18 +198,11 @@ function extractJsonObjectFrom(text, start) {
   return null; // Never closed
 }
 
-// Parsing strategy, in order of preference:
-//   1. Extract a balanced object and JSON.parse it untouched. No text-level
-//      mutation happens on output that was already valid — the old version
-//      globally stripped ``` sequences BEFORE extraction, which could corrupt
-//      backticks living inside JSON string values. Extraction starts at the
-//      first "{", so markdown fences around the object are irrelevant anyway.
-//   2. Only if the pristine parse fails, apply the trailing-comma repair and
-//      try once more.
-//   3. Only if THAT fails, advance past this "{" and try the next candidate.
-//      This recovers the case where the model prefixed the JSON with prose
-//      that itself contains braces (e.g. "Here is {your plan}: {...}") —
-//      which the old first-brace-only approach could never recover from.
+// Parse strategy, in order of preference:
+//   1. Extract a balanced object and JSON.parse it untouched.
+//   2. On failure, apply a trailing-comma repair and try once more.
+//   3. On failure, advance past this "{" and try the next candidate — recovers
+//      the case where prose before the JSON itself contains braces.
 function safeParseJson(text) {
   let searchFrom = 0;
   let lastErr = null;
@@ -262,7 +213,6 @@ function safeParseJson(text) {
 
     const candidate = extractJsonObjectFrom(text, braceAt);
     if (candidate === null) {
-      // This "{" never balances (prose brace or truncation) — try the next one.
       searchFrom = braceAt + 1;
       continue;
     }
@@ -271,8 +221,6 @@ function safeParseJson(text) {
       return JSON.parse(candidate);
     } catch (pristineErr) {
       try {
-        // Trailing-comma cleanup, scoped to a structurally balanced object
-        // and only attempted after a clean parse already failed.
         return JSON.parse(candidate.replace(/,(\s*[}\]])/g, "$1"));
       } catch (repairedErr) {
         lastErr = repairedErr;
@@ -288,9 +236,7 @@ function safeParseJson(text) {
 
 // ── Course plan shape validation ────────────────────────────────────────────
 // Parsing succeeds != the plan is usable. The prompt promises 6 lessons with
-// exactly 4 keyPoints each and 20 questions with valid option/answer shapes;
-// nothing previously checked that promise was kept before handing the plan
-// downstream to code generation, which assumes it.
+// exactly 4 keyPoints each and 20 questions with valid option/answer shapes.
 function validateCoursePlan(plan) {
   const errors = [];
 
@@ -361,11 +307,9 @@ function buildLevelGuidance(level) {
 const MAX_PDF_TEXT_CHARS = 6000;
 
 // ── PPTX text extraction ─────────────────────────────────────────────────────
-// A .pptx is a ZIP archive of XML parts. Slide text lives in
-// ppt/slides/slideN.xml as a series of <a:t>...</a:t> runs (DrawingML text
-// body format) — pulling those out and concatenating per slide is enough to
-// feed the same plain-text course-plan prompt used for PDFs/pasted text, with
-// no need for a full Office-XML parsing dependency.
+// A .pptx is a ZIP of XML parts. Slide text lives in ppt/slides/slideN.xml as
+// <a:t>...</a:t> runs; pulling those out per slide feeds the same plain-text
+// course-plan prompt used for PDFs/pasted text.
 function extractPptxText(buffer) {
   return JSZip.loadAsync(buffer).then(async (zip) => {
     const slideFiles = Object.keys(zip.files)
@@ -438,11 +382,9 @@ Rules:
 - CRITICAL: Respond with ONLY the JSON object. No commentary, no acknowledgment, no clarifying questions — even if the input is unusually long, looks like a document rather than a short topic, or seems ambiguous. If the input is long or document-like, identify its single most central subject and build the course plan around that. Never refuse and never ask a follow-up question — always produce the JSON.`;
 
   // GLM-5.2 is an OpenAI-compatible text endpoint — it can't ingest raw
-  // document bytes the way Claude's native "document" content block could.
-  // When a file was uploaded, extract its text first (PDF via pdf-parse,
-  // PPTX via extractPptxText) and feed it through the same plain-text path
-  // as the pdfText case (still capped at MAX_PDF_TEXT_CHARS, same as text
-  // pasted/extracted any other way).
+  // document bytes. When a file was uploaded, extract its text first (PDF via
+  // pdf-parse, PPTX via extractPptxText) and feed it through the same plain-
+  // text path as the pdfText case (capped at MAX_PDF_TEXT_CHARS).
   let effectivePdfText = pdfText;
   if (pdfBuffer) {
     const isPptx = isPptxFile(sourceFileName);
@@ -483,24 +425,25 @@ ${rules}
 
   let lastError = null;
 
+  // Course plan generation is a bounded, fixed-shape JSON task (6 lessons, 20
+  // questions) — it gets no benefit from deep chain-of-thought, and reasoning
+  // tokens draw from the SAME max_tokens budget as the JSON output. Strip
+  // reasoning_effort and force thinking off for this call, regardless of
+  // provider, so the whole budget goes to the JSON.
+  const { reasoning_effort: _reasoningEffort, ...planExtraParams } = LESSON_CODE_PROVIDER.extraParams;
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await glmClient.chat.completions.create({
-        model: "glm-5.2",
+      const response = await LESSON_CODE_PROVIDER.client.chat.completions.create({
+        model: LESSON_CODE_PROVIDER.model,
+        ...planExtraParams,
         thinking: { type: "disabled" },
-        // Bumped from 6000: 6 lessons + 20 four-option questions sits close
-        // enough to 6k output tokens on verbose topics that truncation was
-        // a realistic (and previously invisible) failure mode.
         max_tokens: 8000,
         messages,
       });
 
       const choice = response.choices?.[0];
 
-      // A truncated response was previously indistinguishable from a
-      // malformed one: safeParseJson would throw "could not parse" and the
-      // retry loop would burn 2 more attempts on the exact same truncation.
-      // Surfacing the real cause makes the log actionable.
       if (choice?.finish_reason === "length") {
         throw contentError(
           "Course plan response hit max_tokens and was truncated — the JSON is incomplete"
@@ -508,7 +451,6 @@ ${rules}
       }
 
       const text = choice?.message?.content || "";
-
       const plan = safeParseJson(text);
 
       const { ok, errors } = validateCoursePlan(plan);
@@ -516,11 +458,6 @@ ${rules}
         throw contentError(`Course plan failed shape validation: ${errors.join("; ")}`);
       }
 
-      // Keep the return shape identical to the original function (the plan
-      // object itself, with lessons/questions at the top level) so existing
-      // callers like courseController.js don't break. The truncation flag
-      // is attached directly to the plan instead of wrapping it, so
-      // `plan.lessons` / `plan.questions` still work exactly as before.
       if (truncated) {
         plan.__truncatedInput = true;
       }
@@ -530,7 +467,7 @@ ${rules}
 
       if (isNonRetryable(err)) {
         throw new Error(
-          `Course plan generation failed with a non-retryable error (check ZAI_API_KEY): ${describeError(err)}`
+          `Course plan generation failed with a non-retryable error (check ${LESSON_CODE_PROVIDER.keyEnv}): ${describeError(err)}`
         );
       }
 
@@ -547,12 +484,9 @@ ${rules}
 }
 
 // ── Remedial lesson plan (collaborative courses) ────────────────────────────
-// Generates the {title, description, keyPoints} for ONE new lesson targeting
-// the group's weakest topic (see server/services/remedialService.js, which
-// calls this then hands the result to the existing buildLesson pipeline —
-// scene plan/audio/code generation is unchanged, only the lesson's own
-// content differs). Deliberately re-teaches from a different angle than a
-// first pass would, since these learners already saw the material once.
+// Generates {title, description, keyPoints} for ONE new lesson targeting the
+// group's weakest topic, then hands off to the existing buildLesson pipeline.
+// Deliberately re-teaches from a different angle than a first pass would.
 async function generateRemedialLessonPlan(courseTopic, weakTopic, groupAvgPct, maxAttempts = 3) {
   const messages = [
     {
@@ -621,10 +555,6 @@ Rules:
 }
 
 // ── Continuous learning: next-course suggestions ────────────────────────────
-// Called once a user finishes a course (see courseController.getNextSuggestionsHandler).
-// Deliberately generic — applies to any completed course, solo or
-// collaborative — this is what makes course generation feel like an ongoing
-// curriculum instead of a series of one-off requests.
 async function generateNextCourseSuggestions(completedTopic, weakTopics = [], maxAttempts = 2) {
   const weakContext = weakTopics.length
     ? `The learner's weaker areas from their quiz results were: ${weakTopics.join(", ")}.`
@@ -684,402 +614,225 @@ Rules:
   );
 }
 
-// Prompt rewritten for Sonnet 5. Key differences from the 4.6 version:
+// ═══════════════════════════════════════════════════════════════════════════
+// LESSON CODE-GEN PROMPT
+// ═══════════════════════════════════════════════════════════════════════════
+// Design goals of this rewrite (vs. the old "maximum density" prompt):
 //
-// 1. WORKED EXAMPLE is now richly animated — two scenes showing real
-//    continuous motion (orbiting particle, pulsing core, sine-wave drift),
-//    not a static black rectangle. The model imitates the example more than
-//    any written rule, so the example must demonstrate ambition, not caution.
+//   1. PERSONALIZED, NOT TEMPLATED. The old prompt mandated a 30-40 particle
+//      field + "10+ moving things or REJECTED" in EVERY scene, and its one
+//      worked example was a glowing atom with orbiting electrons. Since the
+//      model imitates the example harder than any rule, every lesson trended
+//      toward the same particle-soup look regardless of topic. Here, the
+//      concept's own structure dictates the cast; the worked example is a
+//      NON-particle mechanism (binary search) framed purely as a craft/safety
+//      reference to copy PATTERNS from, never a visual to reproduce.
 //
-// 2. EASING is now available — Sonnet 5 handles it correctly and shouldn't
-//    be told to avoid it. Removed the "NEVER use Easing" prohibition.
+//   2. COHERENT. Two new levers: (a) a per-lesson VISUAL IDENTITY — one palette
+//      + one recurring motif chosen up front and carried across all 6 scenes,
+//      so a course reads as one designed piece; (b) motion must be MOTIVATED —
+//      every moving element illustrates something, instead of ambient decoration
+//      that reads as AI-generated noise.
 //
-// 3. PERFORMANCE limits relaxed — the 50-element cap and "keep frame cheap"
-//    warnings were calibrated for 4.6's tendency to over-engineer loops.
-//    Sonnet 5 is more disciplined; these limits were cutting off legitimate
-//    visual richness.
+//   3. FASTER. Redundancy removed (the old 6g re-stated 11; self-check
+//      duplicated the body). Element-count quotas that inflated output on every
+//      one of 6 lessons are gone. Shorter prompt = less attention decay + fewer
+//      output tokens = lower latency, the core "slow to generate" complaint.
 //
-// 4. LINE LIMIT raised from 800 to 1200 — Sonnet 5 writes more structured,
-//    readable code with proper helper components. The old limit was forcing
-//    it to compress scenes in ways that reduced animation quality.
-//
-// Crash-safety rules (interpolate shape, clamping, forbidden imports,
-// duration sum) are kept — those reflect real runtime constraints of this
-// environment, not compensations for model weakness.
-//
-// ACCURACY PASS (visual-correctness additions — targets scenes that run
-// without crashing but LOOK wrong: misplaced arrows, spilled particles,
-// mistimed reveals, unreadable text):
-//   4b  — frame numbers are per-scene (Series.Sequence resets frame to 0);
-//         global-timeline offsets silently never fire.
-//   7b  — pace reveals across the FULL scene duration; entrance-then-idle
-//         scenes fail even though they satisfy the continuous-motion rule.
-//   8   — visualDescription is a binding spec; onScreenText renders verbatim.
-//   9   — Layer 3 expanded: reserved text zones, zIndex, contrast, minimum
-//         sizes, no two texts in the same spot simultaneously.
-//   10c — spatial anchoring: related elements share ONE position source
-//         (connectors, moving targets, containment). Worked example's
-//         WaveScene refactored to model compute-once/reference-everywhere.
-//   10d — proportion sanity: element sizes relative to their role.
-//   12b — spring() requires fps from useVideoConfig() (runtime throw).
-//   FINAL SELF-CHECK — one-pass verification checklist before returning.
+// Crash-safety rules (interpolate shape, clamp, spring fps, undefined guards,
+// forbidden imports, duration sum) are UNCHANGED — they are real runtime
+// constraints of the browser sandbox, not compensations for model weakness.
 const CODE_GEN_STATIC_RULES = `
-⚠️ OUTPUT FORMAT: You MUST respond with ONLY raw TypeScript/TSX code. No explanations, no descriptions, no topic summaries, no markdown. The FIRST character of your response must be "i" (from "import"). If you output anything other than TSX code, the entire system fails and the user loses their course. CODE ONLY.
+⚠️ OUTPUT FORMAT: Respond with ONLY raw TypeScript/TSX code. No prose, no explanation, no markdown fences. The FIRST character of your response must be "i" (from "import"). Anything else fails the build and the user loses their course. CODE ONLY.
 
-You are a world-class Remotion motion-graphics developer creating visually astonishing educational animations. This is a premium learning product — every scene must feel alive, dynamic, and visually connected to the concept being taught.
+You are a world-class Remotion motion-graphics developer. You build educational animations that a real studio would be proud of: purposeful, cinematic, and — above all — a clear visual explanation of ONE specific concept. Runs-without-crashing and stays-in-frame are the floor, not the goal. The goal is that a viewer who muted the audio would still understand the concept from the motion alone.
 
-HOW TO WORK — for EACH scene, before writing its JSX, work out: (1) THE MECHANISM — what process does this scene teach, and what BEFORE → AFTER transformation must visibly happen across the scene (rule 10b); (2) THE CAST — the specific elements, aiming for 10+ independently-moving things (main diagram parts, secondary/orbiting motion, a 30-40 particle background field, energy rings/connectors), and how each one moves; (3) THE PACING — the 3-5 staged reveals spread across the FULL duration (rule 7b); (4) THE LAYOUT — the shared position anchors so connectors/labels/contents line up, clamped to SAFE (rules 10c, 14). Go straight from that to implementing the scene at that density — a scene you didn't work through this way WILL come out basic. Do not narrate this planning as prose in the output, in comments, or before/after the code block — every one of those costs real generation time across 10+ scenes for zero runtime benefit. The WORKED EXAMPLE below is the MINIMUM density to match or exceed in EVERY scene — study it, then build straight to that bar.
+════════ PLAN BEFORE YOU CODE (do this in your head, do NOT write it as prose) ════════
 
-Generate a complete, self-contained Remotion composition for a lesson. Each scene has an EXACT frame duration (measured from its voiceover audio) and you MUST build each scene to that exact duration.
+STEP 0 — LESSON VISUAL IDENTITY (decide ONCE, apply to EVERY scene):
+Every scene in this lesson must feel like part of the SAME designed piece, not six unrelated clips. Before any code, fix:
+  • PALETTE: 3-4 colors derived from the SUBJECT, not a default. Biology→living greens; electronics→copper/PCB-green; finance→ink+ledger tones; astronomy→deep space + stellar accents; history→parchment/sepia. One background base, one primary accent (the "hero" color), one or two supporting hues. Reuse these exact colors in every scene.
+  • MOTIF: one recurring visual element or geometry that threads through the lesson (a grid, a flowing current, orbital paths, a timeline spine, cells, layers). It reappears — evolved, not copy-pasted — in each scene so the course has a signature.
+  • TONE: match motion energy to the subject. A meditation lesson breathes slowly; a rocket-launch lesson is kinetic. Do not give every topic the same restless jitter.
 
-STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
-1. The component MUST be named exactly as given below and exported as a named export: export const ComponentName = () => { ... }
+STEP 1 — PER SCENE, work out four things, then build straight to them:
+  (1) THE MECHANISM: what process does THIS scene teach, and what BEFORE→AFTER change must visibly happen across its duration (see CRAFT §A).
+  (2) THE CAST: the specific elements the concept actually needs — sized to the concept, NOT to a quota. A clean idea shown with 4 well-chosen, well-animated elements beats 40 decorative ones. Add ambient/background motion only where it supports the mood; never as filler.
+  (3) THE PACING: 3-5 staged reveals spread across the FULL duration, tracking the narration (see CRAFT §B).
+  (4) THE LAYOUT: shared position anchors so connectors/labels/contents line up, every final position clamped to SAFE (see CRAFT §C, and SAFETY §5).
+
+════════ SANDBOX API (violate → build fails) ════════
+1. Named export exactly as given below: export const ComponentName = () => { ... }
 2. Import ONLY from "remotion" and "react".
-   From "remotion": ANY named export works (AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing, interpolateColors, random, Loop) — EXCEPT staticFile, which is not available.
-   From "react": ONLY useMemo, useCallback, useRef. DO NOT use useState — it DOES NOT EXIST in this sandbox. Using useState will crash the video.
-   Do NOT import from any other library.
-3. The component takes NO props — all data is hardcoded. This means variables like user, currentUser, session, props, context, or anything implying external/dynamic data DO NOT EXIST and referencing them crashes with "X is not defined". Every variable you use must be either: (a) declared locally with const/let inside your own code, (b) a real Remotion or React export from the allowed list, or (c) a parameter of a function you wrote yourself. Nothing else is available — there is no login state, no user data, no external context of any kind.
-   NEVER use a JavaScript built-in name (Math, Array, Object, String, Number, Date, JSON, Boolean, Map, Set) as a variable, function parameter, or destructured prop name. Doing so shadows the real built-in inside that scope and crashes with "X.method is not a function" — for example, naming a helper component's parameter Math means Math.sin inside that component no longer refers to the real Math object at all, it refers to whatever value was actually passed in for that parameter.
-4. Structure: a single <Series> with one <Series.Sequence> per scene, IN ORDER. Do NOT use a bare <Sequence> anywhere, including inside a scene component. A <Sequence from={...} durationInFrames={...}> nested inside a scene will UNMOUNT its children once its own duration elapses — even if that's shorter than the scene's real duration — which makes the visual disappear while the audio (in the parent Series.Sequence) keeps playing. If part of a scene should only show for a portion of the scene, control that with interpolate()-driven opacity/scale on an always-mounted element, never by wrapping it in a shorter-lived Sequence.
-4b. FRAME NUMBERS ARE PER-SCENE, NOT GLOBAL. useCurrentFrame() inside a <Series.Sequence> is RELATIVE to that scene's own start — it reads 0 on the scene's first frame, in EVERY scene. NEVER offset animation timings by the durations of earlier scenes. A scene-5 entrance written as interpolate(frame, [1240, 1270], [0, 1]) will NEVER fire — frame inside that scene only ever runs from 0 to that scene's own duration, so the element stays invisible for the whole scene. Every inputRange number is local to its scene: entrances near [0, 30], exits near [sceneDuration - 30, sceneDuration] written as plain literals of THAT scene's duration.
-5. Each <Series.Sequence durationInFrames={EXACT_NUMBER}> — copy the number EXACTLY. Never compute or round it.
-6. Inside each sequence: <Audio src={"EXACT_URL"} /> — copy URLs exactly, NO staticFile() wrapper. These URLs contain long random hex IDs — a single mistyped character silently breaks that scene's audio. Copy each one character-for-character from the scene table, then re-check it before moving to the next scene.
+   • From "remotion": any named export EXCEPT staticFile (AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing, interpolateColors, random, Loop).
+   • From "react": ONLY useMemo, useCallback, useRef. useState DOES NOT EXIST here and crashes the video.
+   • No other imports of any kind.
+3. NO props, NO external/dynamic data. Variables like user, session, props, context do not exist — referencing them crashes with "X is not defined". Every identifier must be locally declared, a listed remotion/react export, or a parameter of your own function.
+   • NEVER shadow a JS built-in (Math, Array, Object, String, Number, Date, JSON, Boolean, Map, Set) with a variable/param/prop name — inside that scope the real built-in is gone (e.g. a param named Math makes Math.sin crash).
+4. STRUCTURE: a single <Series> with one <Series.Sequence durationInFrames={EXACT}> per scene, IN ORDER. Never a bare <Sequence> anywhere — a nested <Sequence> unmounts its children when its own (often shorter) duration elapses, so the visual vanishes while the audio keeps playing. To show something for only part of a scene, drive its opacity/scale with interpolate() on an always-mounted element.
+5. Copy each durationInFrames number EXACTLY — never compute or round it. Sum of all durations MUST equal the given TOTAL FRAMES.
+6. Each sequence contains <Audio src={"EXACT_URL"} /> — no staticFile() wrapper. URLs carry long random hex IDs; one wrong character silently 404s that scene's audio. (A downstream pass also repairs these, but copy them right anyway.)
+7. FRAME NUMBERS ARE PER-SCENE. useCurrentFrame() resets to 0 at the start of EVERY <Series.Sequence>. Never offset a timing by earlier scenes' durations — an entrance written as interpolate(frame, [1240, 1270], ...) in scene 5 never fires. Entrances live near [0, 30]; exits near [thisSceneDuration - 30, thisSceneDuration], written as literals of THIS scene's own duration.
 
-⚠️ EXACT MISTAKES THIS MODEL MAKES — READ EVERY ONE, THEN NEVER DO THEM:
-6b. JSX INLINE STYLE OBJECTS USE CAMELCASE, NEVER CSS KEBAB-CASE. style={{ }} is a JavaScript object, not a CSS stylesheet — its keys follow JS identifier rules. Writing a kebab-case key is a silent bug (React ignores it — the browser gets no error, the property just never applies) or an outright syntax error, depending on how it's written. The exact properties this model tends to get wrong, kebab (WRONG) -> camelCase (RIGHT): transform-origin -> transformOrigin, background-color -> backgroundColor, font-size -> fontSize, font-weight -> fontWeight, font-family -> fontFamily, border-radius -> borderRadius, box-shadow -> boxShadow, text-shadow -> textShadow, letter-spacing -> letterSpacing, line-height -> lineHeight, text-align -> textAlign, z-index -> zIndex, flex-direction -> flexDirection, justify-content -> justifyContent, align-items -> alignItems, pointer-events -> pointerEvents. Before finishing, scan every style={{ }} object you wrote and confirm every key is camelCase.
-6c. SVG JSX ATTRIBUTES USE CAMELCASE TOO — this is a separate trap from 6b (these appear as JSX attributes like strokeWidth={2}, not inside a style object, but the same kebab-case instinct breaks them the same way). WRONG -> RIGHT: stroke-width -> strokeWidth, stroke-linecap -> strokeLinecap, stroke-linejoin -> strokeLinejoin, stroke-dasharray -> strokeDasharray, stroke-dashoffset -> strokeDashoffset, stroke-opacity -> strokeOpacity, fill-opacity -> fillOpacity, text-anchor -> textAnchor, dominant-baseline -> dominantBaseline, clip-path -> clipPath.
-6d. HTML ATTRIBUTE NAMES DIFFER IN JSX: the plain-HTML attribute class is className in JSX, and for is htmlFor. Writing plain HTML attribute names here is a common slip from HTML training data leaking in — this is React, not HTML, even though the syntax looks similar.
-6e. durationInFrames IS NEVER A GLOBAL OR AMBIENT VALUE — it does not exist as a bare identifier anywhere in scope, and useVideoConfig()'s durationInFrames field is a DIFFERENT number than you probably want: it's the WHOLE composition's total duration across every scene, not the current scene's own duration (that trap is exactly why it's easy to reach for). If a helper component needs to know a scene's duration, the parent scene component must pass it in explicitly as a real prop with its own name (e.g. sceneDuration), computed from the literal number given to you for that scene — never assume it's available for free.
-6f. NEVER USE RAW Math.random() * 1920 OR Math.random() * 1080 AS A POSITION. This produces a value spanning the ENTIRE frame edge-to-edge, which after clamping just piles every element onto the SAFE boundary instead of distributing them naturally through the safe area — clamping is a last-resort backstop (rule 14), not a substitute for generating sane values to begin with. Generate positions already inset within SAFE from the start: SAFE.xMin + Math.random() * (SAFE.xMax - SAFE.xMin), and the same pattern for y with SAFE.yMin/SAFE.yMax — then still clamp the final value per rule 14.
-6g. interpolate() INPUT RANGES MUST BE STRICTLY INCREASING WITH NO REPEATED VALUES — this is restated here because it is the single most common crash this model produces despite rule 11 below. Before finishing, look at literally every interpolate() call you wrote and manually confirm each number in the 2nd argument's array is strictly larger than the one before it. [0, 30, 60, 60] and [300, 320, 466, 466] are both real crashes from a duplicated final value — if a scene's last two reveals would naturally land on the same frame, offset the later one by at least 1.
-6h. TEMPLATE LITERAL DISCIPLINE — prefer plain string concatenation ("a" + b + "c") over template literals for building dynamic strings (colors, transforms, paths); it has the exact same result with zero risk of an unbalanced backtick. If you do use a template literal, every opening backtick must have a matching closing backtick — count them before finishing. An unterminated template literal doesn't just break one line, it corrupts everything after it in the file.
+════════ CRASH-SAFETY (each one is a real runtime crash — no exceptions) ════════
+S1. interpolate(value, inputRange, outputRange, options?) — exactly 3 args + optional options object.
+    • inputRange and outputRange are ARRAY LITERALS of plain number literals, written inline: [0, 20]. NEVER a variable holding an array, NEVER an expression inside the array (no [start, start+20], no [end-30, end], no [i*8]). If a value must vary, shift the FIRST argument instead: interpolate(frame - i * 8, [0, 20], [0, 1], CLAMP).
+    • inputRange strictly increasing, no repeats. [0, 30, 60, 60] crashes — bump the dupe: [0, 30, 60, 61].
+    • For hold-at-final: 2 points + CLAMP, e.g. interpolate(frame, [0, 30], [0, 1], CLAMP).
+    • const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" }; use it on entrance/exit interpolations so they don't overshoot. (Continuous Math.sin/cos motion needs no CLAMP.)
+S2. spring() MUST receive both frame AND fps: spring({ frame, fps, config: {...} }) with const { fps } = useVideoConfig() inside the component. Missing fps throws.
+S3. Never emit NaN into any SVG/style number (cx, cy, r, x, y, width, height, points, d, transforms):
+    • Guard division: value / (denom || 1). Guard array access before use.
+    • Math.sin/cos always get a plain finite number.
+    • Filter polyline/polygon points: pts.filter(p => !isNaN(p.x) && !isNaN(p.y)).
+S4. Never read a property off a possibly-undefined value ("Cannot read properties of undefined"):
+    • Consecutive access: when a loop body reads arr[i+1] (connecting point i to i+1), iterate only to length-1 — arr.slice(0,-1).map((p,i)=>{ const next = arr[i+1]; ... }) — or guard: if (!next) return null;
+    • Lookups that can miss (find(), map[key], arr[idx]): guard the result before reading .x/.y/.length.
+S5. THE 1920x1080 FRAME IS A HARD BOUNDARY. Every final x/y/cx/cy/top/left/translate value MUST pass through clamp() to SAFE as its LAST step. Define once, route everything through it:
+      const FRAME = { w: 1920, h: 1080 };
+      const SAFE = { xMin: 160, xMax: 1760, yMin: 140, yMax: 940 };
+      const clampPos = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+    • Oscillating: compute base ± amp*sin, THEN clamp — never assume it "stays in range".
+    • Orbiting: radius ≤ min(centerX-SAFE.xMin, SAFE.xMax-centerX, centerY-SAFE.yMin, SAFE.yMax-centerY). For center (960,540), radius ≤ 420 is always safe.
+    • Text: also leave ≥80px margin inside SAFE, since text has width/height beyond its anchor.
+    • When generating random positions, generate INSIDE SAFE from the start — SAFE.xMin + Math.random()*(SAFE.xMax-SAFE.xMin) — not Math.random()*1920 then clamp (that piles everything onto the boundary).
 
-ANIMATION QUALITY — THIS IS THE MOST CRITICAL REQUIREMENT. A boring animation is a failed animation.
-The user is paying for animated video lessons. If the animations are generic, static, or visually uninteresting, the product fails entirely. Every scene must feel like a professional motion graphics studio made it.
+════════ SYNTAX TRAPS (silent break or parse error) ════════
+Y1. JSX style objects and SVG attributes are camelCase, never kebab: backgroundColor, fontSize, borderRadius, boxShadow, textShadow, zIndex, justifyContent (not background-color…); strokeWidth, strokeLinecap, strokeDasharray, textAnchor, fillOpacity, clipPath (not stroke-width…). Kebab keys are silently ignored or a syntax error.
+Y2. JSX attribute names differ from HTML: class → className, for → htmlFor.
+Y3. Prefer string concatenation ("a" + b + "c") over template literals for dynamic colors/transforms/paths — zero risk of an unbalanced backtick. If you do use a template literal, every backtick must be paired (total count even); one stray backtick corrupts the whole rest of the file.
+Y4. Never put comma-separated expressions bare in JSX braces ({a, b} is invalid). Never write a literal { or } as JSX text ("f(x) = {x}" breaks parsing) — write braces as string expressions {"{"} or reword to avoid them.
+Y5. Any wrapper component you nest content inside MUST accept and render {children} ({ children }: { children?: React.ReactNode } … then {children} in its body). A wrapper missing {children} silently drops everything inside it — the #1 cause of blank scenes. If unsure, put the background as a sibling <AbsoluteFill> BEHIND the content instead of wrapping it.
 
-⛔ THE #1 FAILURE MODE IS SCENES THAT ARE TOO BASIC. A scene with a couple of shapes, a label, and a plain background is a REJECTED scene, even if it runs perfectly and stays on screen. "Runs without crashing" and "stays in bounds" are the MINIMUM to not fail — they are NOT the goal. The goal is a dense, layered, constantly-moving illustration. Do not trade richness for safety: you must deliver BOTH. When in doubt, add more — more animated elements, more motion, more depth, more stages of the process unfolding.
+════════ ANIMATION CRAFT — this is where the product lives ════════
 
-    Concretely, here is the difference:
-    BASIC (REJECTED): a blue circle labeled "Atom" that gently pulses, on a dark background, with the title fading in. ~3 elements, one kind of motion.
-    REQUIRED (SHIPPABLE): a glowing pulsing nucleus + 3 electrons orbiting at different radii/speeds/phases + faint orbital rings + 30-40 drifting background particles with independent timing + a shifting gradient backdrop + the concept name springing in staggered after a supporting label — with the whole structure ASSEMBLING over the scene, not appearing all at once. 10+ moving elements, several independent motion sources.
-    Every scene you output must look like the REQUIRED example, never the BASIC one. If you can count fewer than ~10 independently-moving things on screen at once, the scene is under-built — add more before returning it.
+§A — ILLUSTRATE THE MECHANISM, NOT A LABELED PICTURE. The single most common failure is a static shape with a name on it instead of the actual process happening. Show the BEFORE state becoming the AFTER state across the scene:
+   • DNA replication → base pairs actually SEPARATING one by one, new bases animating in to pair with each exposed strand — not two lines labeled 5'/3'.
+   • Cell division → for each phase, the real structures move: chromosomes condense and line up, spindle fibers extend, the membrane pinches — not a wheel with phase names spinning.
+   • Enzyme activity → the enzyme shape travels ALONG the substrate with a visible change at the contact point — not a static blob labeled "enzyme".
+   • Sorting → elements actually swap into order; binary search → the search window actually narrows.
+   Test: paused at start / middle / end, does the frame look MEANINGFULLY different, reflecting real progress? If it's the same picture with a title fading in, it FAILS — no amount of background decoration rescues it.
+   BINDING SPEC: each scene below has a visualDescription (implement the specific elements/actions it names — not a different visual you'd prefer) and onScreenText (render VERBATIM as the scene's primary text, plus at most brief supporting labels — never paraphrase or replace it).
 
+§B — MOTION IS CONTINUOUS BUT MOTIVATED.
+   • No frozen frames: something is always in gentle motion (Math.sin(frame/k) breathing, drift, the mechanism progressing). But motion must MEAN something — it illustrates the concept or sets the mood. Avoid restless decorative jitter that has nothing to do with the topic; that is precisely what makes an animation read as generated filler.
+   • Pace across the FULL duration. The scene's frames match its narration — break content into 3-5 stages and stagger their reveals across the whole timeline (for a 450-frame scene, roughly frames 0 / 90 / 210 / 330 as literals), with the mechanism visibly advancing between reveals. A scene fully built by frame 60 that merely wobbles for the remaining 390 FAILS: the viewer watches nothing new while the narrator keeps talking.
+   • Entrances feel intentional: use spring() for a couple of key elements so they arrive with weight; give elements with continuous motion DIFFERENT sin/cos periods and phases so nothing moves in robotic lockstep.
 
-7. CONTINUOUS MOTION IS NON-NEGOTIABLE. At frame 0, things move. At frame 100, things move. At frame 200, things move. If anything stops moving after its entrance animation, the scene is wrong. Use Math.sin(frame/k), Math.cos(frame/k), and (frame*speed)%360 to guarantee perpetual motion on every element.
+§C — SPATIAL COHERENCE. Elements that relate must share ONE source of truth for position — this is the #1 cause of a scene that runs but looks WRONG (an arrow pointing at nothing, a label drifting off its target, particles spilling out of a beaker).
+   • Compute each anchor ONCE into a named const; every dependent element (connector endpoint, label, contained particle) READS that same const. Never type a related coordinate twice.
+     const enzyme = { x: 700, y: 540 };
+     <line x1={enzyme.x} y1={enzyme.y} ... />   // reuse — do not re-type 720/560
+   • Moving target: compute the live animated position once; the element AND its arrow/label both read it, so they track together every frame.
+   • Containment: derive a container's inner region from the SAME geometry you drew the container with, and clamp contents into it — never guess "inside" coordinates independently.
+   • Proportion: the main diagram dominates (~40-60% of frame width) in the non-text zone; labels are subordinate to what they label; contained items are a small fraction of their container; clamp any animated size to a sane range (a radius formula that can hit 0 or 900 is a bug).
 
-7b. PACE THE SCENE ACROSS ITS FULL DURATION. Each scene's durationInFrames matches its narration audio — the visuals must UNFOLD across ALL of it, tracking the story being narrated, not finish building in the first 2 seconds and then idle. Break the scene's content into 3-5 stages and spread their entrances across the timeline: for a 450-frame scene, stagger stage reveals at roughly frames 0, 90, 200, 320 (as plain literals scaled to the actual duration), with the illustrated process (rule 10b) visibly progressing between reveals. Ambient motion (rule 7) is NOT a substitute for narrative progress — a scene where every element has fully appeared by frame 60 and merely wobbles in place for the remaining 390 frames FAILS this rule, because the viewer watches nothing new happen while the narrator keeps explaining.
+§D — READABLE TEXT LAYER. Reserve a clear band for text (a bottom band ~y 860-960 or a top band ~y 120-220) and keep the diagram — including its full motion range — OUT of it. Give text a zIndex above the diagram plus a textShadow (or subtle dark backing) for contrast over any color. Body ≥28px, titles ≥36px. Never overlap two text blocks: fade old text fully OUT before new text reaches full opacity.
 
-8. ILLUSTRATE THE EXACT CONCEPT — not generic particles. If the topic is DNA replication, show the double helix unwinding with individual base pairs. If it's photosynthesis, show photons hitting chlorophyll and electrons jumping energy levels. If it's sorting algorithms, show actual elements moving into order. If it's electromagnetism, show field lines rotating. The animation must make the concept VISIBLE — a viewer with no prior knowledge should understand the concept from the visuals alone, without reading the text.
-   THE SCENE SPEC IS BINDING: each scene below comes with a visualDescription and onScreenText. The visualDescription is the SPEC — implement the specific elements and actions it names, not a different visual you'd prefer. The onScreenText is the EXACT text to display on screen — render it verbatim as the scene's primary text (plus at most brief supporting labels); do not invent replacement headline text or paraphrase it.
+════════ CODE QUALITY ════════
+- Inline styles only (no Tailwind, no className for styling, no external CSS). No registerRoot, no Composition.
+- Extract shared helpers at the top (e.g. a Motif component, a Label, an ambient layer) and reuse them across scenes — this is how the lesson's visual identity stays consistent AND keeps each scene concise.
+- Scene length follows the concept: as long as it needs to illustrate the mechanism well, no longer. Don't pad to hit a line count.
+- Every <Series.Sequence> has a positive integer durationInFrames ≥ 1.
 
-9. THREE MANDATORY LAYERS — all three must exist in every scene:
-   - Layer 1 (background): Continuously moving gradient, rotating color field, or drifting particle system. Never static.
-   - Layer 2 (concept): The main animated diagram — the thing that illustrates what the scene teaches. This is the star of the scene.
-   - Layer 3 (text): Text that springs or fades in. Text must be LEGIBLE and NON-OVERLAPPING at all times:
-     · Reserve a clear zone for text (typically a bottom band around y 860-960, or a top band around y 120-220) and keep the Layer 2 diagram OUT of that zone — including its motion range, not just its resting position.
-     · Give text a zIndex above the diagram, plus a textShadow (or a subtle dark backing panel) so it stays readable over any background color.
-     · Body text >= 28px, titles >= 36px. Never let two text blocks occupy the same position at the same time — if new text replaces old text, fade the old one fully OUT before the new one reaches full opacity.
-
-10. RICHNESS REQUIREMENTS — every scene must have at least:
-    - 5+ animated elements (not counting background particles) — richer than a minimal diagram, build a genuinely layered scene
-    - At least 2 elements using spring() for staggered, natural entrances (not just one)
-    - At least 2 elements using Math.sin/Math.cos with DIFFERENT periods/phases for continuous motion that doesn't look synchronized/robotic
-    - A background particle field or ambient motion layer with 30-40 elements, each with independent timing (via index-based delay/phase offsets) — never all moving in lockstep
-    - Colors chosen to match the concept (biology = greens, physics = blues/purples, chemistry = warm colors), with a gradient or multi-color palette per scene, not a single flat color
-    - Glow effects (boxShadow with color) on EVERY primary element, not just one — layer glows of different intensities to create visual depth
-    - At least one element with a secondary/orbiting motion (something moving around another moving thing, not just independent motions)
-    - The concept name or key formula as text, appearing with a stagger after the visual is established, plus a secondary supporting text label revealing shortly after
-
-    THIS IS ENFORCED, NOT A SUGGESTION: a scene consisting of only a title fading in over a plain background, with no shape/diagram illustrating the concept, WILL be rejected and regenerated. Every scene needs a real Layer 2 diagram — text alone is never sufficient, no matter how well-animated the text itself is. A scene with only 1-2 simple animated elements and no particle field is UNDER the bar — push for maximum visual density and motion complexity within the line budget.
-
-10b. ILLUSTRATE THE MECHANISM, NOT JUST A LABELED DIAGRAM. This is the single most common way scenes fail even when technically "animated": showing a static shape with a label naming it, instead of showing the actual process happening. A rotating wheel with phase names on it (G1, S, G2, M) is NOT illustrating cell division — it's a spinning label. A straight line representing "DNA unwinding" with no separating motion is NOT illustrating unwinding.
-    For ANY process/mechanism concept (something happens, something moves, something transforms, something builds), the animation must show the BEFORE state transforming into the AFTER state over the scene's duration, not just display both states as static labels:
-    - "DNA replication" → don't just show two parallel lines labeled 5'/3'. Show individual base pairs (small colored rectangles) actually SEPARATING from each other one at a time (staggered by index/position), with NEW matching bases animating in to pair with each newly-exposed strand.
-    - "Cell division phases" → don't just rotate a wheel with phase names. For EACH phase, show the actual cellular structures relevant to that phase appearing/moving — chromosomes condensing and lining up, spindle fibers extending, the cell membrane pinching inward.
-    - "Enzyme activity" → don't show a static shape labeled "enzyme." Show the enzyme (a distinct shape) physically moving ALONG a track/strand, with something visibly changing at the point of contact (a base flipping, a bond forming — represented by a small color change or shape change at that exact position, synced to the enzyme's position).
-    - "Chemical reaction" → show the actual reactant shapes moving toward each other, colliding/merging, and becoming product shapes — not just displaying reactant and product labels side by side.
-    Ask yourself: if I paused this scene at 3 different frames (start, middle, end), would the visual actually look meaningfully different at each point, reflecting real progress in the process? If the answer is no — if it's the same static picture with the same labels the whole time, just with a title fading in — the scene has failed this requirement regardless of how many decorative particles are in the background.
-
-10c. SPATIAL ANCHORING — elements that RELATE to each other must share ONE source of truth for their position. This is the #1 cause of a scene that runs without crashing but still looks WRONG: an arrow pointing at empty space, a label floating away from the thing it names, particles spilling outside the cup that's supposed to hold them, a pointer landing next to its target instead of on it. It happens when you type a coordinate for element A, then SEPARATELY type another coordinate for the arrow/label/particle meant to attach to A — and the two numbers don't actually match, or A moves and its attachment stays put.
-    The fix is always the same: compute each position ONCE into a named constant, then have EVERY element that depends on it reference that same constant. Never type the same conceptual position twice — if two elements must line up, they must read from the same variable.
-
-    (a) CONNECTORS (arrows, lines, pointers, brackets) must start and end at the ACTUAL anchor of the things they connect — never at a separately-guessed coordinate.
-        const enzymePos = { x: 700, y: 540 };
-        const targetPos = { x: 1150, y: 540 };
-        - Render the enzyme AT enzymePos and the target AT targetPos (via transform/left/top or cx/cy).
-        - Draw the arrow FROM enzymePos TO targetPos by reusing those SAME constants:
-          <line x1={enzymePos.x} y1={enzymePos.y} x2={targetPos.x} y2={targetPos.y} ... />
-        BAD: enzyme positioned at (700,540) but the arrow hardcoded as x1={720} y1={560} x2={1100} — typed independently, so it drifts off the enzyme and misses the target. That is exactly the "arrow in the wrong place" bug.
-
-    (b) A MOVING target: the connector or label must MOVE WITH it. Compute the live (animated) position ONCE and reference that one value in both the element and whatever attaches to it.
-        const targetY = clampPos(540 + Math.sin(frame / 10) * 60, SAFE.yMin, SAFE.yMax);
-        // use targetY for BOTH the bobbing element AND the arrow endpoint / label that tracks it
-        BAD: the element bobs with Math.sin(frame/…) but the arrow points at a static y=540 — it only lines up on one frame and is visibly wrong for every other frame.
-
-    (c) CONTAINMENT — anything meant to be INSIDE a container (liquid, particles, items in a cup / beaker / box / circle / flask) must be positioned FROM the container's OWN geometry, inset by a margin, and clamped to that inner region. Define the container's bounds once, derive the contents' allowed region from them, and never guess "inside" coordinates independently of where you actually drew the container.
-        const cup = { x: 860, y: 500, w: 200, h: 260 }; // the exact box you draw the cup at
-        const inner = { xMin: cup.x + 24, xMax: cup.x + cup.w - 24, yMin: cup.y + 44, yMax: cup.y + cup.h - 20 };
-        // spawn EVERY particle inside the inner region, and clamp its animated position back into it:
-        const px = clampPos(rawX, inner.xMin, inner.xMax);
-        const py = clampPos(rawY, inner.yMin, inner.yMax);
-        For a ROUND container, keep each particle within (radius − margin) of the container's center — compute dx,dy from the center and, if dx*dx+dy*dy exceeds (R−margin)², pull it back — or just clamp to an inscribed box.
-        BAD: cup drawn spanning x=860…1060, but particles spawned at random x across 700…1200 — half of them render outside the cup. That is exactly the "particles out of the cup" bug.
-
-    (d) SELF-CHECK before finishing each scene: for EVERY arrow, label, pointer, and contained element, ask — does its position literally reference the same constant/variable as the thing it attaches to (or derive from that thing's container geometry)? If it uses an independently-typed number, it WILL be misaligned — rewrite it to read from the shared anchor. (These anchor constants belong in positions / transforms / SVG attributes ONLY — they must still never appear inside interpolate()'s input or output arrays per rule 11, and every final position still gets clamped to SAFE or the inner region per rule 14.)
-
-10d. PROPORTION SANITY — size elements according to their ROLE, relative to each other:
-    - The main Layer 2 diagram dominates the frame: roughly 40-60% of frame width, centered in the non-text zone.
-    - Decorative/background particles stay small (4-16px). Contents are much smaller than their container (a particle inside a 200px-wide cup must be a small fraction of 200px, never comparable to it).
-    - Labels are visually subordinate to the thing they label — a label's font size should not exceed the labeled element's own size.
-    - If an element's size is a computed/animated value, clamp it to a sane range exactly like positions are clamped — a pulsing circle whose radius formula can hit 0 or 900 is a bug even if it never crashes.
-
-INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
-11. interpolate() ALWAYS needs exactly 3 arguments: interpolate(value, [in...], [out...]).
-    - The 2nd and 3rd arguments (inputRange, outputRange) MUST be array literals written directly in the call — [0, 20] — containing ONLY plain number literals. NEVER a variable holding an array, and NEVER an expression inside the array (no "end - 30", no "i * 8", no "startFrame + 20"). If a value needs to vary, shift the FIRST argument instead — see the staggering technique below — never the array contents.
-    - CRASH: interpolate(frame, [startFrame, startFrame + 20], [...]) — startFrame may be undefined = NaN, and this is a variable/expression inside the array either way.
-    - CRASH: interpolate(frame, [durationInFrames - 30, durationInFrames], [...]) — durationInFrames is not in scope inside scene components, and it's an expression inside the array regardless.
-    - CRASH: interpolate(frame, [end - 30, end], [...]) — even if "end" was itself declared as "const end = 210", referencing it inside the array is still banned. The array must contain the literal numbers themselves: [180, 210].
-    - GOOD: interpolate(frame, [0, 20], [0, 1], CLAMP) — plain number literals only, nothing else.
-    - If a boundary depends on scene duration, you already know that duration as a plain number (it's given to you per-scene) — write it directly as a literal: interpolate(frame, [180, 210], [1, 0], CLAMP), not a variable reference to it.
-    - CRASH: interpolate(frame, [0, 30, 60, 60], [...]) — duplicate 60. Fix: [0, 30, 60, 91]
-    - CRASH: interpolate(frame, [300, 320, 466, 466], [...]) — duplicate 466. Fix: [300, 320, 466, 467]
-    - CRASH: interpolate(frame, [0, 30]) — missing outputRange. Fix: interpolate(frame, [0, 30], [0, 1])
-    - For hold-at-final-value: use 2 values + CLAMP. interpolate(frame, [0, 30], [0, 1], CLAMP) — NOT [0, 30, 30].
-    - For staggered elements (e.g. inside a .map over an index i): do NOT put i inside the array — that's banned. Instead shift the VALUE argument: interpolate(frame - i * 8, [0, 20], [0, 1], CLAMP). This gives each element its own staggered start time while keeping the inputRange a plain literal array, exactly as required.
-12. NEVER produce NaN in any SVG attribute (cx, cy, r, x, y, width, height, points, d):
-    - Guard ALL division: write (value / (denominator || 1)) — never divide without this guard.
-    - Guard ALL array access: check i < arr.length before arr[i]. Out-of-bounds = NaN.
-    - Math.sin/cos ALWAYS receive a plain number — never undefined, null, or a string.
-    - Polygon/polyline points: filter out any NaN before joining: points.filter(p => !isNaN(p.x) && !isNaN(p.y))
-    - When using random() or useMemo for positions, ALWAYS validate the result is finite before using it.
-12b. spring() MUST be called with BOTH frame AND fps: spring({ frame, fps, config: { ... } }), where fps comes from useVideoConfig() inside the component (const { fps } = useVideoConfig()). Calling spring() without fps throws at runtime and kills the scene. Never hardcode an fps number and never pass undefined — every component that uses spring() must call useVideoConfig() itself (or receive fps as an explicit parameter from a component that did).
-12c. NEVER read a property off a value that can be undefined — "Cannot read properties of undefined (reading 'x')" is a real crash that has killed scenes in production. The two patterns that cause it:
-    - CONSECUTIVE-ELEMENT ACCESS: connecting point i to point i+1 (lines between anchor points, segment chains, paired elements). points[i + 1] is undefined on the LAST iteration if the loop runs to points.length. Fix: iterate only to length - 1 when the body reads [i + 1] — points.slice(0, -1).map((p, i) => { const next = points[i + 1]; ... }) — or guard explicitly: if (!next) return null; before touching next.x.
-    - LOOKUPS THAT CAN MISS: anchors.find(...), anchorMap[key], scenePositions[idx] — any lookup where the key/index might not exist returns undefined, and .x on it crashes. Fix: guard every lookup result before property access (const a = anchors.find(...); if (!a) return null;) or use a guaranteed-complete structure (build the array/object so every index/key you will read is definitely present).
-    This applies to EVERY .x / .y / .length / any property read on the result of indexing, find, filter()[0], or object lookup — if the value isn't provably defined, guard it first. A guard that renders nothing (return null) is always better than a crash that kills the whole video.
-13. CLAMP entrance animations so elements don't fly off-screen after settling:
-    const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
-    Use CLAMP for interpolate() entrance animations. For Math.sin/cos continuous motion, CLAMP is NOT needed.
-14. THE 1920x1080 FRAME IS A HARD BOUNDARY. Elements that drift to the edges or off-screen are a FAILED scene even if they don't crash — the user simply cannot see them, which is just as bad as a crash. This is a frequent, unacceptable failure: DO NOT let it happen.
-
-    ABSOLUTE RULE: EVERY single x / y / cx / cy / top / left / transform-translate value that positions ANY element — main diagram, label, particle, orbiting dot, everything — MUST pass through clamp() to SAFE as its final step before use. If you write a position value that is NOT wrapped in clamp() (or derived from an already-clamped value), that is a BUG. There are no exceptions and no elements that are "obviously fine" — clamp them all.
-
-    Do NOT compute safe positions by hand for each element. Instead, define these constants ONCE at the top of the file and route every position through them:
-
-    const FRAME = { w: 1920, h: 1080 };
-    const SAFE = { xMin: 160, xMax: 1760, yMin: 140, yMax: 940 }; // keep all element CENTERS inside this box
-    const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-
-    Apply this pattern to EVERY positioned element, with no exceptions:
-    - Static/random position: const x = clamp(rawX, SAFE.xMin, SAFE.xMax); const y = clamp(rawY, SAFE.yMin, SAFE.yMax);
-    - Oscillating (base ± amplitude*sin/cos): compute the raw value, THEN clamp it — never trust that base±amplitude "should" stay in range:
-      const rawY = baseY + Math.sin(frame / 10) * amplitude;
-      const y = clamp(rawY, SAFE.yMin, SAFE.yMax);
-    - Orbiting: radius must satisfy centerX ± radius and centerY ± radius both land within SAFE — i.e. radius ≤ min(centerX - SAFE.xMin, SAFE.xMax - centerX, centerY - SAFE.yMin, SAFE.yMax - centerY). For a center at (960, 540), radius ≤ 420 is always safe.
-    - Text: position from SAFE bounds too, and additionally leave ≥80px margin from SAFE's own edges since text has width/height beyond its anchor point.
-    - Particles/background elements: also clamp, even though they're decorative — an off-screen particle wastes a draw call and a few stray ones drifting to the edge look like a bug to the viewer.
-
-    This clamp MUST be the last operation applied to any x/y/cx/cy/top/left value before it's used in a style or SVG attribute — clamping the raw input to a formula and then adding more offsets afterward defeats the purpose.
-
-CODE QUALITY:
-15. Sum of all durationInFrames MUST equal the total given. Verify before finishing.
-16. Inline styles ONLY. No Tailwind, no external CSS, no className for styling.
-17. No registerRoot, no Composition.
-18. Each scene component should be 200-300 lines — use the full budget to create rich, detailed animations. Extract shared helper components (ParticleBg, OrbitRing, Label) at the top to avoid repetition across scenes.
-19. Every <Series.Sequence> must have a positive integer durationInFrames ≥ 1.
-20. NEVER write comma-separated expressions directly inside JSX curly braces: {a, b} is invalid JSX. Use separate expressions, or wrap in parens: {(a, b)} — but better to split into separate JSX attributes or elements.
-21. NEVER write a literal { or } character directly as JSX text content — JSX treats every { as opening a JS expression, so a bare } with no matching opener is a parse error.
-    - CRASH: <div>f(x) = {x²}</div> — the { here isn't a JS expression, it's meant to be literal text, so JSX chokes on it.
-    - CRASH: <div>Set notation: {1, 2, 3}</div> — same problem, bare braces in text.
-    - CRASH: <div>Config: {{ key: value }}</div> as plain display text (not an actual style object) — same problem.
-    - GOOD: if you need to DISPLAY a literal brace character, wrap it as a string expression: <div>f(x) = {"{"}x²{"}"}</div>
-    - BETTER: avoid literal braces in on-screen text entirely. Rewrite math/set notation in words or with different symbols: "f of x equals x squared" or use parentheses/brackets instead of braces where the concept allows it.
-22. NEVER SHIP A BLANK SCENE — if you build a reusable wrapper component (a shared background, gradient, or container that you place scene content inside, e.g. <SceneBg>...content...</SceneBg>), that wrapper MUST accept children in its props ({ children }: { children?: React.ReactNode }) AND render {children} in its JSX. A wrapper that forgets {children} makes React silently drop everything inside it — the scene renders as just the background with no diagram, no text, no error, and no warning. This is the #1 cause of empty/blank lessons. After writing any wrapper you nest content inside, verify its body actually contains {children}. If in doubt, don't use a content-wrapping component at all — put the background as a sibling <AbsoluteFill> behind the content instead of wrapping the content in it.
-
-WORKED EXAMPLE — two richly animated scenes. Study how EVERY frame has motion, how the concept is illustrated, how layers work together:
+════════ WORKED EXAMPLE — COPY THE PATTERNS, NOT THE PICTURE ════════
+This example exists to show you the SAFE PATTERNS (clamp usage, staggered interpolate, spring+fps, shared-anchor coherence, staged reveals, mechanism illustration) and the density of CRAFT expected. It is deliberately NOT particles-and-glowing-orbs. Your scene's actual visual must be invented from YOUR concept and YOUR lesson palette — do NOT reproduce this array/search look unless your topic genuinely is search. Study HOW it's built; then build something else.
 
 \`\`\`tsx
-import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio, Easing } from "remotion";
+import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio } from "remotion";
 
 const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
-
-// Frame-boundary safety — defined ONCE, used by every positioned element.
-// See rule 14: never hand-compute a "should stay in bounds" position —
-// always clamp the final value instead.
 const FRAME = { w: 1920, h: 1080 };
 const SAFE = { xMin: 160, xMax: 1760, yMin: 140, yMax: 940 };
 const clampPos = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-// Background particle field — 36 independently-drifting motes. This is the
-// ambient Layer-1 motion EVERY scene must have. Motion is derived from each
-// particle's index (deterministic, so it never flickers) with a DIFFERENT
-// period/phase per particle, so nothing moves in lockstep. Every position is
-// clamped to SAFE. (Uses string concatenation instead of template literals so
-// there are no backticks to trip over — feel free to do the same.)
-function ParticleField({ hue = 210, count = 36 }: { hue?: number; count?: number }) {
+// LESSON MOTIF: a soft moving gradient wash in the lesson palette, reused as
+// the base layer of every scene so the course reads as one piece. Mood motion
+// only — it supports atmosphere, it is not the "content".
+function Backdrop({ from = "#0b1f3a", to = "#05060f" }: { from?: string; to?: string }) {
   const frame = useCurrentFrame();
+  const shift = 45 + Math.sin(frame / 60) * 10; // slow, calm — matches a "how search works" tone
   return (
-    <AbsoluteFill>
-      {Array.from({ length: count }, (_, i) => {
-        const baseX = ((i * 137) % 1600) + 160;
-        const baseY = ((i * 89) % 800) + 140;
-        const driftX = Math.sin(frame / (20 + (i % 7) * 4) + i) * 40;
-        const driftY = Math.cos(frame / (18 + (i % 5) * 5) + i) * 40;
-        const x = clampPos(baseX + driftX, SAFE.xMin, SAFE.xMax);
-        const y = clampPos(baseY + driftY, SAFE.yMin, SAFE.yMax);
-        const twinkle = 0.2 + ((Math.sin(frame / 15 + i) + 1) / 2) * 0.5;
-        const size = 3 + (i % 4);
-        const col = "hsl(" + (hue + (i % 40)) + ", 80%, 70%)";
-        return (
-          <div key={i} style={{
-            position: "absolute", left: x - size / 2, top: y - size / 2,
-            width: size, height: size, borderRadius: "50%",
-            backgroundColor: col, opacity: twinkle,
-            boxShadow: "0 0 " + (size * 2) + "px " + col,
-          }} />
-        );
-      })}
-    </AbsoluteFill>
+    <AbsoluteFill style={{ background: "radial-gradient(circle at 50% " + shift + "%, " + from + ", " + to + " 70%)" }} />
   );
 }
 
-// An electron that orbits the nucleus AND has its own tiny moon orbiting IT —
-// this is the "secondary/orbiting motion" rule 10 asks for (a moving thing
-// around another moving thing). Every position is clamped as a last defense.
-function Electron({ radius, speed, size, color, phase, centerX = 960, centerY = 540 }: {
-  radius: number; speed: number; size: number; color: string; phase: number; centerX?: number; centerY?: number;
-}) {
-  const frame = useCurrentFrame();
-  const angle = (frame * speed * Math.PI) / 180 + phase;
-  const ex = clampPos(centerX + Math.cos(angle) * radius, SAFE.xMin, SAFE.xMax);
-  const ey = clampPos(centerY + Math.sin(angle) * radius, SAFE.yMin, SAFE.yMax);
-  const moonAngle = frame * 0.12 + phase;
-  const mx = clampPos(ex + Math.cos(moonAngle) * 26, SAFE.xMin, SAFE.xMax);
-  const my = clampPos(ey + Math.sin(moonAngle) * 26, SAFE.yMin, SAFE.yMax);
-  return (
-    <AbsoluteFill>
-      <div style={{
-        position: "absolute", left: ex - size / 2, top: ey - size / 2,
-        width: size, height: size, borderRadius: "50%",
-        backgroundColor: color, boxShadow: "0 0 " + (size * 1.6) + "px " + color,
-      }} />
-      <div style={{
-        position: "absolute", left: mx - 4, top: my - 4,
-        width: 8, height: 8, borderRadius: "50%",
-        backgroundColor: "#fff", opacity: 0.85, boxShadow: "0 0 8px #fff",
-      }} />
-    </AbsoluteFill>
-  );
-}
-
-// A pulsing energy ring around the nucleus — used for STAGED reveals: each ring
-// fades in at a different frame (appearAt), so the atom visibly BUILDS across
-// the scene instead of appearing all at once (rule 7b). The staged reveal uses
-// a value-shifted interpolate so the inputRange stays a plain literal (rule 11).
-function EnergyRing({ radius, color, appearAt }: { radius: number; color: string; appearAt: number }) {
-  const frame = useCurrentFrame();
-  const reveal = interpolate(frame - appearAt, [0, 30], [0, 1], CLAMP);
-  const pulse = 1 + Math.sin(frame / 14 + radius) * 0.05;
-  const d = radius * 2 * pulse;
+// One array cell. Its highlight state is DRIVEN by the search window, so the
+// visual literally shows the algorithm's progress (mechanism, not a label).
+function Cell({ x, y, value, state }: { x: number; y: number; value: number; state: "in" | "out" | "target" }) {
+  const bg = state === "target" ? "#22d3a0" : state === "in" ? "#2b3f6b" : "#151a2e";
+  const glow = state === "target" ? "0 0 26px #22d3a0aa" : state === "in" ? "0 0 14px #2b3f6b88" : "none";
+  const cx = clampPos(x, SAFE.xMin, SAFE.xMax);
+  const cy = clampPos(y, SAFE.yMin, SAFE.yMax);
   return (
     <div style={{
-      position: "absolute", left: 960 - d / 2, top: 540 - d / 2,
-      width: d, height: d, borderRadius: "50%",
-      border: "2px solid " + color, opacity: reveal * 0.5,
-      boxShadow: "0 0 30px " + color + "44",
-    }} />
+      position: "absolute", left: cx - 44, top: cy - 44, width: 88, height: 88,
+      borderRadius: 14, backgroundColor: bg, boxShadow: glow,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      color: "#eaf0ff", fontSize: 34, fontWeight: 700,
+      opacity: state === "out" ? 0.4 : 1, transition: "none",
+    }}>{value}</div>
   );
 }
 
-// The main scene. Count the moving elements: 36 background particles + nucleus
-// + 5 electrons + 5 electron-moons + 3 energy rings + 2 staged text blocks =
-// ~52 elements, with SIX independent motion sources (spring entrance, nucleus
-// pulse, 5 orbit speeds, 5 moon orbits, ring pulses, particle drift/twinkle)
-// and staged reveals across the whole duration. THIS is the minimum density —
-// never ship a scene simpler than this.
-function AtomScene({ label, sublabel }: { label: string; sublabel: string }) {
+// The scene. The search window (lo..hi) NARROWS across the duration in staged
+// steps — before → after progress the viewer can read without the audio.
+function BinarySearchScene({ title }: { title: string }) {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const nucleusScale = spring({ frame, fps, config: { damping: 10, stiffness: 80 } });
-  const pulse = 1 + Math.sin(frame / 12) * 0.08;
-  const hue = (frame * 0.4) % 360;
-  const titleOpacity = interpolate(frame, [30, 60], [0, 1], CLAMP);
-  const subOpacity = interpolate(frame, [70, 100], [0, 1], CLAMP);
-  const electrons = [
-    { radius: 150, speed: 2.4, size: 22, color: "#60a5fa", phase: 0 },
-    { radius: 210, speed: 1.7, size: 18, color: "#a78bfa", phase: 1.2 },
-    { radius: 270, speed: 1.1, size: 16, color: "#34d399", phase: 2.4 },
-    { radius: 330, speed: 0.8, size: 14, color: "#f472b6", phase: 3.6 },
-    { radius: 380, speed: 0.5, size: 12, color: "#fbbf24", phase: 4.8 },
+
+  const arr = [3, 8, 12, 19, 27, 34, 41, 55, 63, 70, 78, 92];
+  const targetIdx = 9; // value 70
+  const n = arr.length;
+
+  // Staged narrowing: each step shrinks the window. Steps are spread across the
+  // FULL duration (§B) via a value-shifted interpolate so inputRanges stay
+  // literal (S1). One shared "step" number is the single source of truth for
+  // BOTH which cells are highlighted AND where the pointer sits (§C).
+  const step = Math.floor(interpolate(frame, [20, 300], [0, 4], CLAMP));
+  const windows = [
+    { lo: 0, hi: 11 }, { lo: 6, hi: 11 }, { lo: 6, hi: 8 }, { lo: 9, hi: 9 }, { lo: 9, hi: 9 },
   ];
+  const w = windows[Math.min(step, windows.length - 1)];       // guarded index (S4)
+  const mid = Math.floor((w.lo + w.hi) / 2);
+
+  // Row geometry computed once; cells AND the pointer read from it (§C).
+  const rowY = 520;
+  const gap = 118;
+  const startX = 960 - ((n - 1) * gap) / 2;
+  const cellX = (i: number) => startX + i * gap;
+
+  const pointerX = clampPos(cellX(mid), SAFE.xMin, SAFE.xMax);
+  const pointerDrop = spring({ frame: frame - step * 12, fps, config: { damping: 12, stiffness: 90 } });
+
+  const titleOpacity = interpolate(frame, [8, 34], [0, 1], CLAMP);
+  const foundOpacity = interpolate(frame, [280, 320], [0, 1], CLAMP);
+
   return (
-    <AbsoluteFill style={{ background: "radial-gradient(circle at 50% 45%, hsl(" + hue + ", 40%, 16%), #05060f 70%)" }}>
-      <ParticleField hue={220} />
-      <EnergyRing radius={150} color="#3b82f6" appearAt={0} />
-      <EnergyRing radius={270} color="#8b5cf6" appearAt={45} />
-      <EnergyRing radius={380} color="#f59e0b" appearAt={90} />
+    <AbsoluteFill>
+      <Backdrop from="#0b1f3a" to="#05060f" />
+
+      {arr.map((v, i) => {
+        const inWindow = i >= w.lo && i <= w.hi;
+        const isTarget = i === targetIdx && step >= 3;
+        const state = isTarget ? "target" : inWindow ? "in" : "out";
+        return <Cell key={i} x={cellX(i)} y={rowY} value={v} state={state} />;
+      })}
+
+      {/* Pointer at the current midpoint — reuses pointerX/rowY, so it can never drift off the cell it marks (§C) */}
       <div style={{
-        position: "absolute", left: 960 - 45, top: 540 - 45,
-        width: 90, height: 90, borderRadius: "50%",
-        backgroundColor: "#f59e0b",
-        transform: "scale(" + (nucleusScale * pulse) + ")",
-        boxShadow: "0 0 40px #f59e0b, 0 0 90px #f59e0b88, 0 0 140px #f59e0b44",
-        zIndex: 3,
+        position: "absolute", left: pointerX - 16, top: clampPos(rowY - 110, SAFE.yMin, SAFE.yMax),
+        width: 0, height: 0, borderLeft: "16px solid transparent", borderRight: "16px solid transparent",
+        borderTop: "22px solid #f5b642", transform: "translateY(" + pointerDrop * 8 + "px)",
+        filter: "drop-shadow(0 0 10px #f5b64288)",
       }} />
-      {electrons.map((e, i) => (<Electron key={i} radius={e.radius} speed={e.speed} size={e.size} color={e.color} phase={e.phase} />))}
-      <div style={{ position: "absolute", left: 0, right: 0, bottom: 120, textAlign: "center", zIndex: 5 }}>
-        <div style={{ color: "#fff", fontSize: 44, fontWeight: 800, opacity: titleOpacity, textShadow: "0 2px 24px rgba(0,0,0,0.9)", letterSpacing: 1 }}>{label}</div>
-        <div style={{ color: "#c7d2fe", fontSize: 28, fontWeight: 500, opacity: subOpacity, marginTop: 12, textShadow: "0 2px 16px rgba(0,0,0,0.9)" }}>{sublabel}</div>
+
+      <div style={{ position: "absolute", left: 0, right: 0, top: 150, textAlign: "center", zIndex: 5 }}>
+        <div style={{ color: "#eaf0ff", fontSize: 46, fontWeight: 800, opacity: titleOpacity, textShadow: "0 2px 20px rgba(0,0,0,0.9)" }}>{title}</div>
       </div>
-    </AbsoluteFill>
-  );
-}
-
-// A wave propagation scene — illustrates how waves travel through a medium.
-// Every point on the wave oscillates continuously with a phase offset.
-function WaveScene({ label }: { label: string }) {
-  const frame = useCurrentFrame();
-  const points = 32;
-  const labelOpacity = interpolate(frame, [10, 40], [0, 1], CLAMP);
-
-  // SPATIAL ANCHORING (rule 10c): compute each point's position ONCE, then let
-  // BOTH the circles AND the connecting line read from it. It's tempting to
-  // type the same y = 200 + Math.sin(...) formula separately in each place —
-  // don't. Any drift between the two copies makes the line peel away from the
-  // dots. One shared source of truth guarantees they always coincide.
-  const wavePoints = Array.from({ length: points }, (_, i) => {
-    const x = (i / (points - 1)) * 1920;
-    const phase = (i / points) * Math.PI * 4;
-    const y = 200 + Math.sin(frame / 10 + phase) * 80;
-    const brightness = (Math.sin(frame / 10 + phase) + 1) / 2;
-    return { x, y, brightness };
-  });
-
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#0f172a", justifyContent: "center", alignItems: "center" }}>
-      <svg width={1920} height={400} style={{ position: "absolute", top: "50%", transform: "translateY(-50%)" }}>
-        {/* Wave made of individually oscillating circles for a particle-wave look */}
-        {wavePoints.map((p, i) => (
-          <circle
-            key={i}
-            cx={p.x} cy={p.y} r={8}
-            fill={"hsl(" + (200 + p.brightness * 60) + ", 80%, " + (40 + p.brightness * 40) + "%)"}
-            opacity={0.6 + p.brightness * 0.4}
-          />
-        ))}
-        {/* Connecting line — reuses the SAME wavePoints, so it can never drift off the dots */}
-        <polyline
-          points={wavePoints.map((p) => \`\${p.x},\${p.y}\`).join(" ")}
-          fill="none"
-          stroke="rgba(96,165,250,0.4)"
-          strokeWidth={2}
-        />
-      </svg>
-      <div style={{
-        position: "absolute", bottom: 160,
-        color: "white", fontSize: 36, fontWeight: 700,
-        opacity: labelOpacity, textShadow: "0 2px 20px rgba(0,0,0,0.9)",
-      }}>{label}</div>
+      <div style={{ position: "absolute", left: 0, right: 0, bottom: 150, textAlign: "center", zIndex: 5 }}>
+        <div style={{ color: "#22d3a0", fontSize: 34, fontWeight: 700, opacity: foundOpacity, textShadow: "0 2px 16px rgba(0,0,0,0.9)" }}>Found 70 in 4 steps</div>
+      </div>
     </AbsoluteFill>
   );
 }
@@ -1087,45 +840,50 @@ function WaveScene({ label }: { label: string }) {
 export const LessonExample = () => {
   return (
     <Series>
-      <Series.Sequence durationInFrames={210}>
+      <Series.Sequence durationInFrames={330}>
         <Audio src={"https://example.com/audio/scene1.mp3"} />
-        <AtomScene label="Electrons orbit the nucleus" sublabel="Each shell holds more energy than the last" />
-      </Series.Sequence>
-      <Series.Sequence durationInFrames={240}>
-        <Audio src={"https://example.com/audio/scene2.mp3"} />
-        <WaveScene label="Waves propagate through a medium" />
+        <BinarySearchScene title="Binary search halves the problem each step" />
       </Series.Sequence>
     </Series>
   );
 };
 \`\`\`
 
-Every scene above has motion on EVERY frame. The atom's nucleus pulses, electrons orbit, background hue shifts. The wave's particles oscillate continuously. There is no static frame. Build every scene in your lesson to this standard.
+Notice: the window NARROWS across the whole duration (staged progress, §B), the pointer reads the SAME geometry as the cells so it always lands on one (§C), highlight state is DRIVEN by the algorithm so the motion literally teaches it (§A), every position is clamped (S5), the interpolate ranges are literals (S1), spring gets fps (S2), the index lookup is guarded (S4). Reproduce these HABITS on a totally different visual built from your own concept and palette.
 
-FINAL SELF-CHECK — before finishing, make ONE verification pass over your code and confirm ALL of these:
-1. Exactly one <Series.Sequence> per scene, in the given order, each durationInFrames copied EXACTLY, and their sum equals the given TOTAL FRAMES.
-2. Every scene contains its <Audio src={"..."} /> with the URL copied character-for-character from the scene table.
-3. No useState, no bare <Sequence>, no staticFile, no imports from anything except "react" and "remotion".
-4. Every interpolate() call: exactly 3 arguments (plus optional options object), input/output ranges are literal number arrays of equal length, inputRange strictly increasing, no variables or expressions inside the arrays.
-5. Every spring() call receives both frame and fps from useVideoConfig() (rule 12b).
-6. Every positioned element's FINAL x/y is wrapped in clamp() to SAFE — or to its container's inner region (rules 10c, 14). If ANY position value is not clamped, fix it. No exceptions.
-7. Every arrow, pointer, label, and contained element reads its position from the SAME constant/variable as the thing it attaches to or lives inside (rule 10c) — no independently-typed coordinates for related elements.
-8. Every wrapper component that content is nested inside actually renders {children} in its body (rule 22).
-9. Each scene: motion on every frame (rule 7), the illustrated process visibly progresses across the FULL scene duration (rules 7b, 10b), text is verbatim onScreenText, legible, in its reserved zone, never overlapping the diagram or other text (rules 8, 9).
-9b. RICHNESS GATE: can you count ~10 or more independently-moving elements on screen at once (main diagram parts + orbiting/secondary motion + 30-40 background particles), with several DIFFERENT motion sources? If it's fewer than that, or the scene is a few shapes with a label, it is TOO BASIC — add more elements, more motion, and more staged reveals before returning it (see the BASIC-vs-REQUIRED contrast under ANIMATION QUALITY).
-10. All animation timings use scene-LOCAL frame numbers starting at 0 — no offsets from earlier scenes' durations (rule 4b).
-11. No property read (.x, .y, etc.) on the result of arr[i + 1], find(), filter()[0], or a keyed lookup without a bounds/existence guard (rule 12c) — every loop whose body reads [i + 1] iterates only to length - 1.
-12. Scan every style={{ }} object for a stray kebab-case key, every SVG attribute for a stray kebab-case name, and every plain-HTML class=/for= that should be className=/htmlFor= (rules 6b, 6c, 6d). Confirm durationInFrames never appears as a bare identifier or a useVideoConfig() destructure standing in for a scene's own duration (rule 6e). Confirm no Math.random() * 1920 or * 1080 was used directly as a position (rule 6f). Recount every interpolate() inputRange for strictly-increasing, no-duplicate values (rule 6g). Count every backtick in the file — the total must be even (rule 6h).
-If any check fails, fix the code before returning it. Do not return code that fails a check.
+════════ FINAL PASS (verify silently, fix before returning) ════════
+• One <Series.Sequence> per scene, in order, durations copied exactly, summing to TOTAL FRAMES; each has its <Audio> with the exact URL.
+• No useState / bare <Sequence> / staticFile / non-remotion,react imports.
+• Every interpolate: 3 args, literal number arrays, strictly-increasing inputRange. Every spring has fps. Every final position clamped to SAFE (S5). Every arr[i+1]/find()/lookup guarded (S4).
+• Every style key camelCase; no class=/for=; backtick count even; no bare braces in JSX text; every content-wrapper renders {children}.
+• Each scene: motion on every frame but motivated (§B); the mechanism visibly progresses start→end (§A); onScreenText rendered verbatim, legible, non-overlapping (§D); related elements share one anchor (§C).
+• The lesson reads as ONE piece: same palette and recurring motif across all scenes; the cast of each scene is sized to its concept, not padded.
 
-Begin with imports, then the CLAMP constant and the FRAME / SAFE / clamp position constants (rule 14), then shared helper components, then the main component. Your ENTIRE response is the code file, starting with the word "import" as its literal first characters and ending with the final line of code — no text before it, no text after it, no markdown fences around it.
+Begin with imports, then CLAMP / FRAME / SAFE / clampPos, then shared helpers (your motif + a Label), then each scene component, then the exported main component. Your entire response is the code file, first characters "import", no text or fences around it.
 `;
+
+// ── DeepSeek-specific prompt ────────────────────────────────────────────────
+// CODE_GEN_STATIC_RULES works as-is for GLM and Fable. DeepSeek benefits from
+// one short, XML-tagged reminder of the judgment call that a smaller model is
+// likeliest to let slide over a long prompt — now COHERENCE, not raw density.
+// One gate (not the old primacy+recency pair) is enough with the shorter body,
+// and saves tokens/latency. Crash-safety rules are inherited verbatim.
+const DEEPSEEK_COHERENCE_GATE = `<coherence_gate priority="critical">
+Before writing any scene, lock the lesson's VISUAL IDENTITY (one subject-derived palette + one recurring motif) and reuse it in every scene, and for each scene decide the MECHANISM it must show (before→after) plus a cast of elements sized to that concept — not a fixed quota of decorative particles. Every moving thing must either illustrate the concept or set the mood; cut motion that does neither. The failure to avoid is two different things at once: a static labeled picture with no real progress, OR a generic particle-field that looks identical across unrelated topics. Aim for a scene that teaches the concept through its motion and clearly belongs to THIS lesson.
+</coherence_gate>
+`;
+
+const DEEPSEEK_CODE_GEN_RULES = DEEPSEEK_COHERENCE_GATE + CODE_GEN_STATIC_RULES;
+
+function selectCodeGenSystemPrompt(provider) {
+  return provider.model.startsWith("deepseek") ? DEEPSEEK_CODE_GEN_RULES : CODE_GEN_STATIC_RULES;
+}
 
 function buildPerLessonContent(lesson, componentName, scenes, totalFrames) {
   const sceneTable = scenes
     .map(
       (s, i) =>
-        `Scene ${i + 1}: durationInFrames=${s.durationInFrames}, audioUrl="${s.audioUrl}", targetLines=200-300
+        `Scene ${i + 1}: durationInFrames=${s.durationInFrames}, audioUrl="${s.audioUrl}"
    visualType: ${s.visualType}
    onScreenText: ${s.onScreenText}
    visualDescription: ${s.visualDescription}`
@@ -1134,35 +892,28 @@ function buildPerLessonContent(lesson, componentName, scenes, totalFrames) {
 
   return `
 LESSON: ${lesson.title}
-COMPONENT NAME: ${componentName}
+${lesson.description ? "LESSON SUMMARY: " + lesson.description + "\n" : ""}COMPONENT NAME: ${componentName}
 TOTAL FRAMES: ${totalFrames}
 TOTAL SCENES: ${scenes.length}
-LINE BUDGET: 200-300 lines per scene — use the full budget to create rich, detailed animations. Shared helper components don't count toward per-scene budget.
 
-SCENES (in order) — build one <Series.Sequence> per scene, in this exact order, with these EXACT durations:
+FIRST, before coding: derive this lesson's VISUAL IDENTITY from "${lesson.title}" — a 3-4 color palette rooted in the subject (not a default) and one recurring motif — and apply it consistently across ALL scenes below so the course reads as one designed piece. Then build one <Series.Sequence> per scene, IN THIS EXACT ORDER, with these EXACT durations. Size each scene's cast to what its concept needs; illustrate the mechanism (before→after), don't just label it.
+
+SCENES (in order):
 
 ${sceneTable}
 `;
 }
 
-// ── Auto-fix common GLM-5.2 code generation errors ───────────────────────────
-// These are systematic mistakes GLM-5.2 makes even with strict prompt rules.
-// IMPORTANT: every fix here is text-level, not AST-level, which means each
-// one carries some risk of mutating already-correct code. To keep that risk
-// low:
-//   - Only fixes with a very low false-positive surface are kept.
-//   - Anything ambiguous now THROWS instead of guessing, so it triggers a
-//     regeneration attempt rather than silently shipping mangled code.
-//   - Every fix that fires logs what it changed, so corruption introduced by
-//     this function is visible in logs instead of indistinguishable from a
-//     model mistake.
+// ── Auto-fix common code-generation errors ───────────────────────────────────
+// Text-level (not AST) fixes for systematic model slips. Kept deliberately
+// narrow: only fixes with a very low false-positive surface; anything ambiguous
+// THROWS to trigger a corrective regeneration rather than shipping mangled code;
+// every fire logs what it changed.
 function autoFixCode(code, { totalFrames } = {}) {
   let fixed = code;
   const notes = [];
 
-  // Fix 1: kebab-case CSS property names → camelCase JSX equivalents.
-  // Low risk: these patterns only match inside object-literal-style
-  // `property:` positions and camelCase is unambiguous.
+  // Fix 1: kebab-case CSS property names → camelCase (in object-literal keys).
   const cssPropertyMap = {
     "transform-origin": "transformOrigin",
     "background-color": "backgroundColor",
@@ -1191,10 +942,8 @@ function autoFixCode(code, { totalFrames } = {}) {
     if (count) notes.push(`renamed CSS property ${kebab} -> ${camel} (x${count})`);
   }
 
-  // Fix 1b: kebab-case SVG *attributes* in JSX (stroke-width={2} crashes
-  // just like kebab style keys do). Pattern anchors on the "=" so it can't
-  // touch style-object keys (those use ":") or prose in strings (which
-  // almost never contains kebab-word= sequences).
+  // Fix 1b: kebab-case SVG attributes in JSX (anchored on "=" so it can't touch
+  // style-object keys or prose).
   const svgAttrMap = {
     "stroke-width": "strokeWidth",
     "stroke-linecap": "strokeLinecap",
@@ -1217,16 +966,14 @@ function autoFixCode(code, { totalFrames } = {}) {
     if (count) notes.push(`renamed SVG attribute ${kebab} -> ${camel} (x${count})`);
   }
 
-  // Fix 2: Duplicate/non-increasing inputRange values in interpolate() calls.
-  // Only touches interpolate() calls whose entire inputRange is plain
-  // numeric literals — anything containing a variable/expression is left
-  // untouched, since we can't safely reason about its runtime value.
+  // Fix 2: duplicate/non-increasing inputRange in interpolate() — only when the
+  // whole inputRange is plain numeric literals (anything with a variable skipped).
   fixed = fixed.replace(
     /interpolate\s*\(\s*([^,]+),\s*\[([^\]]+)\]/g,
     (match, value, rangeStr) => {
       const parts = rangeStr.split(",").map((s) => s.trim());
       const nums = parts.map(Number);
-      if (nums.some((n) => Number.isNaN(n))) return match; // has a variable — skip
+      if (nums.some((n) => Number.isNaN(n))) return match;
       let changed = false;
       for (let i = 1; i < nums.length; i++) {
         if (nums[i] <= nums[i - 1]) {
@@ -1239,12 +986,8 @@ function autoFixCode(code, { totalFrames } = {}) {
     }
   );
 
-  // Fix 2b: unbounded Math.random() * 1920 / * 1080 used directly as a
-  // position. This is the single most common cause of elements drifting
-  // off-screen — the prompt rule asks for an inset SAFE range, but the
-  // model sometimes reaches for the raw canvas dimensions anyway. Rewrite
-  // to a safely-inset range (100px margin on each side) rather than relying
-  // solely on the model following the SAFE-constant pattern correctly.
+  // Fix 2b: unbounded Math.random() * 1920 / * 1080 used directly as a position
+  // → safely-inset range (100px margin), so stray elements don't drift off-frame.
   let widthFixCount = 0;
   fixed = fixed.replace(/Math\.random\(\)\s*\*\s*1920(?!\d)/g, () => {
     widthFixCount++;
@@ -1262,23 +1005,9 @@ function autoFixCode(code, { totalFrames } = {}) {
     notes.push(`clamped unbounded Math.random() * 1080 position to a safe inset range (x${heightFixCount})`);
   }
 
-  // Fix 3: bare `durationInFrames` used where it isn't in scope.
-  //
-  // Critical nuance the old version missed: `durationInFrames` is sometimes
-  // a PERFECTLY LEGITIMATE identifier —
-  //   const { durationInFrames } = useVideoConfig();
-  //   function Scene({ durationInFrames }: { durationInFrames: number }) { ... }
-  // The old blanket substitution turned the destructuring itself into
-  // `const { fps, 450 } = useVideoConfig()` — a syntax error we introduced
-  // ourselves. So: if the code DECLARES the identifier anywhere (const/let/
-  // var, destructuring, or a destructured function parameter), leave every
-  // occurrence alone — it's in scope. Only when it's used with NO
-  // declaration anywhere do we substitute the known totalFrames.
-  //
-  // The substitution pattern also now excludes property access
-  // (`scene.durationInFrames` must not become `scene.450`) via a negative
-  // lookbehind, in addition to the existing exclusions for JSX props
-  // (`durationInFrames={...}`) and object keys (`durationInFrames: ...`).
+  // Fix 3: bare `durationInFrames` used out of scope → substitute totalFrames.
+  // Left alone if the code DECLARES the identifier anywhere (destructure/param),
+  // and property access (scene.durationInFrames) is excluded via lookbehind.
   const declaresDurationInFrames =
     /(?:const|let|var)\s+durationInFrames\b/.test(fixed) ||
     /(?:const|let|var)\s*\{[^{}]*\bdurationInFrames\b[^{}]*\}\s*=/.test(fixed) ||
@@ -1296,27 +1025,17 @@ function autoFixCode(code, { totalFrames } = {}) {
     fixed = fixed.replace(/(?<!\.)\bdurationInFrames\b(?!\s*[=:])/g, `${fallback}`);
   }
 
-  // Fix 4: common HTML-attribute-in-JSX slips. (`\bfor=` cannot touch
-  // `htmlFor=` — the pattern is case-sensitive and "htmlFor" contains "For",
-  // not "for". `for (` loops have no "=" and are also untouched.)
+  // Fix 4: HTML-attribute-in-JSX slips. (`\bfor=` is case-sensitive and cannot
+  // touch `htmlFor=`; `for (` loops have no "=" and are untouched.)
   fixed = fixed.replace(/\bclass=/g, "className=");
   fixed = fixed.replace(/\bfor=/g, "htmlFor=");
 
-  // Fix 5: unterminated template literal — trailing corruption at end of file.
-  // Previously this guessed a closing wrapper (`);\n}`) that may not match
-  // the actual function shape, which can produce code that's still invalid
-  // in a new way. That's a worse outcome than failing loudly, so this now
-  // throws to force a regeneration attempt instead of guessing.
+  // Fix 5: unterminated template literal → fail loudly (guessing a closer only
+  // produces a new kind of invalid code).
   const backtickCount = (fixed.match(/`/g) || []).length;
   if (backtickCount % 2 !== 0) {
     throw contentError("Unterminated template literal detected — regenerating instead of guessing a fix.");
   }
-
-  // (The old Fix 6 — stripping `;;` and trailing commas — has been removed
-  // on purpose. Both are VALID JavaScript/TypeScript that compile fine, so
-  // the fix repaired nothing, while the text-level regexes could mutate
-  // those character sequences inside string literals shown on screen. A
-  // "fix" whose only possible effect is a false positive shouldn't exist.)
 
   if (notes.length) {
     console.log(`  [autofix] Applied: ${notes.join(" | ")}`);
@@ -1325,26 +1044,10 @@ function autoFixCode(code, { totalFrames } = {}) {
   return fixed;
 }
 
-// ── Enforce correct audio URLs — don't trust the model to copy them right ───
-// GLM-5.2 (and any LLM) can occasionally mistype a single character when
-// transcribing a long, random UUID into generated code — e.g. writing
-// "...ba3e-..." as "...be3e-..." in an <Audio src="..."> tag. The rest of the
-// URL matches perfectly, but that one scene's audio silently 404s forever,
-// since the file that URL points to was never actually created.
-//
-// Rather than hoping the model copies a 36-character random string
-// perfectly every time, we enforce it deterministically: scenes are always
-// wired into <Series.Sequence> tags IN ORDER, so we can match each
-// <Audio src="..."> occurrence (in the order it appears) to the
-// corresponding scene in our own `scenes` array — which has the guaranteed-
-// correct, actually-existing-on-disk URL — and force-replace it if it
-// doesn't match exactly.
-//
-// Matches BOTH forms the model actually emits — src={"url"} (the form the
-// prompt asks for) and the plain-attribute slip src="url" — and tolerates
-// other attributes appearing before src. The old single-pattern version
-// silently skipped any <Audio> tag not written in the exact braced style,
-// which meant a mistyped URL in the plain form shipped uncorrected.
+// ── Enforce correct audio URLs — don't trust the model to transcribe UUIDs ───
+// Scenes are always wired IN ORDER, so match each <Audio src> occurrence to the
+// corresponding scene's guaranteed-correct URL and force-replace on mismatch.
+// Matches both src={"url"} and the plain src="url" slip.
 function enforceCorrectAudioUrls(code, scenes) {
   let sceneIndex = 0;
   let mismatchCount = 0;
@@ -1354,7 +1057,7 @@ function enforceCorrectAudioUrls(code, scenes) {
 
   const fixed = code.replace(audioSrcPattern, (match, bracedUrl, plainUrl) => {
     audioTagCount++;
-    if (sceneIndex >= scenes.length) return match; // more Audio tags than scenes — leave as-is, structural mismatch is reported below
+    if (sceneIndex >= scenes.length) return match;
     const foundUrl = bracedUrl ?? plainUrl;
     const correctUrl = scenes[sceneIndex].audioUrl;
     sceneIndex++;
@@ -1391,24 +1094,17 @@ async function generateLessonCode(
   maxAttempts = 3
 ) {
   let lastError = null;
-  // When an attempt fails on CONTENT (validation, critic, truncation), the
-  // next attempt tells the model exactly what was wrong. Retrying blind with
-  // the identical prompt — as the old version did — frequently reproduces
-  // the identical mistake, since the model's failure was deterministic-ish,
-  // not random. Transport failures (connection errors, rate limits) don't
-  // set this, since the prompt wasn't the problem.
+  // Content-error feedback: a rejection (validation/critic/truncation) is fed
+  // back so the next attempt is corrective, not a blind reroll. Transport
+  // failures don't set this (the prompt wasn't the problem).
   let contentFeedback = null;
   const lessonStart = Date.now();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    // Reset per attempt: only errors thrown AFTER the stream was fully
-    // received count as content errors worth feeding back to the model.
     let receivedFullOutput = false;
 
     try {
-      console.log(
-        `  [code] Attempt ${attempt}/${maxAttempts} for ${componentName}...`
-      );
+      console.log(`  [code] Attempt ${attempt}/${maxAttempts} for ${componentName}...`);
 
       const userContent =
         buildPerLessonContent(lesson, componentName, scenes, totalFrames) +
@@ -1416,12 +1112,9 @@ async function generateLessonCode(
           ? `\n\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:\n"${contentFeedback}"\nRegenerate the code from scratch and make absolutely sure this specific problem does not occur again.`
           : "");
 
-      // The ENTIRE request lifetime — opening the stream AND consuming every
-      // chunk — runs inside the limiter, so the concurrency slot is held for
-      // as long as the HTTP connection is actually open. Releasing the slot
-      // at create()-resolution (as before) allowed unbounded overlapping
-      // streams, which is exactly the connection-spike problem the limiter
-      // exists to prevent.
+      // The ENTIRE request lifetime (open stream + consume every chunk) runs
+      // inside the limiter, so a concurrency slot is held while the socket is
+      // open — not released at create()-resolution.
       const { text, stopReason } = await limitLessonCodeCall(async () => {
         const stream = await LESSON_CODE_PROVIDER.client.chat.completions.create({
           model: LESSON_CODE_PROVIDER.model,
@@ -1429,27 +1122,18 @@ async function generateLessonCode(
           max_tokens: LESSON_CODE_PROVIDER.maxTokens ?? 100000,
           stream: true,
           messages: [
-            {
-              role: "system",
-              content: CODE_GEN_STATIC_RULES,
-            },
-            {
-              role: "user",
-              content: userContent,
-            },
+            { role: "system", content: selectCodeGenSystemPrompt(LESSON_CODE_PROVIDER) },
+            { role: "user", content: userContent },
           ],
         });
 
         let streamedText = "";
         let finishReason = null;
-
         for await (const chunk of stream) {
           const delta = chunk.choices?.[0]?.delta;
-          // Only collect actual content, not reasoning_content tokens
-          if (delta?.content) streamedText += delta.content;
+          if (delta?.content) streamedText += delta.content; // ignore reasoning_content
           if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
         }
-
         return { text: streamedText, stopReason: finishReason };
       });
 
@@ -1459,18 +1143,14 @@ async function generateLessonCode(
         throw contentError("Hit max_tokens — code was truncated. Generate more compact code.");
       }
 
-      // Strip markdown fences ONLY at the very start and very end of the
-      // output. The old global strip (/```/g anywhere) could eat backtick
-      // sequences living inside the generated code's own template literals,
-      // corrupting valid code.
+      // Strip markdown fences only at the very start/end (a global strip could
+      // eat backticks inside the code's own template literals).
       let code = text.trim();
       code = code
         .replace(/^```(?:tsx|typescript|ts|jsx|js)?\s*/i, "")
         .replace(/\s*```\s*$/, "")
         .trim();
 
-      // Detect plain text output — GLM-5.2 sometimes ignores the prompt and
-      // outputs topic descriptions instead of TSX code. Catch this early.
       if (
         !code.startsWith("import") &&
         !code.startsWith("const") &&
@@ -1481,21 +1161,12 @@ async function generateLessonCode(
         throw contentError("Model output plain text instead of TSX code — you MUST output only TSX code starting with `import`.");
       }
 
-      // ── Auto-fix common GLM-5.2 output errors ─────────────────────────────
       const fixedCode = autoFixCode(code, { totalFrames });
-
-      // ── Force-correct any mistyped audio URLs — don't trust the model's
-      // ability to transcribe long UUID strings perfectly. This is what
-      // actually fixes the "one random scene has no audio" bug.
       const audioFixedCode = enforceCorrectAudioUrls(fixedCode, scenes);
-
       const validatedCode = validateGeneratedCode(audioFixedCode, componentName, totalFrames);
 
       const review = await reviewGeneratedCode(validatedCode, lesson);
       if (!review.skipped && review.ok === false) {
-        // A failed review counts as a failed attempt and triggers a
-        // regeneration — and the critic's specific findings become the
-        // feedback for the next attempt, so it isn't just a blind reroll.
         throw contentError(
           `Code critic flagged issues: ${review.issues?.join("; ") || "unspecified"}`
         );
@@ -1515,15 +1186,11 @@ async function generateLessonCode(
         );
       }
 
-      // Content errors (anything thrown after the full stream arrived, or
-      // explicitly tagged) get fed back to the model on the next attempt.
       if (err.isContentError || receivedFullOutput) {
         contentFeedback = err.message;
       }
 
-      console.warn(
-        `  [code] Attempt ${attempt} failed: ${describeError(err)}. Retrying...`
-      );
+      console.warn(`  [code] Attempt ${attempt} failed: ${describeError(err)}. Retrying...`);
       if (attempt < maxAttempts) await backoffDelay(attempt);
     }
   }
@@ -1535,57 +1202,49 @@ async function generateLessonCode(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AD GENERATION — reuses the same sandbox/provider/autofix/validate machinery as
-// lessons, but with an ad-tuned prompt. An ad is ONE component (a <Series> of
-// short punchy scenes) rather than a multi-lesson course. The crash-safety rules
-// are identical (same browser compiler); the aesthetic direction is different:
-// fast, kinetic, product-forward, "commercial" rather than "educational".
+// AD GENERATION — same sandbox/provider/autofix/validate machinery as lessons,
+// ad-tuned prompt. An ad is ONE component (a <Series> of short punchy scenes).
+// Crash-safety is identical; aesthetic is commercial, not educational.
 // ═══════════════════════════════════════════════════════════════════════════
 const AD_CODE_GEN_RULES = `
-⚠️ OUTPUT FORMAT: Respond with ONLY raw TSX code. No explanations, no markdown. The FIRST character must be "i" (from "import"). CODE ONLY.
+⚠️ OUTPUT FORMAT: Respond with ONLY raw TSX code. No prose, no markdown. FIRST character "i" (from "import"). CODE ONLY.
 
-You are an elite motion-graphics director making a 30–60 second PRODUCT AD — After Effects / Apple-keynote caliber. This is a COMMERCIAL, not a lesson: it must be slick, fast, confident, and make the product look desirable. Every scene sells.
+You are an elite motion-graphics director making a 30–60s PRODUCT AD — Apple-keynote caliber. Slick, fast, confident, and every scene sells. Build to each scene's EXACT frame duration.
 
-Generate a complete, self-contained Remotion composition. Each scene has an EXACT frame duration (from its voiceover) — build to it exactly.
+════════ BRAND IDENTITY FIRST (decide once, apply throughout) ════════
+Lock a cohesive 2-3 color scheme built around the BRAND COLOR given below (accents, gradients, glows, CTA), one display type treatment, and one motion signature. Everything after obeys it — no random colors, no clashing styles between scenes.
 
-HARD REQUIREMENTS (break these and the browser compile fails):
+════════ SANDBOX API (violate → build fails) ════════
 1. Named export exactly as given: export const ComponentName = () => { ... }
-2. Import ONLY from "remotion" and "react". From "remotion": any named export EXCEPT staticFile (AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio, Img, Easing, interpolateColors, random, Loop). From "react": ONLY useMemo, useCallback, useRef — NEVER useState (it does not exist here and crashes).
-3. NO props, NO external data. Every variable is either declared locally, a real remotion/react import, or your own function param. Never use a JS built-in name (Math, Array, Object, Date…) as a variable/param.
-4. Structure: a single <Series> with one <Series.Sequence durationInFrames={EXACT}> per scene, IN ORDER. No bare <Sequence>. Copy durations exactly.
-5. Each sequence contains its <Audio src={"EXACT_URL"} /> — copy URLs character-for-character, no staticFile wrapper.
-6. If a logo URL and/or screenshot URLs are provided below, SHOW them with <Img src={"URL"} /> (animate them in — scale/spring/parallax). If none are provided, build a strong typographic/graphical stand-in — never leave blank space.
+2. Import ONLY from "remotion" (any named export EXCEPT staticFile: AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio, Img, Easing, interpolateColors, random, Loop) and "react" (ONLY useMemo, useCallback, useRef — NEVER useState, it crashes).
+3. NO props, NO external data. Every variable is locally declared, a listed remotion/react export, or your own param. Never shadow a JS built-in (Math, Array, Object, Date…).
+4. A single <Series> with one <Series.Sequence durationInFrames={EXACT}> per scene, IN ORDER. No bare <Sequence>. Copy durations exactly; they must sum to the total.
+5. Each sequence has its <Audio src={"EXACT_URL"} /> — copy character-for-character, no staticFile.
+6. If logo/screenshot URLs are given below, SHOW them with <Img src={"URL"} /> (animate in — scale/spring/parallax). If none, build a strong typographic/graphic stand-in — never blank space.
+7. Frame numbers are PER-SCENE (reset to 0 each Series.Sequence) — never offset by earlier scenes' durations.
 
-AD AESTHETIC — THIS IS THE PRODUCT. A flat, slow, or generic ad is a failure:
-7. KINETIC TYPOGRAPHY is the backbone. Words fly, snap, scale, and stagger in per-letter or per-word (map over split text, stagger via interpolate(frame - i*3, [0,12],[0,1], CLAMP)). Big, bold, confident type. Headlines 80–160px. This is what makes it feel like a real ad.
-8. TRANSITIONS ARE THE CRAFT — get these right and the ad reads as pro. Scenes are sequential hard cuts (<Series.Sequence>), so a clean transition is built from a coordinated EXIT at the end of one scene and ENTER at the start of the next. Three techniques, use a mix:
+════════ CRASH-SAFETY (identical to the lesson sandbox — each is a real crash) ════════
+S1. interpolate(value, [literals], [literals], options?) — 3 args + optional options; input/output are literal number arrays only (never a variable/expression inside — shift the value arg: interpolate(frame - i*4, [0,20],[0,1], CLAMP)); inputRange strictly increasing, no dupes. const CLAMP = { extrapolateLeft:"clamp", extrapolateRight:"clamp" }.
+S2. spring({ frame, fps, config }) with fps from useVideoConfig().
+S3. Guard division (v/(d||1)) and array access; never emit NaN into any SVG/style number.
+S4. Never read a property off a possibly-undefined value; guard arr[i+1]/find()/lookups.
+S5. Clamp every final position to SAFE: const SAFE = { xMin:160, xMax:1760, yMin:140, yMax:940 }; const clampPos=(v,lo,hi)=>Math.min(hi,Math.max(lo,v)); 1920x1080 is a hard boundary (except deliberate whip-pans that resolve on-screen).
 
-    (a) COVER-THE-CUT WIPE (most reliable, most pro): a full-frame brand-color panel sweeps ACROSS the screen right at the boundary, hiding the hard cut, then sweeps away to reveal the new scene. Put the "cover" half at the END of the outgoing scene and the "reveal" half at the START of the incoming scene, moving in the SAME direction so it reads as one continuous sweep:
-        const T = 14; // shared transition length in frames
-        // …at END of scene A (frame near its duration): panel enters from left → covers
-        const coverX = interpolate(frame, [DUR - T, DUR], [-1920, 0], CLAMP);
-        // …at START of scene B: same panel continues off to the right → reveals
-        const revealX = interpolate(frame, [0, T], [0, 1920], CLAMP);
-        // render <AbsoluteFill style={{ transform: 'translateX(' + x + 'px)', background: BRAND }} />
-      Use diagonal wipes, clock-wipes (rotate a conic gradient), or shape-mask wipes for variety.
+════════ SYNTAX TRAPS ════════
+camelCase style keys & SVG attrs (backgroundColor, strokeWidth…); className/htmlFor not class/for; prefer string concat over template literals (even backtick count); no bare commas or literal { } in JSX text; any content-wrapper must render {children}.
 
-    (b) DIRECTIONAL SLIDE with continuity: the outgoing scene's content slides OFF one edge over its last T frames while the incoming scene's content slides IN from the OPPOSITE edge over its first T frames — so the eye tracks motion straight across the cut. Exit: interpolate(frame, [DUR - T, DUR], [0, -1920], CLAMP). Enter: interpolate(frame, [0, T], [1920, 0], CLAMP). Always pair exit-direction with the matching enter-direction.
+════════ AD CRAFT — this is the product ════════
+K1. KINETIC TYPOGRAPHY is the backbone: words snap, scale, and stagger in per-word/per-letter (map over split text, stagger via interpolate(frame - i*3, [0,12],[0,1], CLAMP)). Big, bold, confident — headlines 80–160px.
+K2. TRANSITIONS ARE THE CRAFT. Scenes are hard cuts, so a clean transition = a coordinated EXIT at the end of one scene + ENTER at the start of the next. Define ONE shared const T (12–16 frames) and reuse it for consistent rhythm; every scene both ENTERS (first T) and EXITS (last T). VARY the technique between beats:
+    (a) COVER-WIPE: a brand-color panel sweeps across at the boundary — cover half at the outgoing scene's end (interpolate(frame, [DUR-T, DUR], [-1920, 0], CLAMP)), reveal half at the next scene's start (interpolate(frame, [0, T], [0, 1920], CLAMP)), same direction so it reads continuous.
+    (b) DIRECTIONAL SLIDE: outgoing content slides off one edge as incoming slides in from the opposite edge — pair the directions so the eye tracks straight across.
+    (c) SCALE/PUNCH: outgoing scales up + fades; incoming springs from 0 — great for the product/logo hero reveal.
+   Make reusable <Wipe/> and <SlideIn/> helpers.
+K3. CONTINUOUS, MOTIVATED MOTION on every frame — backgrounds drift, elements breathe (Math.sin(frame/k)) — but tied to the brand feel, not random jitter.
+K4. STRUCTURE THE ENERGY: hook (biggest type) → tension → PRODUCT/LOGO HERO REVEAL (make it BIG — spring pop + glow burst) → rapid-fire benefits (one punchy beat every ~2-3s) → CTA END CARD (brand color, the exact CTA text below, logo, clean and confident).
+K5. DEPTH: layered background (gradient + a few drifting shapes), glow (boxShadow) on hero elements, at least one parallax/orbiting motion. A dense premium frame — never a lone centered word on flat color.
 
-    (c) SCALE / PUNCH: content exits by scaling up + fading (interpolate(frame,[DUR-T,DUR],[1,1.3]) with opacity→0), next enters with a spring scale-from-0 pop. Great for the product/logo hero reveal.
-
-    RULES for all transitions: define ONE shared const T (12–16 frames) and reuse it so every cut has consistent rhythm. Every scene both ENTERS (first T frames) and EXITS (last T frames) — never let content just pop or vanish. VARY the transition type between beats (don't slide every time); match energy to the moment — punchy cuts for rapid features, a big cover-wipe into the product reveal, a clean settle into the CTA. Make a reusable <Wipe direction color/> and <SlideIn/> helper and use them throughout.
-9. CONTINUOUS MOTION on every frame (rule as in lessons): backgrounds drift, elements breathe, nothing is ever fully still. Use Math.sin(frame/k) everywhere for life.
-10. BRAND COLOR (given below) drives the palette — use it for accents, gradients, glows, and the CTA. Build a cohesive 2–3 color scheme around it, not random colors.
-11. STRUCTURE THE ENERGY across the ad: hook (grab attention, biggest type), problem (tension), solution/product reveal (the hero moment — make the product/logo entrance feel BIG, with a spring pop + glow burst), features/benefits (rapid-fire, one punchy beat each), and a CTA END CARD (brand color, the exact CTA text below, logo, confident and clean). Pace features FAST — a benefit every ~2-3s.
-12. DEPTH: layered backgrounds (gradient + drifting particles/shapes), glows (boxShadow) on hero elements, and at least one parallax or orbiting motion. Aim for a dense, premium frame — never a single centered word on flat color.
-
-SAFETY (identical to the lesson sandbox — violating these crashes the video):
-13. interpolate() = exactly 3 args + optional options; input/output are ARRAY LITERALS of plain numbers only — never a variable or expression inside the arrays (no [start, start+20]; shift the value arg instead: interpolate(frame - i*4, [0,20],[0,1], CLAMP)). inputRange strictly increasing, no duplicates.
-14. Guard all division (v/(d||1)) and array access; never emit NaN into any SVG/style number. spring() needs { frame, fps } with fps from useVideoConfig().
-15. Clamp positions to the frame. Define once: const SAFE = { xMin:160, xMax:1760, yMin:140, yMax:940 }; const clamp=(v,lo,hi)=>Math.min(hi,Math.max(lo,v)); route every x/y through it. 1920x1080 is a hard boundary — nothing off-screen (except deliberate whip-pan transitions that resolve on-screen).
-16. Any wrapper component you nest content inside MUST render {children}. Inline styles only. Sum of durationInFrames === total given.
-
-Begin with imports, the CLAMP/SAFE constants, shared helpers (AnimatedWord, ParticleBg, TransitionWipe), then the main component. Make it feel like money.
+Begin with imports, CLAMP/SAFE/clampPos, shared helpers (AnimatedWord, Wipe, SlideIn, an ambient layer), then the main component. Entire response is the code file, first characters "import", no fences. Make it feel like money.
 `;
 
 function buildAdUserContent(ad, componentName, scenes, totalFrames) {
@@ -1618,9 +1277,6 @@ ${sceneTable}
 `;
 }
 
-// Generate the ad's Remotion code. Mirrors generateLessonCode's retry loop but
-// with the ad prompt; reuses the same provider, limiter, autofix, audio-URL
-// enforcement, and validator so all the hard-won safety carries over.
 async function generateAdCode(ad, componentName, scenes, totalFrames, maxAttempts = 3) {
   let lastError = null;
   let contentFeedback = null;
