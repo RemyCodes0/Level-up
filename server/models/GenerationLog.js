@@ -22,7 +22,7 @@ const generationLogSchema = new mongoose.Schema(
     // failing repeatedly vs "scenes" or "audio").
     stage: {
       type: String,
-      enum: ["scenes", "audio", "code"],
+      enum: ["scenes", "audio", "header", "code"],
       default: null,
     },
     errorMessage: { type: String, default: null },

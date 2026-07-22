@@ -8,6 +8,45 @@ const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
 };
 
+const ADMIN_NOTIFICATION_EMAIL = process.env.ADMIN_EMAIL || "tuyishimechristophe84@gmail.com";
+
+// Email subjects can't contain newlines (Resend, and most providers, reject
+// them outright). user.name is user-supplied, so strip any stray line breaks
+// before using it in a subject line.
+function sanitizeForSubject(text) {
+  return String(text || "").replace(/[\r\n]+/g, " ").trim();
+}
+
+// Fires a "new signup" / "new login" admin notification. Non-blocking and
+// never throws into the caller — a notification failure should never affect
+// auth itself.
+function notifyAdminOfAuthEvent(kind, user) {
+  const name = sanitizeForSubject(user.name) || "Unknown";
+  sendEmail({
+    to: ADMIN_NOTIFICATION_EMAIL,
+    subject: `${kind} — ${name} (${user.email})`,
+    text: [
+      `A user just ${kind === "Signup" ? "signed up" : "logged in"}.`,
+      ``,
+      `Name: ${name}`,
+      `Email: ${user.email}`,
+      `User ID: ${user._id}`,
+      `Time: ${new Date().toISOString()}`,
+    ].join("\n"),
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #1e293b; margin: 0 0 16px;">${kind}</h2>
+        <table style="width: 100%; font-size: 14px; color: #334155; border-collapse: collapse;">
+          <tr><td style="padding: 6px 0; color: #94a3b8; width: 80px;">Name</td><td style="padding: 6px 0; font-weight: 600;">${name}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Email</td><td style="padding: 6px 0;">${user.email}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">User ID</td><td style="padding: 6px 0; font-family: monospace; font-size: 12px;">${user._id}</td></tr>
+        </table>
+        <p style="margin-top: 16px; color: #94a3b8; font-size: 11px;">${new Date().toISOString()}</p>
+      </div>
+    `,
+  }).catch((err) => console.error(`Failed to send ${kind.toLowerCase()} notification email:`, err.message));
+}
+
 // ── Signup — creates user + sends verification email ────────────────────────
 exports.registerUser = async (req, res) => {
   const { name, email, password, role, major, year, subjects, ref } = req.body;
@@ -63,6 +102,9 @@ exports.registerUser = async (req, res) => {
         </div>
       `,
     });
+
+    // Fire-and-forget — doesn't block the response or affect signup if it fails.
+    notifyAdminOfAuthEvent("Signup", user);
 
     // Don't return a JWT — user must verify first
     res.status(201).json({
@@ -176,6 +218,9 @@ exports.loginUser = async (req, res) => {
         email: user.email,
       });
     }
+
+    // Fire-and-forget — doesn't block the response or affect login if it fails.
+    notifyAdminOfAuthEvent("Login", user);
 
     res.json({
       _id: user._id,
