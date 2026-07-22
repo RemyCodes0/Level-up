@@ -493,7 +493,15 @@ ${rules}
 
       const { ok, errors } = validateCoursePlan(plan);
       if (!ok) {
-        throw contentError(`Course plan failed shape validation: ${errors.join("; ")}`);
+        // Include a snippet of the RAW response — without this, every future
+        // occurrence just shows "got none" with no way to tell whether the
+        // model wrapped the plan in an extra envelope key, returned prose
+        // instead of JSON, or something else entirely. Attached directly to
+        // the thrown error so it rides along with the existing "[plan]
+        // Attempt X/Y failed" log line for free, no extra plumbing needed.
+        throw contentError(
+          `Course plan failed shape validation: ${errors.join("; ")}. Raw response (first 500 chars): ${text.slice(0, 500)}`
+        );
       }
 
       if (truncated) {
