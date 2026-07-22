@@ -1,6 +1,18 @@
-const Anthropic = require("@anthropic-ai/sdk");
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Runs scene-plan generation on whichever model is configured for lesson
+// code (LESSON_CODE_MODEL=glm|deepseek|fable, see claudeService.js) instead
+// of a separately hardcoded Claude Haiku call — one provider choice, reused
+// here since this is structured JSON generation (scene timing, narration
+// text, visual descriptions), a lighter task than the animation CODE itself.
+// No circular require risk: claudeService.js never requires this file (only
+// courseController.js does), so a top-level require here is safe.
+const {
+  LESSON_CODE_PROVIDER,
+  streamCodeCompletion,
+  limitLessonHeaderCall,
+  describeError,
+  isNonRetryable,
+  backoffDelay,
+} = require("./claudeService");
 
 // Safely extracts and parses a JSON object from a model response that may
 // contain stray text, markdown fences, or minor formatting issues.
@@ -20,28 +32,11 @@ function safeParseJson(text) {
   return JSON.parse(clean);
 }
 
-// Generates a scene-by-scene plan for ONE lesson.
-// Each scene has: narration text (for TTS) + a visual description (for the animation).
-// Runs on Claude Haiku — this is structured JSON generation (scene timing,
-// narration text, visual descriptions), the same category of task as the
-// course plan, which has run safely on Haiku with no quality loss. The
-// animation CODE itself stays on Sonnet (see claudeService.js) — this step
-// never touches that, so switching it here doesn't affect visual quality.
-async function generateScenePlan(lesson, maxAttempts = 3) {
-  let lastError = null;
-  const start = Date.now();
+const SCENE_PLAN_SYSTEM_PROMPT =
+  "You are an expert educational video director. Output ONLY valid JSON, no markdown, no prose before or after it.";
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const message = await client.messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 8000,
-        messages: [
-          {
-            role: "user",
-            content: `
-You are an expert educational video director.
-
+function buildScenePlanUserContent(lesson) {
+  return `
 Break this lesson into a sequence of short scenes. Each scene pairs a piece of spoken narration with a specific visual that illustrates exactly what is being said at that moment.
 
 LESSON:
@@ -71,15 +66,28 @@ Rules:
 - The first scene is an intro, the last scene is a summary.
 - All content specific to the topic, never generic.
 - IMPORTANT: Output strictly valid JSON. No trailing commas. Escape any double quotes inside strings. No text before or after the JSON.
-            `,
-          },
-        ],
+  `;
+}
+
+// Generates a scene-by-scene plan for ONE lesson.
+// Each scene has: narration text (for TTS) + a visual description (for the animation).
+async function generateScenePlan(lesson, maxAttempts = 3) {
+  let lastError = null;
+  const start = Date.now();
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const { text, stopReason } = await streamCodeCompletion({
+        limiter: limitLessonHeaderCall,
+        provider: LESSON_CODE_PROVIDER,
+        systemPrompt: SCENE_PLAN_SYSTEM_PROMPT,
+        userContent: buildScenePlanUserContent(lesson),
+        maxOutputTokens: 8000,
       });
 
-      const text = message.content
-        .filter((b) => b.type === "text")
-        .map((b) => b.text)
-        .join("");
+      if (stopReason === "length") {
+        throw new Error("Hit max_tokens — scene plan was truncated.");
+      }
 
       const parsed = safeParseJson(text);
 
@@ -98,14 +106,18 @@ Rules:
       return parsed.scenes;
     } catch (err) {
       lastError = err;
+      if (isNonRetryable(err)) {
+        throw new Error(`Scene plan generation failed with a non-retryable error (check ${LESSON_CODE_PROVIDER.keyEnv}): ${describeError(err)}`);
+      }
       console.warn(
-        `  [scenes] Attempt ${attempt} failed: ${err.message}. Retrying...`
+        `  [scenes] Attempt ${attempt} failed: ${describeError(err)}. Retrying...`
       );
+      if (attempt < maxAttempts) await backoffDelay(attempt);
     }
   }
 
   throw new Error(
-    `Failed to generate a valid scene plan after ${maxAttempts} attempts: ${lastError?.message}`
+    `Failed to generate a valid scene plan after ${maxAttempts} attempts: ${lastError ? describeError(lastError) : "unknown error"}`
   );
 }
 

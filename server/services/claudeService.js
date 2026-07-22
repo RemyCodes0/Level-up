@@ -1708,4 +1708,14 @@ module.exports = {
   generateSceneCode,
   stitchLessonCode,
   sceneComponentName,
+  // Exposed so other lesson-pipeline services (sceneService, codeCriticService)
+  // can run their own JSON-generation calls on whichever model is actually
+  // configured for lesson code (LESSON_CODE_MODEL=glm|deepseek|fable) instead
+  // of a separately hardcoded model — one provider choice, one place to change it.
+  LESSON_CODE_PROVIDER,
+  streamCodeCompletion,
+  limitLessonHeaderCall,
+  describeError,
+  isNonRetryable,
+  backoffDelay,
 };
