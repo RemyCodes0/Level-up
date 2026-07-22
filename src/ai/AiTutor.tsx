@@ -23,12 +23,14 @@ import {
   getCourseStatus,
   getNextSuggestions,
 } from "../api/CourseApi";
-import type { CourseFromAPI, NextCourseSuggestion } from "../api/CourseApi";
+import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem } from "../api/CourseApi";
 import { getProgress, markLessonWatched } from "../api/ProgressApi";
 import { submitQuiz as submitQuizApi, getLatestAttempt } from "../api/QuizApi";
 import type { QuizResult } from "../api/QuizApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer } from "../remotion/DynamicPlayer";
+import { Thumbnail } from "@remotion/player";
+import { useCompilation } from "../remotion/useCompilation";
 import { ReferralCard } from "../components/ReferralCard";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
 import { analytics, resetUser } from "../lib/analytics";
@@ -101,6 +103,10 @@ interface Lesson {
   code?: string | null;
   totalFrames?: number | null;
   error?: string | null;
+  // Per-scene progress while the lesson is still generating — powers a
+  // passive thumbnail filmstrip (no playback). Only ever consulted when
+  // `code` is still null; once `code` exists, that's always used instead.
+  sceneProgress?: SceneProgressItem[];
 }
 
 interface MCQQuestion {
@@ -533,6 +539,88 @@ function GeneratingLessonPreview() {
   );
 }
 
+// One box per scene in the real progress filmstrip below. Only calls
+// useCompilation (a real Babel transform, not cheap — see useCompilation.ts)
+// once this scene's own previewCode is set, and stays keyed by scene index
+// so React never re-invokes it for a sibling scene's update.
+function SceneThumbnailBox({ scene }: { scene: SceneProgressItem }) {
+  const { Component } = useCompilation(scene.previewCode ?? "");
+  const ready = scene.codeReady && !!scene.previewCode && !!Component;
+
+  return (
+    <div
+      className={`relative h-12 sm:h-16 rounded-md overflow-hidden border transition-colors duration-500 ${
+        ready ? "border-blue-500/50 bg-slate-900" : "border-slate-700/60 bg-slate-800"
+      }`}
+      style={{ flexGrow: scene.durationInFrames ?? 1, flexBasis: 0, flexShrink: 0 }}
+      title={scene.label}
+    >
+      {ready ? (
+        <Thumbnail
+          component={Component!}
+          frameToDisplay={Math.min(30, Math.max(1, Math.floor((scene.durationInFrames ?? 60) / 2)))}
+          durationInFrames={scene.durationInFrames ?? 1}
+          compositionWidth={1920}
+          compositionHeight={1080}
+          fps={30}
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="h-1.5 w-1.5 rounded-full bg-slate-500 animate-pulse" />
+        </div>
+      )}
+      {ready && (
+        <div className="absolute top-1 right-1 bg-emerald-500 rounded-full p-0.5 shadow-md animate-in zoom-in fade-in duration-300">
+          <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Passive progress indicator shown while a lesson is generating: real
+// thumbnails of each scene appearing in place as its code finishes, a
+// checkmark animating in on completion, and a thin companion bar for audio
+// progress (audio finishes ahead of code in the real pipeline). Nothing
+// here is clickable or playable — see the "SceneGenerationFilmstrip" plan.
+function SceneGenerationFilmstrip({ sceneProgress }: { sceneProgress: SceneProgressItem[] }) {
+  const readyCount = sceneProgress.filter((s) => s.codeReady).length;
+
+  return (
+    <div className="relative rounded-xl overflow-hidden shadow-xl border border-slate-800 bg-slate-950 aspect-video flex flex-col items-center justify-center px-4 sm:px-6 gap-4">
+      <div className="w-full max-w-2xl">
+        <p className="text-white/50 text-[11px] sm:text-xs mb-1.5 flex items-center gap-1.5">
+          <Loader2 className="h-3 w-3 animate-spin shrink-0" /> Narration
+        </p>
+        <div className="flex gap-0.5 h-1.5 mb-4 rounded-full overflow-hidden bg-slate-800">
+          {sceneProgress.map((s) => (
+            <div
+              key={s.index}
+              className={`transition-colors duration-500 ${s.audioReady ? "bg-blue-400" : "bg-slate-700"}`}
+              style={{ flexGrow: s.durationInFrames ?? 1, flexBasis: 0, flexShrink: 0 }}
+            />
+          ))}
+        </div>
+
+        <p className="text-white/50 text-[11px] sm:text-xs mb-1.5 flex items-center gap-1.5">
+          <Sparkles className="h-3 w-3 shrink-0" /> Scenes
+        </p>
+        <div className="flex gap-1 sm:gap-1.5">
+          {sceneProgress.map((s) => (
+            <SceneThumbnailBox key={s.index} scene={s} />
+          ))}
+        </div>
+      </div>
+
+      <p className="relative z-10 text-white font-semibold text-sm sm:text-base flex items-center gap-2 mt-1">
+        <Sparkles className="h-4 w-4 text-blue-400 shrink-0" />
+        {readyCount} of {sceneProgress.length} scenes ready
+      </p>
+    </div>
+  );
+}
+
 // 5 seconds before a lesson ends, if the next one is already generated, show
 // a Coursera-style "Up next" prompt the user can click to jump ahead early
 // instead of waiting for playback to finish naturally.
@@ -569,7 +657,11 @@ function VideoPlayer({
   if (!lesson.code) {
     return (
       <div className="space-y-4">
-        <GeneratingLessonPreview />
+        {lesson.sceneProgress && lesson.sceneProgress.length > 0 ? (
+          <SceneGenerationFilmstrip sceneProgress={lesson.sceneProgress} />
+        ) : (
+          <GeneratingLessonPreview />
+        )}
         <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
           <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
           <ul className="space-y-2">
@@ -595,7 +687,7 @@ function VideoPlayer({
     <div className="space-y-4">
       <div className="relative">
         <DynamicPlayer
-          key={`lesson-${lessonNumber}`}
+          key={`lesson-${lessonNumber}-full`}
           code={lesson.code}
           durationInFrames={lesson.totalFrames ?? 3600}
           onEnded={handleEnded}
@@ -1224,6 +1316,7 @@ export default function AILearningPage() {
       id: i + 1, title: l.title || `Lesson ${i + 1}`, duration: "~2:00", completed: false,
       description: l.description || "", keyPoints: l.keyPoints?.length ? l.keyPoints : ["", "", "", ""],
       videoUrl: l.videoUrl, code: l.code ?? null, totalFrames: l.totalFrames ?? null, error: l.error ?? null,
+      sceneProgress: l.sceneProgress ?? [],
     }));
     const mappedStatuses: LessonStatus[] = (c.lessons || []).map((l) =>
       l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : l.status === "locked" ? "locked" : "generating"
@@ -1299,7 +1392,7 @@ export default function AILearningPage() {
           pollCancelRef.current = pollCourse(stillGenerating._id, (course: CourseFromAPI) => {
             setHistory((prev) => prev.map((e) => e.id !== course._id ? e : {
               ...e,
-              lessons: e.lessons.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }),
+              lessons: e.lessons.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }),
               lessonStatuses: course.lessons.map((l) => l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : l.status === "locked" ? "locked" : "generating"),
               questions: course.questions?.length ? course.questions : e.questions,
             }));
@@ -1345,7 +1438,7 @@ export default function AILearningPage() {
       setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code: null, totalFrames: null } : l));
       if (pollCancelRef.current) pollCancelRef.current();
       pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
         if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
@@ -1380,7 +1473,7 @@ export default function AILearningPage() {
       // into the UI right now rather than on the next poll cycle or reload.
       try {
         const course = await getCourseStatus(activeHistoryId);
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
         if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       } catch (statusErr) {
@@ -1390,7 +1483,7 @@ export default function AILearningPage() {
 
       // Keep polling as a backup / to track ongoing lesson generation.
       pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
         if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
@@ -1464,7 +1557,7 @@ export default function AILearningPage() {
       setQuizQuestions([]); setActiveSection("video"); setActiveLesson(0); setQuizAnswers([]); setQuizDone(false);
       seenFailuresRef.current.clear(); setFailureBanner(null);
       pollCancelRef.current = pollCourse(courseId, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
         if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
@@ -1494,7 +1587,7 @@ export default function AILearningPage() {
     setActiveSection(entry.quizDone ? "results" : "video"); setActiveLesson(0); setPhase("course");
     if (entry.lessonStatuses?.some((s) => s === "generating")) {
       pollCancelRef.current = pollCourse(entry.id, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, error: a.error ?? null }; }));
+        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
         setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });

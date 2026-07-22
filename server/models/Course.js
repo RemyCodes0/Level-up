@@ -15,6 +15,28 @@ const sceneMetaSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// One entry per expected scene, populated incrementally WHILE a lesson is
+// still generating — powers a passive progress filmstrip (real thumbnails
+// appearing in order, no playback) shown before the lesson is ready. Created
+// right after the scene plan resolves (index/label known immediately;
+// durationInFrames/audioReady/codeReady/previewCode fill in as audio then
+// code generation actually complete for that scene). Distinct from
+// sceneMetaSchema above, which is for the FINAL ready lesson's replay
+// analytics — this is purely a mid-generation, disposable progress signal.
+const sceneProgressSchema = new mongoose.Schema(
+  {
+    index: Number,
+    durationInFrames: { type: Number, default: null },
+    label: String,
+    audioReady: { type: Boolean, default: false },
+    codeReady: { type: Boolean, default: false },
+    // A self-contained, directly compilable single-scene composition (header
+    // + just this scene, stitched) — see stitchLessonCode in claudeService.js.
+    previewCode: { type: String, default: null },
+  },
+  { _id: false }
+);
+
 const lessonSchema = new mongoose.Schema({
   lessonNumber: Number,
   title: String,
@@ -27,6 +49,7 @@ const lessonSchema = new mongoose.Schema({
   code: String,        // AI-generated Remotion TSX code string
   totalFrames: Number, // total duration in frames (sum of all scene durations)
   scenes: [sceneMetaSchema],
+  sceneProgress: [sceneProgressSchema],
   // True when this lesson was AI-generated from group quiz weaknesses
   // rather than part of the original course plan (see remedialService.js).
   isRemedial: { type: Boolean, default: false },

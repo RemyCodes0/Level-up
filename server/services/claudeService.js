@@ -1421,10 +1421,18 @@ async function generateSceneCode(lesson, scene, index, totalScenes, headerCode, 
 // duration-sum drift or a mistyped audio URL is structurally impossible for
 // the lesson path (unlike the ad-generation path, which still has the model
 // write these itself — see enforceCorrectAudioUrls / generateAdCode).
-function stitchLessonCode({ header, sceneCodes, scenes, componentName }) {
+// `sceneIndices` (optional) gives each entry's REAL scene index, for when
+// `scenes`/`sceneCodes` aren't the full lesson's arrays in original order —
+// e.g. a single-scene preview stitch of just scene 3, where the LOCAL array
+// index is always 0 but the scene component is actually named "Scene4"
+// (sceneComponentName is 1-indexed). Defaults to the local index (0..N-1),
+// which is exactly right when `scenes`/`sceneCodes` are the full, in-order
+// lesson arrays — the normal, unchanged full-lesson stitch behavior.
+function stitchLessonCode({ header, sceneCodes, scenes, componentName, sceneIndices }) {
   const sequences = scenes
     .map((s, i) => {
-      const name = sceneComponentName(i);
+      const realIndex = sceneIndices ? sceneIndices[i] : i;
+      const name = sceneComponentName(realIndex);
       return (
         `      <Series.Sequence durationInFrames={${s.durationInFrames}}>\n` +
         `        <Audio src={${JSON.stringify(s.audioUrl)}} />\n` +
@@ -1455,7 +1463,8 @@ async function generateLessonCode(
   componentName,
   scenes,
   totalFrames,
-  maxAttempts = 3
+  maxAttempts = 3,
+  { onSceneCodeReady = null, headerPromise = null } = {}
 ) {
   let lastError = null;
   const lessonStart = Date.now();
@@ -1474,7 +1483,19 @@ async function generateLessonCode(
     try {
       console.log(`  [code L${lesson.lessonNumber}] Outer attempt ${attempt}/${maxAttempts} for ${componentName} (header + ${scenes.length} scenes)...`);
 
-      const header = await generateLessonHeader(lesson, scenes);
+      // On the very first attempt, reuse a header generation the caller
+      // already kicked off (typically started concurrently with audio
+      // generation, well before this function was even called) instead of
+      // starting a fresh one now — header generation no longer sits fully
+      // behind the entire audio pipeline on the critical path. Header
+      // content only depends on scene descriptions (visualType/onScreenText/
+      // visualDescription), never on measured audio durations, so the header
+      // generated from the pre-audio scene plan is identical to one
+      // generated after. Any retry (attempt > 1) always generates a fresh
+      // header, exactly as before this change.
+      const header = attempt === 1 && headerPromise
+        ? await headerPromise
+        : await generateLessonHeader(lesson, scenes);
       const headerAvailableNames = getHeaderExposedNames(header);
 
       const sceneCodes = new Array(scenes.length).fill(null);
@@ -1490,18 +1511,64 @@ async function generateLessonCode(
           );
         }
 
+        // Each scene's notification is attached directly to ITS OWN promise
+        // via .then() below — NOT deferred to a .forEach() over the awaited
+        // Promise.allSettled results. That distinction matters: awaiting the
+        // whole batch first would mean every scene's notification waits for
+        // the SLOWEST scene in this round to finish (confirmed live — a scene
+        // needing its own internal retry delayed an already-finished
+        // sibling's notification by over a minute). Attaching .then() to each
+        // promise individually fires the moment THAT scene resolves,
+        // regardless of its neighbors.
         const results = await Promise.allSettled(
-          pendingIndices.map((i) => generateSceneCode(lesson, scenes[i], i, scenes.length, header, headerAvailableNames, componentName))
+          pendingIndices.map((i) =>
+            generateSceneCode(lesson, scenes[i], i, scenes.length, header, headerAvailableNames, componentName).then((code) => {
+              sceneCodes[i] = code;
+              sceneErrors[i] = null;
+
+              // Notify a caller as soon as THIS scene's code is ready — in
+              // whatever order scenes actually resolve, not just scene 0.
+              // Lets a caller show live per-scene progress (e.g. a thumbnail
+              // filmstrip) well before the whole lesson finishes. Stitched
+              // into a standalone, self-contained single-scene composition
+              // (same technique as the final full-lesson stitch, just for
+              // one scene, using its REAL index so the wrapper references
+              // the right component name) so it's directly
+              // compilable/renderable on its own. Never fatal: a
+              // stitch/validate/notify failure here is logged and otherwise
+              // ignored — it must never affect the real lesson's
+              // generation, which already succeeded for this scene.
+              if (onSceneCodeReady) {
+                try {
+                  const previewStitched = stitchLessonCode({
+                    header,
+                    sceneCodes: [code],
+                    scenes: [scenes[i]],
+                    componentName,
+                    sceneIndices: [i],
+                  });
+                  const validatedPreview = validateGeneratedCode(previewStitched, componentName, scenes[i].durationInFrames);
+                  const maybePromise = onSceneCodeReady(i, validatedPreview);
+                  if (maybePromise?.catch) {
+                    maybePromise.catch((notifyErr) =>
+                      console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress notification failed (non-fatal): ${describeError(notifyErr)}`)
+                    );
+                  }
+                } catch (stitchErr) {
+                  console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress stitch/validate failed (non-fatal): ${describeError(stitchErr)}`);
+                }
+              }
+
+              return code;
+            })
+          )
         );
 
+        // sceneCodes[i] is already set above for every fulfilled promise —
+        // this loop only needs to capture failures now.
         results.forEach((r, idx) => {
           const i = pendingIndices[idx];
-          if (r.status === "fulfilled") {
-            sceneCodes[i] = r.value;
-            sceneErrors[i] = null;
-          } else {
-            sceneErrors[i] = r.reason;
-          }
+          if (r.status === "rejected") sceneErrors[i] = r.reason;
         });
       }
 

@@ -8,6 +8,19 @@ function authHeaders(): Record<string, string> {
 
 // ── Shapes returned by the backend ───────────────────────────────────────────
 
+// One entry per expected scene, populated incrementally WHILE a lesson is
+// still generating — powers a passive progress filmstrip (real thumbnails
+// appearing in order, no playback). See Course.js's sceneProgressSchema for
+// the backend side of this.
+export interface SceneProgressItem {
+  index: number;
+  durationInFrames: number | null;
+  label: string;
+  audioReady: boolean;
+  codeReady: boolean;
+  previewCode: string | null;
+}
+
 export interface LessonFromAPI {
   lessonNumber: number;
   title: string;
@@ -17,6 +30,7 @@ export interface LessonFromAPI {
   // Browser-compiled player fields
   code: string | null;
   totalFrames: number | null;
+  sceneProgress?: SceneProgressItem[];
   status: "rendering" | "ready" | "failed" | "locked";
   error?: string | null;
   // True for a lesson generated from a collaborative room's group quiz

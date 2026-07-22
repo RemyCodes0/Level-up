@@ -4,6 +4,7 @@ const path = require("path");
 const {
   generateCoursePlan,
   generateLessonCode,
+  generateLessonHeader,
   generateNextCourseSuggestions,
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
@@ -85,13 +86,62 @@ async function buildLesson(courseId, lesson) {
   // was silently swallowed and the lesson's status stayed "rendering"
   // forever, with no error surfaced anywhere. Fixed: both stages now report
   // failure correctly, the same way the code-generation stage already did.
-  let measuredScenes, totalFrames;
+  let measuredScenes, totalFrames, headerPromise;
   try {
     console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
     const scenes = await generateScenePlan(lesson);
 
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio...`);
-    ({ scenes: measuredScenes, totalFrames } = await generateAllSceneAudio(scenes));
+    // Scene count/labels are known immediately — initialize a placeholder
+    // progress entry per scene right away, before audio or code generation
+    // even starts, so the frontend's filmstrip can appear instantly instead
+    // of waiting for the first real completion event. Non-fatal: a failure
+    // here shouldn't block generation, just means the filmstrip stays empty
+    // a little longer.
+    try {
+      const initialProgress = scenes.map((s, i) => ({
+        index: i,
+        durationInFrames: null,
+        label: s.onScreenText || `Scene ${i + 1}`,
+        audioReady: false,
+        codeReady: false,
+        previewCode: null,
+      }));
+      await Course.findByIdAndUpdate(courseId, {
+        $set: { [`lessons.${lesson.lessonNumber - 1}.sceneProgress`]: initialProgress },
+      });
+    } catch (progressInitErr) {
+      console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to initialize scene progress (non-fatal):`, progressInitErr.message);
+    }
+
+    // Header generation only needs the scene DESCRIPTIONS (visualType/
+    // onScreenText/visualDescription) — never the measured audio durations —
+    // so there's no reason it has to wait behind the entire audio pipeline
+    // like it used to. Kick it off here, in parallel with audio, and hand
+    // the (probably-already-resolved-by-the-time-it's-needed) result to
+    // generateLessonCode below instead of letting it start its own header
+    // call from scratch. This is the single biggest lever on lesson
+    // wall-clock time: header generation used to sit entirely on the
+    // critical path AFTER audio; now the two run concurrently.
+    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio + header (in parallel)...`);
+    headerPromise = generateLessonHeader(lesson, scenes);
+    // Attach a no-op handler immediately so a header failure here doesn't
+    // log as an unhandled rejection while we're still busy awaiting audio
+    // below — the real error still surfaces normally when generateLessonCode
+    // awaits this same promise further down.
+    headerPromise.catch(() => {});
+
+    ({ scenes: measuredScenes, totalFrames } = await generateAllSceneAudio(scenes, async (index, measuredScene) => {
+      try {
+        await Course.findByIdAndUpdate(courseId, {
+          $set: {
+            [`lessons.${lesson.lessonNumber - 1}.sceneProgress.${index}.audioReady`]: true,
+            [`lessons.${lesson.lessonNumber - 1}.sceneProgress.${index}.durationInFrames`]: measuredScene.durationInFrames,
+          },
+        });
+      } catch (progressErr) {
+        console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to save audio progress for scene ${index + 1} (non-fatal):`, progressErr.message);
+      }
+    }));
   } catch (err) {
     const stage = measuredScenes === undefined ? "scenes" : "audio";
     const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
@@ -126,7 +176,35 @@ async function buildLesson(courseId, lesson) {
         lesson,
         componentName,
         measuredScenes,
-        totalFrames
+        totalFrames,
+        undefined,
+        {
+          // Reuse the header kicked off above (in parallel with audio)
+          // instead of generateLessonCode starting a fresh one from scratch —
+          // only applies to this first buildLesson-level attempt; internal
+          // retries (and a second buildLesson attempt) still regenerate a
+          // fresh header as before.
+          headerPromise,
+          // Fires as EACH scene's code finishes, in whatever order they
+          // actually resolve — lets the frontend's progress filmstrip show a
+          // real thumbnail for that scene well before the rest of the lesson
+          // is done. Independent of, and never touches, the
+          // `code`/`status`/`scenes` fields that the final save below sets —
+          // a progress-write failure here is logged but never affects normal
+          // lesson completion.
+          onSceneCodeReady: async (index, previewCode) => {
+            try {
+              await Course.findByIdAndUpdate(courseId, {
+                $set: {
+                  [`lessons.${lesson.lessonNumber - 1}.sceneProgress.${index}.codeReady`]: true,
+                  [`lessons.${lesson.lessonNumber - 1}.sceneProgress.${index}.previewCode`]: previewCode,
+                },
+              });
+            } catch (progressSaveErr) {
+              console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to save code progress for scene ${index + 1} (non-fatal):`, progressSaveErr.message);
+            }
+          },
+        }
       );
 
       // Scene boundaries for replay analytics (Progress model) — computed

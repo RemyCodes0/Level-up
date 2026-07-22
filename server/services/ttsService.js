@@ -80,7 +80,15 @@ async function generateSceneAudio(scene, retries = 3) {
 // constrained hosts — concurrent writeFileSync calls race each other and
 // can produce truncated files. Batching keeps throughput high while
 // preventing the disk from being hammered by too many simultaneous writes.
-async function generateAllSceneAudio(scenes) {
+//
+// `onSceneAudioReady(index, measuredScene)` is optional — fires as soon as
+// EACH scene's own audio finishes (not just once the whole batch settles),
+// with the real 0-based array index (generateSceneAudio itself only ever
+// sees scene.id, whatever the scene-plan JSON assigned — not guaranteed to
+// be a reliable contiguous index, so the index is threaded through here
+// instead). Lets a caller show per-scene progress before code generation
+// even starts.
+async function generateAllSceneAudio(scenes, onSceneAudioReady) {
   console.log(`  [tts] Generating ${scenes.length} audio clips (max 5 concurrent)...`);
 
   const BATCH_SIZE = 5;
@@ -88,7 +96,22 @@ async function generateAllSceneAudio(scenes) {
 
   for (let i = 0; i < scenes.length; i += BATCH_SIZE) {
     const batch = scenes.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(batch.map((scene) => generateSceneAudio(scene)));
+    const results = await Promise.all(
+      batch.map((scene, batchIdx) => {
+        const index = i + batchIdx;
+        return generateSceneAudio(scene).then((result) => {
+          // Never let a progress-notification failure take down real audio
+          // generation — same non-fatal philosophy as the rest of this
+          // pipeline's optional progress callbacks.
+          try {
+            onSceneAudioReady?.(index, result);
+          } catch (notifyErr) {
+            console.warn(`  [tts] Scene ${index + 1}: onSceneAudioReady callback failed (non-fatal): ${notifyErr.message}`);
+          }
+          return result;
+        });
+      })
+    );
     enriched.push(...results);
   }
 
