@@ -871,7 +871,8 @@ Y5. Any wrapper component you nest content inside MUST accept and render {childr
    • Enzyme activity → the enzyme shape travels ALONG the substrate with a visible change at the contact point — not a static blob labeled "enzyme".
    • Sorting → elements actually swap into order; binary search → the search window actually narrows.
    Test: paused at start / middle / end, does the frame look MEANINGFULLY different, reflecting real progress? If it's the same picture with a title fading in, it FAILS — no amount of background decoration rescues it.
-   BINDING SPEC: you are given this scene's visualDescription (implement the specific elements/actions it names — not a different visual you'd prefer) and onScreenText (render VERBATIM as the scene's primary text, plus at most brief supporting labels — never paraphrase or replace it).
+   BINDING SPEC: you are given this scene's visualDescription (implement the specific elements/actions it names — not a different visual you'd prefer) and onScreenText (render VERBATIM as the scene's primary text — never paraphrase or replace it).
+   INFORMATION BUDGET IS A HARD CAP, NOT A STYLE PREFERENCE: at most 2-3 small supporting labels visible on the diagram at any SINGLE frame, on top of the title/caption. Never label every element at once (e.g. a value AND a state AND a coordinate on each of 6 nodes = 18 competing text items is a FAIL, even if none of them technically overlap) — pick only what matters for THIS instant, and stage the rest in with the pacing (§B) instead of dumping every fact up front. A crowded frame confuses the viewer just as much as an overlapping one; when in doubt, cut a label — the motion carries the meaning, text only confirms the one or two things that matter right now.
 
 §B — MOTION IS CONTINUOUS BUT MOTIVATED.
    • No frozen frames: something is always in gentle motion (Math.sin(frame/k) breathing, drift, the mechanism progressing). But motion must MEAN something — it illustrates the concept or sets the mood. Avoid restless decorative jitter that has nothing to do with the topic; that is precisely what makes an animation read as generated filler.
@@ -889,6 +890,7 @@ Y5. Any wrapper component you nest content inside MUST accept and render {childr
 
 §D — READABLE TEXT LAYER. Use the header's ZONES for every text block: titles live in ZONES.title, captions in ZONES.caption (e.g. position with top: ZONES.title.yMin or top: ZONES.caption.yMin), and keep the diagram — including its full motion range, clamped per S5 — entirely inside ZONES.diagram; never let a clamped diagram position cross into ZONES.title or ZONES.caption. Give text a zIndex above the diagram plus a textShadow (or subtle dark backing) for contrast over any color. Body ≥28px, titles ≥36px.
    NON-OVERLAP IS MECHANICAL, NOT A JUDGMENT CALL: if two text blocks occupy the SAME zone one after another (e.g. two captions), the second block's fade-in START frame must be a LITERAL number that is ≥ the first block's fade-out END frame — compute both as adjacent literals together, e.g. first caption fades out over [140, 170], second caption fades in starting at exactly 170 (not 150, not "whenever it looks right"). Never write two interpolate() calls for the same zone whose opacity ranges can both be > 0 at the same frame.
+   TOTAL READABLE-TEXT CAP: count every simultaneously-visible text item across ALL zones at any single frame — title + caption + diagram labels combined. Keep that count to roughly 4-5 at most. A frame that's technically non-overlapping but crammed with 10 small labels still reads as cluttered and confusing — the same INFORMATION BUDGET from §A applies to the whole frame, not just the diagram.
 
 ════════ CODE QUALITY ════════
 - Inline styles only (no Tailwind, no className for styling, no external CSS). No registerRoot, no Composition, no export, no import.
@@ -995,6 +997,7 @@ Notice: the window NARROWS across the whole duration (staged progress, §B), the
 • Motion on every frame but motivated (§B); the mechanism visibly progresses start→end (§A); related elements share one anchor (§C).
 • RAN THE §C OVERLAP CHECK at start/mid/end: no two simultaneously-visible elements' bounding boxes intersect.
 • Every text block sits in its ZONES band (title/diagram/caption never cross into each other, §D); onScreenText rendered verbatim, legible; any two text blocks sharing a zone have adjacent, non-overlapping fade frames, never both opacity > 0 at once.
+• COUNT your simultaneously-visible text items at the busiest frame (title + caption + diagram labels) — if it's above ~4-5, cut labels or stage them across the timeline instead (§A, §D). A crowded frame is a FAIL even with zero overlap.
 • Uses the header's palette/motif/ZONES — does not invent new ones.
 
 Your entire response is the scene's code, first characters "function", no text or fences around it.
@@ -1296,7 +1299,7 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let receivedFullOutput = false;
     try {
-      console.log(`  [header] Attempt ${attempt}/${maxAttempts}...`);
+      console.log(`  [header L${lesson.lessonNumber}] Attempt ${attempt}/${maxAttempts}...`);
 
       const userContent =
         buildHeaderUserContent(lesson, scenes) +
@@ -1326,7 +1329,7 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2) {
       const validated = validateHeaderFragment(fixed);
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-      console.log(`  [header] Valid header generated (${validated.length} chars) — took ${elapsedSec}s`);
+      console.log(`  [header L${lesson.lessonNumber}] Valid header generated (${validated.length} chars) — took ${elapsedSec}s`);
       return validated;
     } catch (err) {
       lastError = err;
@@ -1334,7 +1337,7 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2) {
         throw new Error(`Lesson header generation failed with a non-retryable error (check ${LESSON_CODE_PROVIDER.keyEnv}): ${describeError(err)}`);
       }
       if (err.isContentError || receivedFullOutput) contentFeedback = err.message;
-      console.warn(`  [header] Attempt ${attempt} failed: ${describeError(err)}. Retrying...`);
+      console.warn(`  [header L${lesson.lessonNumber}] Attempt ${attempt} failed: ${describeError(err)}. Retrying...`);
       if (attempt < maxAttempts) await backoffDelay(attempt);
     }
   }
@@ -1386,7 +1389,7 @@ async function generateSceneCode(lesson, scene, index, totalScenes, headerCode, 
       const validated = validateSceneFragment(fixed, sceneName, { headerAvailableNames });
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-      console.log(`  [scene ${index + 1}] Valid code generated (${validated.length} chars) — took ${elapsedSec}s for ${sceneName}`);
+      console.log(`  [scene ${index + 1} L${lesson.lessonNumber}] Valid code generated (${validated.length} chars) — took ${elapsedSec}s for ${sceneName}`);
       return validated;
     } catch (err) {
       lastError = err;
@@ -1394,7 +1397,7 @@ async function generateSceneCode(lesson, scene, index, totalScenes, headerCode, 
         throw new Error(`Scene ${index + 1} code generation failed with a non-retryable error (check ${LESSON_CODE_PROVIDER.keyEnv}): ${describeError(err)}`);
       }
       if (err.isContentError || receivedFullOutput) contentFeedback = err.message;
-      console.warn(`  [scene ${index + 1}] Attempt ${attempt} failed: ${describeError(err)}. Retrying...`);
+      console.warn(`  [scene ${index + 1} L${lesson.lessonNumber}] Attempt ${attempt} failed: ${describeError(err)}. Retrying...`);
       if (attempt < maxAttempts) await backoffDelay(attempt);
     }
   }
@@ -1449,37 +1452,61 @@ async function generateLessonCode(
   let lastError = null;
   const lessonStart = Date.now();
 
+  // Extra rounds of retrying ONLY the scenes still missing, on top of each
+  // scene's own internal maxAttempts. A scene that keeps failing no longer
+  // throws away every other scene's already-good work — it used to force a
+  // full header+all-scenes rebuild (confirmed costly in production: one
+  // stubborn scene wasted ~150s regenerating 12 scenes that were already
+  // fine). Only if a scene is STILL failing after all these rounds — or the
+  // header itself fails — does the outer attempt loop below kick in and
+  // regenerate everything from scratch, same as before this change.
+  const EXTRA_SCENE_RETRY_ROUNDS = 2;
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      console.log(`  [code] Outer attempt ${attempt}/${maxAttempts} for ${componentName} (header + ${scenes.length} scenes)...`);
+      console.log(`  [code L${lesson.lessonNumber}] Outer attempt ${attempt}/${maxAttempts} for ${componentName} (header + ${scenes.length} scenes)...`);
 
       const header = await generateLessonHeader(lesson, scenes);
       const headerAvailableNames = getHeaderExposedNames(header);
 
-      const results = await Promise.allSettled(
-        scenes.map((scene, i) => generateSceneCode(lesson, scene, i, scenes.length, header, headerAvailableNames, componentName))
-      );
+      const sceneCodes = new Array(scenes.length).fill(null);
+      const sceneErrors = new Array(scenes.length).fill(null);
 
-      const failures = results
-        .map((r, i) => ({ r, i }))
-        .filter(({ r }) => r.status === "rejected");
+      for (let round = 0; round <= EXTRA_SCENE_RETRY_ROUNDS; round++) {
+        const pendingIndices = scenes.map((_, i) => i).filter((i) => sceneCodes[i] === null);
+        if (pendingIndices.length === 0) break;
 
-      if (failures.length > 0) {
-        // TODO(v2, not implemented): if many/all failures share a root cause
-        // (e.g. every failure references an identifier the header was
-        // supposed to declare), that's likely a HEADER defect, not N
-        // independent scene mistakes — a future pass could detect that
-        // pattern and regenerate just the header before re-running scenes.
-        // v1 deliberately does not attempt this detection: the outer retry
-        // below already reruns header + all scenes from scratch on any
-        // failure, which is the same escalation shape as before this split.
-        const detail = failures
-          .map(({ r, i }) => `scene ${i + 1} (${sceneComponentName(i)}): ${describeError(r.reason)}`)
-          .join(" | ");
-        throw contentError(`${failures.length}/${scenes.length} scene(s) failed after their own retries: ${detail}`);
+        if (round > 0) {
+          console.log(
+            `  [code L${lesson.lessonNumber}] Retrying ${pendingIndices.length} still-failing scene(s) (round ${round}/${EXTRA_SCENE_RETRY_ROUNDS}): ${pendingIndices.map((i) => sceneComponentName(i)).join(", ")}`
+          );
+        }
+
+        const results = await Promise.allSettled(
+          pendingIndices.map((i) => generateSceneCode(lesson, scenes[i], i, scenes.length, header, headerAvailableNames, componentName))
+        );
+
+        results.forEach((r, idx) => {
+          const i = pendingIndices[idx];
+          if (r.status === "fulfilled") {
+            sceneCodes[i] = r.value;
+            sceneErrors[i] = null;
+          } else {
+            sceneErrors[i] = r.reason;
+          }
+        });
       }
 
-      const sceneCodes = results.map((r) => r.value);
+      const stillFailingIndices = scenes.map((_, i) => i).filter((i) => sceneCodes[i] === null);
+      if (stillFailingIndices.length > 0) {
+        const detail = stillFailingIndices
+          .map((i) => `scene ${i + 1} (${sceneComponentName(i)}): ${describeError(sceneErrors[i])}`)
+          .join(" | ");
+        throw contentError(
+          `${stillFailingIndices.length}/${scenes.length} scene(s) still failing after ${EXTRA_SCENE_RETRY_ROUNDS + 1} rounds: ${detail}`
+        );
+      }
+
       const stitched = stitchLessonCode({ header, sceneCodes, scenes, componentName });
 
       // Unchanged — final-file validation stays identical to before the
@@ -1497,7 +1524,7 @@ async function generateLessonCode(
 
       const elapsedSec = ((Date.now() - lessonStart) / 1000).toFixed(1);
       console.log(
-        `  [code] Valid code generated (${validatedCode.length} chars) — took ${elapsedSec}s for ${componentName}`
+        `  [code L${lesson.lessonNumber}] Valid code generated (${validatedCode.length} chars) — took ${elapsedSec}s for ${componentName}`
       );
       return validatedCode;
     } catch (err) {
@@ -1509,7 +1536,7 @@ async function generateLessonCode(
         );
       }
 
-      console.warn(`  [code] Outer attempt ${attempt} failed: ${describeError(err)}. Retrying (full header+scenes rebuild)...`);
+      console.warn(`  [code L${lesson.lessonNumber}] Outer attempt ${attempt} failed: ${describeError(err)}. Retrying (full header+scenes rebuild)...`);
       if (attempt < maxAttempts) await backoffDelay(attempt);
     }
   }
