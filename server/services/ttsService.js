@@ -240,6 +240,12 @@ async function generateSceneAudio(scene, retries = 3) {
       const isLastAttempt = attempt === retries;
       if (isLastAttempt) {
         console.error(`  [tts] Scene ${scene.id}: all ${retries} attempts failed — ${err.message}`);
+        // Tagged so a caller that pipelines this scene's promise straight
+        // into code generation (see generateAllSceneAudioPipelined /
+        // claudeService.js's generateLessonCode) can still correctly
+        // attribute a resulting lesson-build failure to the "audio" stage
+        // instead of whatever stage happens to observe the rejection.
+        err.stage = err.stage || "audio";
         throw err;
       }
       const backoffMs = 2000 * attempt; // 2s, 4s, 6s — longer wait for terminated connections
@@ -249,64 +255,82 @@ async function generateSceneAudio(scene, retries = 3) {
   }
 }
 
-// Generates audio for all scenes with bounded concurrency (6 scenes at a
-// time). Fully parallel (Promise.all over 13+ scenes) causes I/O contention
-// on constrained hosts — concurrent writeFileSync calls race each other and
-// can produce truncated files. Batching keeps throughput high while
-// preventing the disk from being hammered by too many simultaneous writes.
-//
-// The real cap on simultaneous TTS requests is limitTtsChunkCall above
-// (TTS_CHUNK_MAX_CONCURRENT = 6), not this number — that limiter bounds
-// actual API concurrency regardless of how many scenes are "active" at
-// once. This number (scenes) and that one (audio requests) are deliberately
-// tuned independently: 6 scenes active at once, each of whose chunks then
-// compete for the shared 6-slot TTS request pool.
+// Bounds how many scenes can be actively generating audio (and writing
+// files) at once — separate from TTS_CHUNK_MAX_CONCURRENT above, which
+// bounds actual TTS API calls. This one exists because fully parallel
+// writeFileSync calls across 13+ scenes cause I/O contention on constrained
+// hosts (truncated/zero-byte files). A real rolling semaphore, NOT a
+// fixed-size batch loop (fire N, wait for ALL N, fire the next N) — the
+// batch-loop version had the exact same problem the scene code-gen batching
+// was found to have (see claudeService.js's generateLessonCode): one slow
+// scene in a group holds back every scene queued behind that whole group,
+// even ones that could've started the instant an earlier group-mate
+// finished. A plain semaphore lets the next scene start the moment any
+// slot frees up.
+const SCENE_AUDIO_MAX_CONCURRENT = Number(process.env.SCENE_AUDIO_MAX_CONCURRENT) || 6;
+const limitSceneAudioCall = createLimiter(SCENE_AUDIO_MAX_CONCURRENT);
+
+// Kicks off audio generation for every scene immediately and returns
+// synchronously (no await) — `scenePromises[i]` is a real Promise for EVERY
+// index the moment this function returns, not just the first
+// SCENE_AUDIO_MAX_CONCURRENT of them (a caller that wants to start scene i's
+// CODE generation the instant scene i's own audio is ready — see
+// claudeService.js's generateLessonCode — needs every entry to already be a
+// live promise to attach to, not `undefined` for any scene the semaphore
+// hasn't reached yet).
 //
 // `onSceneAudioReady(index, measuredScene)` is optional — fires as soon as
-// EACH scene's own audio finishes (not just once the whole batch settles),
-// with the real 0-based array index (generateSceneAudio itself only ever
-// sees scene.id, whatever the scene-plan JSON assigned — not guaranteed to
-// be a reliable contiguous index, so the index is threaded through here
-// instead). Lets a caller show per-scene progress before code generation
-// even starts.
-async function generateAllSceneAudio(scenes, onSceneAudioReady) {
-  const BATCH_SIZE = 6;
+// EACH scene's own audio finishes, with the real 0-based array index
+// (generateSceneAudio itself only ever sees scene.id, whatever the
+// scene-plan JSON assigned — not guaranteed to be a reliable contiguous
+// index, so the index is threaded through here instead). Lets a caller show
+// per-scene progress before code generation even starts.
+//
+// Returns `{ scenePromises, donePromise }`: `donePromise` resolves once
+// EVERY scene's audio has landed, with the same `{ scenes, totalFrames }`
+// shape generateAllSceneAudio (below) used to return directly — for a
+// caller that doesn't need per-scene pipelining and just wants the final
+// aggregate result.
+function generateAllSceneAudioPipelined(scenes, onSceneAudioReady) {
   const stageStart = Date.now();
-  console.log(`  [tts] Generating ${scenes.length} audio clips (max ${BATCH_SIZE} scenes concurrent, max ${TTS_CHUNK_MAX_CONCURRENT} chunk requests concurrent)...`);
+  console.log(`  [tts] Generating ${scenes.length} audio clips (max ${SCENE_AUDIO_MAX_CONCURRENT} scenes concurrent, max ${TTS_CHUNK_MAX_CONCURRENT} chunk requests concurrent)...`);
 
-  const enriched = [];
+  const scenePromises = scenes.map((scene, index) =>
+    limitSceneAudioCall(() => generateSceneAudio(scene)).then((result) => {
+      // Never let a progress-notification failure take down real audio
+      // generation — same non-fatal philosophy as the rest of this
+      // pipeline's optional progress callbacks.
+      try {
+        onSceneAudioReady?.(index, result);
+      } catch (notifyErr) {
+        console.warn(`  [tts] Scene ${index + 1}: onSceneAudioReady callback failed (non-fatal): ${notifyErr.message}`);
+      }
+      return result;
+    })
+  );
 
-  for (let i = 0; i < scenes.length; i += BATCH_SIZE) {
-    const batch = scenes.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(
-      batch.map((scene, batchIdx) => {
-        const index = i + batchIdx;
-        return generateSceneAudio(scene).then((result) => {
-          // Never let a progress-notification failure take down real audio
-          // generation — same non-fatal philosophy as the rest of this
-          // pipeline's optional progress callbacks.
-          try {
-            onSceneAudioReady?.(index, result);
-          } catch (notifyErr) {
-            console.warn(`  [tts] Scene ${index + 1}: onSceneAudioReady callback failed (non-fatal): ${notifyErr.message}`);
-          }
-          return result;
-        });
-      })
-    );
-    enriched.push(...results);
-  }
+  const donePromise = Promise.all(scenePromises).then((enriched) => {
+    const totalFrames = enriched.reduce((sum, s) => sum + s.durationInFrames, 0);
+    // NOTE: this is the narration's own PLAYBACK duration (how long the
+    // combined clips run for), not how long generation took — use the
+    // wall-clock line below for that. Kept separate on purpose: this number
+    // feeds totalFrames for the actual lesson video, that one is diagnostic
+    // only.
+    console.log(`  [tts] Total narration: ${totalFrames} frames (${(totalFrames / FPS).toFixed(1)}s playback)`);
+    console.log(`  [tts] Audio stage wall-clock: ${((Date.now() - stageStart) / 1000).toFixed(1)}s`);
+    return { scenes: enriched, totalFrames };
+  });
 
-  const totalFrames = enriched.reduce((sum, s) => sum + s.durationInFrames, 0);
-  // NOTE: this is the narration's own PLAYBACK duration (how long the
-  // combined clips run for), not how long generation took — use the
-  // wall-clock line below for that. Kept separate on purpose: this number
-  // feeds totalFrames for the actual lesson video, that one is diagnostic
-  // only.
-  console.log(`  [tts] Total narration: ${totalFrames} frames (${(totalFrames / FPS).toFixed(1)}s playback)`);
-  console.log(`  [tts] Audio stage wall-clock: ${((Date.now() - stageStart) / 1000).toFixed(1)}s`);
+  return { scenePromises, donePromise };
+}
 
-  return { scenes: enriched, totalFrames };
+// Back-compat wrapper for callers that just want the final aggregate result
+// and don't need per-scene pipelining (e.g. adController.js's ad-generation
+// path, which builds one short component and has no equivalent to the
+// lesson pipeline's per-scene code generation to overlap with).
+async function generateAllSceneAudio(scenes, onSceneAudioReady) {
+  const { donePromise } = generateAllSceneAudioPipelined(scenes, onSceneAudioReady);
+  return donePromise;
 }
 
 // Call this from deleteCourseHandler only — NOT after code generation,
@@ -323,4 +347,4 @@ function cleanupAudio(scenes) {
   }
 }
 
-module.exports = { generateSceneAudio, generateAllSceneAudio, cleanupAudio, FPS };
+module.exports = { generateSceneAudio, generateAllSceneAudio, generateAllSceneAudioPipelined, cleanupAudio, FPS };

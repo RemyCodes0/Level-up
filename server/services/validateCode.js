@@ -89,6 +89,22 @@ function checkHasReturn(code) {
 // options object), and the input/output ranges must be literal arrays of
 // matching length — this is the exact failure pattern that has crashed videos
 // at runtime before (the rule already exists in the prompt; this enforces it).
+// Extracts the actual numeric value of a plain number literal — including a
+// negative one, which Babel parses as UnaryExpression{operator:"-",
+// argument:NumericLiteral} rather than a single literal node. Returns null
+// for anything else (an Identifier, a BinaryExpression like `start + 20`,
+// a CallExpression, etc.) — i.e. anything that ISN'T a literal the model was
+// told to write ("inputRange and outputRange are ARRAY LITERALS of plain
+// number literals... NEVER an expression inside the array").
+function literalNumericValue(node) {
+  if (!node) return null;
+  if (node.type === "NumericLiteral") return node.value;
+  if (node.type === "UnaryExpression" && node.operator === "-" && node.argument.type === "NumericLiteral") {
+    return -node.argument.value;
+  }
+  return null;
+}
+
 function checkInterpolateCalls(ast) {
   const errors = [];
   traverse(ast, {
@@ -135,6 +151,49 @@ function checkInterpolateCalls(ast) {
         errors.push(
           `interpolate()'s inputRange and outputRange have different lengths (${inputRange.elements.length} vs ${outputRange.elements.length})${loc}`
         );
+      }
+
+      // Both arrays passed the "is an ArrayExpression" check above, but that
+      // only confirms the OUTER `[...]` shape — nothing yet stops an element
+      // INSIDE from being an expression (`[start, start + 20]`) instead of a
+      // plain number. That distinction matters: a literal-only array's
+      // values are known right now, at validation time; an expression's
+      // value depends on runtime data (e.g. a computed start frame) that
+      // this validator can never see — so if the model gets the arithmetic
+      // wrong for some specific input, nothing catches it until a real
+      // user's browser throws "inputRange must be strictly monotonically
+      // increasing" (a real incident this closes off). Reject non-literal
+      // elements outright rather than trying to guess their runtime value.
+      let hasNonLiteralElement = false;
+      for (const [rangeName, range] of [["inputRange", inputRange], ["outputRange", outputRange]]) {
+        for (const el of range.elements) {
+          if (literalNumericValue(el) === null) {
+            errors.push(
+              `interpolate()'s ${rangeName} contains a non-literal element${loc} — every value must be a plain number (e.g. [0, 30]), never a variable or expression (NOT [start, start + 20])`
+            );
+            hasNonLiteralElement = true;
+          }
+        }
+      }
+
+      // Only checkable once every inputRange element is confirmed to be a
+      // real literal above — Remotion's OWN runtime requirement (unlike
+      // outputRange, which has no such constraint: a fade-out [1, 0] is
+      // valid) is that inputRange is STRICTLY increasing. This is the exact
+      // static equivalent of the "inputRange must be strictly monotonically
+      // increasing" crash Remotion throws — catching it here means a
+      // scene that would fail this way gets rejected and retried during
+      // generation instead of crashing a real user's playback.
+      if (!hasNonLiteralElement) {
+        const inputValues = inputRange.elements.map(literalNumericValue);
+        for (let i = 1; i < inputValues.length; i++) {
+          if (inputValues[i] <= inputValues[i - 1]) {
+            errors.push(
+              `interpolate()'s inputRange must be strictly increasing but got [${inputValues.join(", ")}]${loc} — this throws "inputRange must be strictly monotonically increasing" at runtime`
+            );
+            break;
+          }
+        }
       }
     },
   });
@@ -368,6 +427,75 @@ function checkCalledNonFunctionConst(ast) {
   return errors;
 }
 
+// A real production crash: a scene declared `const topPoints = data.map(d =>
+// scaleTopX(d.x))` textually BEFORE `const scaleTopX = ...` further down the
+// same function — throws "Cannot access 'scaleTopX' before initialization" at
+// render time (a `const`/`let` TDZ violation), since JS doesn't hoist the
+// INITIALIZATION, only the binding itself.
+//
+// Deliberately narrow, same philosophy as checkCalledNonFunctionConst: only
+// flags a reference whose source position is BEFORE its own declaration's
+// position AND that isn't reached by walking through a nested named
+// `function helper() {}` — a helper declared early but not CALLED until
+// after the real declaration executes is legitimate (function declarations
+// are fully hoisted, so calling it later is safe even though its BODY
+// textually references the not-yet-declared name). Catching that specific
+// safe pattern would need real call-order data-flow analysis; skipping it
+// keeps this check zero-false-positive at the cost of missing that one rare
+// safe-looking-risky shape. Everything else this fires on (the identifier
+// used directly, or inside an immediately-invoked callback like
+// `.map()`/`.filter()`/`.reduce()`) is a guaranteed crash in this sandbox,
+// since every top-level statement in a scene/header function runs
+// synchronously in source order every render — there's no setTimeout/event
+// handler here for a callback to genuinely defer into.
+function checkUsedBeforeDeclared(ast) {
+  const errors = [];
+  traverse(ast, {
+    VariableDeclarator(declPath) {
+      const parent = declPath.parentPath.node;
+      if (parent.type !== "VariableDeclaration" || (parent.kind !== "const" && parent.kind !== "let")) return;
+      const id = declPath.node.id;
+      if (id.type !== "Identifier") return;
+
+      const name = id.name;
+      const declStart = declPath.node.start;
+      const declaringScope = declPath.scope;
+      const binding = declaringScope.getBinding(name);
+      if (!binding) return;
+
+      for (const refPath of binding.referencePaths) {
+        // `export const X = ...` makes Babel register the wrapping
+        // ExportNamedDeclaration itself as one of X's "references" (an
+        // internal bookkeeping artifact, not a real value read) — its
+        // position is naturally before the declarator's (the `export`
+        // keyword precedes `const`), which would otherwise false-positive on
+        // every single exported component. Real references are always
+        // Identifier nodes; this wrapper isn't, so filtering to Identifier
+        // excludes it without needing an export-specific special case.
+        if (refPath.node.type !== "Identifier") continue;
+        if (refPath.node.start == null || declStart == null || refPath.node.start >= declStart) continue;
+
+        let hopsThroughNamedFunction = false;
+        let current = refPath.scope;
+        while (current && current.block !== declaringScope.block) {
+          if (current.block.type === "FunctionDeclaration") {
+            hopsThroughNamedFunction = true;
+            break;
+          }
+          current = current.parent;
+        }
+        if (hopsThroughNamedFunction) continue;
+
+        const loc = refPath.node.loc ? ` (line ${refPath.node.loc.start.line})` : "";
+        errors.push(
+          `"${name}" is used${loc} before its own "${parent.kind} ${name} = ..." declaration — throws "Cannot access '${name}' before initialization" at runtime; move the declaration earlier`
+        );
+      }
+    },
+  });
+  return errors;
+}
+
 // Sum every <Series.Sequence durationInFrames={N}> and compare to the real
 // audio-measured total. Small drift gets auto-corrected on the LAST sequence
 // (absorbing rounding slop there is harmless); large drift means something
@@ -465,6 +593,11 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
     throw new Error(`Generated code calls a non-function value:\n${nonFunctionCalls.join("\n")}`);
   }
 
+  const usedBeforeDeclared = checkUsedBeforeDeclared(ast);
+  if (usedBeforeDeclared.length > 0) {
+    throw new Error(`Generated code has a temporal-dead-zone violation:\n${usedBeforeDeclared.join("\n")}`);
+  }
+
   return checkDurationSum(tsxCode, ast, expectedTotalFrames);
 }
 
@@ -559,6 +692,11 @@ function validateHeaderFragment(code, { reservedNames = [] } = {}) {
     throw new Error(`Header calls a non-function value:\n${nonFunctionCalls.join("\n")}`);
   }
 
+  const usedBeforeDeclared = checkUsedBeforeDeclared(ast);
+  if (usedBeforeDeclared.length > 0) {
+    throw new Error(`Header has a temporal-dead-zone violation:\n${usedBeforeDeclared.join("\n")}`);
+  }
+
   // Everything above validated the header AS WRITTEN (its own imports were
   // enough for ITS OWN code). What's returned, though, is import-canonicalized
   // — see canonicalizeHeaderImports — so every scene generated against this
@@ -631,6 +769,11 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
   const nonFunctionCalls = checkCalledNonFunctionConst(ast);
   if (nonFunctionCalls.length > 0) {
     throw new Error(`${sceneName} calls a non-function value:\n${nonFunctionCalls.join("\n")}`);
+  }
+
+  const usedBeforeDeclared = checkUsedBeforeDeclared(ast);
+  if (usedBeforeDeclared.length > 0) {
+    throw new Error(`${sceneName} has a temporal-dead-zone violation:\n${usedBeforeDeclared.join("\n")}`);
   }
 
   return code;

@@ -8,7 +8,7 @@ const {
   generateNextCourseSuggestions,
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
-const { generateAllSceneAudio } = require("../services/ttsService");
+const { generateAllSceneAudioPipelined } = require("../services/ttsService");
 const Course = require("../models/Course");
 const GenerationLog = require("../models/GenerationLog");
 const User = require("../models/User");
@@ -80,16 +80,29 @@ async function buildLesson(courseId, lesson) {
     }
   }
 
-  // ── Stage 1+2: scene plan + audio ───────────────────────────────────────
-  // Previously NOT wrapped in try/catch — if either of these threw for a
-  // lesson built in a parallel batch (Promise.allSettled), the rejection
-  // was silently swallowed and the lesson's status stayed "rendering"
-  // forever, with no error surfaced anywhere. Fixed: both stages now report
-  // failure correctly, the same way the code-generation stage already did.
-  let measuredScenes, totalFrames, headerPromise;
+  // ── Stage 1: scene plan ──────────────────────────────────────────────────
+  // Previously NOT wrapped in try/catch — if this threw for a lesson built
+  // in a parallel batch (Promise.allSettled), the rejection was silently
+  // swallowed and the lesson's status stayed "rendering" forever, with no
+  // error surfaced anywhere. Fixed: this stage now reports failure
+  // correctly, the same way the code-generation stage already did.
+  //
+  // Audio is no longer awaited here at all (previously Stage "1+2": scene
+  // plan THEN audio, both inside this same try). generateAllSceneAudioPipelined
+  // fires every scene's audio immediately and returns per-scene PROMISES
+  // synchronously instead of one aggregate promise — code generation below
+  // then awaits EACH scene's own promise individually, right before that
+  // specific scene's code generation starts, instead of the whole lesson
+  // waiting for every scene's audio to finish before code generation even
+  // begins. A scene whose audio ultimately fails still surfaces as a
+  // real failure (its promise rejects, which generateLessonCode's own scene
+  // loop catches and — since ttsService tags that rejection with
+  // `.stage = "audio"` — the Stage 2 catch block below still reports it as
+  // an "audio" stage failure, not a misleading "code" one).
+  let scenePlan, scenePromises, headerPromise;
   try {
     console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
-    const scenes = await generateScenePlan(lesson);
+    scenePlan = await generateScenePlan(lesson);
 
     // Scene count/labels are known immediately — initialize a placeholder
     // progress entry per scene right away, before audio or code generation
@@ -98,7 +111,7 @@ async function buildLesson(courseId, lesson) {
     // here shouldn't block generation, just means the filmstrip stays empty
     // a little longer.
     try {
-      const initialProgress = scenes.map((s, i) => ({
+      const initialProgress = scenePlan.map((s, i) => ({
         index: i,
         durationInFrames: null,
         label: s.onScreenText || `Scene ${i + 1}`,
@@ -119,18 +132,16 @@ async function buildLesson(courseId, lesson) {
     // like it used to. Kick it off here, in parallel with audio, and hand
     // the (probably-already-resolved-by-the-time-it's-needed) result to
     // generateLessonCode below instead of letting it start its own header
-    // call from scratch. This is the single biggest lever on lesson
-    // wall-clock time: header generation used to sit entirely on the
-    // critical path AFTER audio; now the two run concurrently.
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio + header (in parallel)...`);
-    headerPromise = generateLessonHeader(lesson, scenes);
+    // call from scratch.
+    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio + header + code (all overlapping)...`);
+    headerPromise = generateLessonHeader(lesson, scenePlan);
     // Attach a no-op handler immediately so a header failure here doesn't
-    // log as an unhandled rejection while we're still busy awaiting audio
-    // below — the real error still surfaces normally when generateLessonCode
-    // awaits this same promise further down.
+    // log as an unhandled rejection before generateLessonCode gets to await
+    // this same promise further down — the real error still surfaces
+    // normally there.
     headerPromise.catch(() => {});
 
-    ({ scenes: measuredScenes, totalFrames } = await generateAllSceneAudio(scenes, async (index, measuredScene) => {
+    ({ scenePromises } = generateAllSceneAudioPipelined(scenePlan, async (index, measuredScene) => {
       try {
         await Course.findByIdAndUpdate(courseId, {
           $set: {
@@ -143,7 +154,7 @@ async function buildLesson(courseId, lesson) {
       }
     }));
   } catch (err) {
-    const stage = measuredScenes === undefined ? "scenes" : "audio";
+    const stage = "scenes";
     const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
     console.error(
       `[${courseId}] Lesson ${lesson.lessonNumber} failed at ${stage} stage (${elapsedMin} min elapsed): ${err.message}`
@@ -160,8 +171,10 @@ async function buildLesson(courseId, lesson) {
 
   // ── Stage 3: code generation (already had its own retry loop) ──────────
   let lastError = null;
+  let lastAttempt = 0;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    lastAttempt = attempt;
     const componentName = `Lesson${crypto.randomBytes(4).toString("hex")}`;
 
     try {
@@ -172,11 +185,11 @@ async function buildLesson(courseId, lesson) {
       }
 
       console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: code...`);
-      const tsxCode = await generateLessonCode(
+      const { code: tsxCode, totalFrames } = await generateLessonCode(
         lesson,
         componentName,
-        measuredScenes,
-        totalFrames,
+        scenePlan,
+        scenePromises,
         undefined,
         {
           // Reuse the header kicked off above (in parallel with audio)
@@ -208,11 +221,14 @@ async function buildLesson(courseId, lesson) {
       );
 
       // Scene boundaries for replay analytics (Progress model) — computed
-      // from the same measuredScenes the code generator just used, in the
+      // from the same measured scenes the code generator just used, in the
       // same order they're laid out in the compiled <Series>. This is the
       // only place this timing data is available; it's gone once the scenes
       // array itself isn't kept (only totalFrames survives on the lesson
-      // otherwise).
+      // otherwise). generateLessonCode succeeding guarantees every
+      // scenePromises entry already resolved, so this is instant, not an
+      // extra wait.
+      const measuredScenes = await Promise.all(scenePromises);
       let cursor = 0;
       const sceneMeta = measuredScenes.map((s, i) => {
         const startFrame = cursor;
@@ -242,12 +258,22 @@ async function buildLesson(courseId, lesson) {
         `[${courseId}] Lesson ${lesson.lessonNumber} attempt ${attempt}/${MAX_ATTEMPTS} failed: ${err.message}`
       );
       await logAttempt({ status: "failed", stage: err.stage || "code", errorMessage: err.message, attemptNumber: attempt });
+
+      // scenePromises is created ONCE, outside this retry loop, and reused
+      // across every attempt (same as measuredScenes/totalFrames used to
+      // be) — a scene whose audio permanently failed has an already-
+      // rejected promise that will reject again identically on every future
+      // attempt. Retrying can't ever change that outcome, so don't burn a
+      // second attempt (and its backoff delay) on a failure mode retrying
+      // is guaranteed not to fix — matches the original pre-pipelining
+      // behavior, where an audio failure was never retried at all.
+      if (err.stage === "audio") break;
     }
   }
 
   const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
   console.error(
-    `[${courseId}] Lesson ${lesson.lessonNumber} permanently failed after ${MAX_ATTEMPTS} attempts (${elapsedMin} min elapsed)`
+    `[${courseId}] Lesson ${lesson.lessonNumber} permanently failed after ${lastAttempt} attempt(s) (${elapsedMin} min elapsed)`
   );
   await Course.findByIdAndUpdate(courseId, {
     $set: {
@@ -574,6 +600,21 @@ async function getSharedCourseHandler(req, res) {
 // Supports pagination via ?page=1&limit=8 — defaults to page 1, 8 per page.
 // Fetches one extra document beyond the page size to cheaply determine
 // hasMore without a separate count() query.
+//
+// Excludes the heavy per-lesson fields (compiled Remotion `code`, the
+// mid-generation `sceneProgress` array with its own duplicate `previewCode`
+// per scene, and TTS-only `narrationScript`/`audioUrl`) that this sidebar
+// list never renders — see HistorySidebar, which only reads
+// title/date/status per entry. A single course document without this
+// projection can run 600KB+ (100k+ chars of generated code PER lesson x 6
+// lessons, often doubled again by sceneProgress's own previewCode copies),
+// so fetching a page of ~9 full documents just to show a title list was
+// transferring and JSON-parsing several MB for a UI that displays none of
+// it. The frontend (AiTutor.tsx's restoreEntry) lazily fetches the full
+// course — code included — via getCourseStatus only when a course is
+// actually opened, not on every initial sidebar load.
+const COURSE_LIST_EXCLUDED_FIELDS = "-lessons.code -lessons.narrationScript -lessons.audioUrl -lessons.sceneProgress";
+
 async function listCoursesHandler(req, res) {
   try {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -581,6 +622,7 @@ async function listCoursesHandler(req, res) {
     const skip = (page - 1) * limit;
 
     const courses = await Course.find({ userId: req.user._id })
+      .select(COURSE_LIST_EXCLUDED_FIELDS)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit + 1);

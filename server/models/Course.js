@@ -138,6 +138,15 @@ const courseSchema = new mongoose.Schema(
 
 courseSchema.index({ status: 1 });
 
+// Sidebar history list (listCoursesHandler): filters by userId, sorts by
+// createdAt desc. Without this compound index, only the userId half of that
+// query is covered by an index — Mongo still has to pull every matching
+// document into memory to satisfy the sort before skip/limit can apply,
+// which gets slower as a user accumulates more courses. Field order matches
+// the query's own filter-then-sort shape so Mongo can walk this index
+// directly for both parts, the same reasoning as the gallery index below.
+courseSchema.index({ userId: 1, createdAt: -1 });
+
 // Gallery browse (no search term): keyset-paginate published courses by
 // recency. _id: -1 as a tiebreaker for courses with the same publishedAt
 // (same millisecond) keeps pagination stable — without it, two courses

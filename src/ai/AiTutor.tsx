@@ -1591,6 +1591,27 @@ export default function AILearningPage() {
         setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
+    } else if (entry.lessons.some((l) => l.code == null)) {
+      // Ready course, opened for the first time this session, but the
+      // sidebar's list fetch (listCourses) no longer includes the heavy
+      // per-lesson code/sceneProgress fields — see courseController.js's
+      // listCoursesHandler, which excludes them so the initial history load
+      // doesn't transfer/parse megabytes of compiled Remotion code just to
+      // show a title list. Fetch this ONE course's full detail now that the
+      // user is actually watching it, and cache the result back into
+      // `history` so re-selecting the same entry later doesn't fetch again.
+      getCourseStatus(entry.id)
+        .then((course) => {
+          const fillCode = (prevLessons: Lesson[]) =>
+            prevLessons.map((l, i) => {
+              const a = course.lessons[i];
+              if (!a) return l;
+              return { ...l, videoUrl: a.videoUrl ?? l.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress };
+            });
+          setLessons(fillCode);
+          setHistory((prev) => prev.map((e) => (e.id === entry.id ? { ...e, lessons: fillCode(e.lessons) } : e)));
+        })
+        .catch((err) => console.error(`Failed to load full lesson code for course ${entry.id}:`, err));
     }
   };
 

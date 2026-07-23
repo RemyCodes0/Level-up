@@ -89,17 +89,22 @@ const CODE_PROVIDERS = {
     //    driven scenes without the wild swings temp 1.0 produced (which the
     //    old "cram in maximum density" prompt leaned on but which also fed the
     //    off-model, incoherent output we're now designing against).
-    //  - reasoning effort "low": dropped from "max" specifically for
-    //    DeepSeek V4 PRO's latency (the "single biggest lever on the slow
-    //    to generate complaint" at the time). Was bumped to "xhigh" on Flash,
-    //    then back to "high" — neither paid off enough to justify the extra
-    //    latency/cost. A live lesson run at "high" showed every one of 12
-    //    scenes taking 66-121s even on success (vs GLM's per-scene calls,
-    //    which run with reasoning OFF entirely for exactly this reason —
-    //    "fastest + cheapest"). Dropped to "low" to bring per-scene latency
-    //    down toward that same baseline while keeping some reasoning budget,
-    //    since DeepSeek has no confirmed "fully off" sentinel to match GLM's
-    //    `reasoning: { enabled: false }` (see HEADER_PROVIDER's comment).
+    //  - reasoning effort "low": history was "max" -> "high" (dropped for
+    //    DeepSeek V4 PRO's latency) -> "xhigh" on Flash -> "high" -> "low" ->
+    //    briefly omitted entirely -> back to "low". The omitted-entirely
+    //    experiment coincided with a live course run showing more
+    //    scene/header content-error retries than usual across several
+    //    lessons (stray `export` in 2 headers, repeated "interpolate needs
+    //    literal arrays" failures in one lesson) — not proven to be caused
+    //    by the missing reasoning_effort specifically (no controlled A/B),
+    //    but suspicious enough to revert to the last known value rather than
+    //    keep guessing at an unconfirmed field. "low" was itself already a
+    //    deliberate compromise: a live lesson run at "high" showed every one
+    //    of 12 scenes taking 66-121s even on success (vs GLM's per-scene
+    //    calls, which run with reasoning OFF entirely for exactly this
+    //    reason — "fastest + cheapest") — "low" trades some of that latency
+    //    win back for (hopefully) fewer content-error retries than the
+    //    omitted-entirely experiment produced.
     //  - `reasoning_effort` is DeepSeek's OWN flat field (unlike OpenRouter's
     //    unified nested `reasoning: { effort }` shape used for GLM/Fable
     //    above) — this now goes straight to DeepSeek's API, so it needs
@@ -1604,11 +1609,23 @@ function stitchLessonCode({ header, sceneCodes, scenes, componentName, sceneIndi
   ].join("\n");
 }
 
+// `scenePlan` is the raw scene-plan array (from generateScenePlan — synchronous,
+// no audio measurements, used only for the scene count and header regen on
+// retries). `scenePromises[i]` is a Promise resolving to that scene's FULL
+// measured version (scene-plan fields + durationInFrames/audioUrl from TTS) —
+// each scene's code generation awaits ONLY its own promise, so scene 1's code
+// can start the moment scene 1's own audio is ready, without waiting on scene
+// 12's audio (previously, the caller awaited ALL scenes' audio to fully
+// finish before calling this function at all). `totalFrames` is no longer a
+// parameter — every scenePromise must already be resolved by the time
+// stitching happens (every scene's code generation awaited its own promise
+// to even start), so it's computed internally from the resolved scenes at
+// that point instead.
 async function generateLessonCode(
   lesson,
   componentName,
-  scenes,
-  totalFrames,
+  scenePlan,
+  scenePromises,
   maxAttempts = 3,
   { onSceneCodeReady = null, headerPromise = null } = {}
 ) {
@@ -1617,11 +1634,12 @@ async function generateLessonCode(
 
   // Every scene gets its OWN full retry budget (SCENE_MAX_ATTEMPTS_PER_LESSON
   // attempts), spent entirely inside ITS OWN generateSceneCode call, which
-  // runs concurrently with its SCENE_BATCH_SIZE-1 group-mate(s) (see the
-  // batch loop below). A scene that keeps failing no longer throws away
-  // every other scene's already-good work (that would force a full
-  // header+all-scenes rebuild) — but within its own group it also no
-  // longer waits for its group-mate to finish before it's allowed to retry.
+  // runs concurrently with every other scene from the start — no group
+  // barrier, just the shared concurrency semaphore (see the scene-firing
+  // loop below). A scene that keeps failing no longer throws away every
+  // other scene's already-good work (that would force a full
+  // header+all-scenes rebuild) — and it never waits on a sibling to finish
+  // before it's allowed to retry, either.
   //
   // This replaced an earlier "rounds" design (retry only the still-failing
   // scenes, but only after the ENTIRE batch settles, up to
@@ -1639,7 +1657,7 @@ async function generateLessonCode(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      console.log(`  [code L${lesson.lessonNumber}] Outer attempt ${attempt}/${maxAttempts} for ${componentName} (header + ${scenes.length} scenes)...`);
+      console.log(`  [code L${lesson.lessonNumber}] Outer attempt ${attempt}/${maxAttempts} for ${componentName} (header + ${scenePlan.length} scenes)...`);
 
       // On the very first attempt, reuse a header generation the caller
       // already kicked off (typically started concurrently with audio
@@ -1653,40 +1671,53 @@ async function generateLessonCode(
       // header, exactly as before this change.
       const header = attempt === 1 && headerPromise
         ? await headerPromise
-        : await generateLessonHeader(lesson, scenes);
+        : await generateLessonHeader(lesson, scenePlan);
       const headerAvailableNames = getHeaderExposedNames(header);
 
-      const sceneCodes = new Array(scenes.length).fill(null);
-      const sceneErrors = new Array(scenes.length).fill(null);
+      const sceneCodes = new Array(scenePlan.length).fill(null);
+      const sceneErrors = new Array(scenePlan.length).fill(null);
 
-      // Scenes are fired in fixed-size groups of SCENE_BATCH_SIZE: every
-      // scene in a group starts at once (each with its own full
-      // SCENE_MAX_ATTEMPTS_PER_LESSON-attempt budget spent entirely inside
-      // its own generateSceneCode call), but the next group doesn't start
-      // until the WHOLE current group has settled — a group-level barrier,
-      // unlike the per-scene retry budget which has none within a group.
+      // ONE batch, every scene fired at once — no group barrier. Real
+      // concurrency is bounded entirely by limitLessonSceneCall (the
+      // semaphore generateSceneCode's streamCodeCompletion call acquires
+      // internally), which rolls: the instant one scene's slot frees up,
+      // the next queued scene takes it, regardless of which of its siblings
+      // are still running. This replaced a fixed-size-group design (fire N,
+      // wait for ALL N to settle, then fire the next N) that added an
+      // artificial stall on top of the semaphore's own cap — a group of N
+      // can't finish faster than its OWN slowest member, so one straggler
+      // held back every other scene queued behind that group, even ones
+      // that could have started immediately once an earlier scene in the
+      // SAME group finished. Firing everything up front and letting the
+      // semaphore alone pace it is strictly faster at the same concurrency
+      // ceiling: no waiting on stragglers that aren't actually blocking a
+      // free slot.
+      //
+      // Each scene ALSO waits on its own scenePromises[i] before it can even
+      // start (this is the audio/code pipelining) — a scene whose audio
+      // isn't measured yet simply hasn't reached generateSceneCode yet, but
+      // that wait doesn't consume a limitLessonSceneCall slot (the semaphore
+      // only wraps the actual LLM call inside generateSceneCode/
+      // streamCodeCompletion), so it doesn't block any sibling that's ready
+      // sooner. If a scene's audio permanently failed, scenePromises[i]
+      // rejects, which is caught by the .catch() below exactly like a code-
+      // generation content error — see ttsService.js's generateSceneAudio,
+      // which tags that rejection with `.stage = "audio"` so the failure
+      // this function eventually throws is still correctly attributed.
       //
       // Each scene's notification is attached directly to ITS OWN promise
       // via .then() below — NOT deferred to a .forEach() over the awaited
-      // Promise.allSettled results. That distinction matters: awaiting the
-      // whole group first would mean every scene's notification waits for
-      // the SLOWEST scene in ITS group to finish (confirmed live — a scene
+      // Promise.allSettled results. That distinction matters: awaiting
+      // everything first would mean every scene's notification waits for
+      // the SLOWEST scene overall to finish (confirmed live — a scene
       // needing its own internal retry delayed an already-finished
       // sibling's notification by over a minute). Attaching .then() to
       // each promise individually fires the moment THAT scene resolves,
-      // regardless of its group-mate.
-      // 8, not 12 — a live run at 12 (this project's own measured-clean
-      // ceiling is n<=8; failures start appearing at n=10-12, see
-      // GLM_SCENE_MAX_CONCURRENT's comment above) produced exactly that: one
-      // straggler scene took 197s against siblings finishing in 66-121s,
-      // and since the whole group of 12 has to settle before the stage can
-      // finish, that one scene set the pace for the entire stage.
-      const SCENE_BATCH_SIZE = 8;
-      for (let batchStart = 0; batchStart < scenes.length; batchStart += SCENE_BATCH_SIZE) {
-        const batchIndices = scenes.map((_, i) => i).slice(batchStart, batchStart + SCENE_BATCH_SIZE);
-        await Promise.allSettled(
-          batchIndices.map((i) =>
-            generateSceneCode(lesson, scenes[i], i, scenes.length, header, headerAvailableNames, componentName, SCENE_MAX_ATTEMPTS_PER_LESSON).then((code) => {
+      // regardless of its siblings.
+      await Promise.allSettled(
+        scenePlan.map((_, i) =>
+          scenePromises[i].then((measuredScene) =>
+            generateSceneCode(lesson, measuredScene, i, scenePlan.length, header, headerAvailableNames, componentName, SCENE_MAX_ATTEMPTS_PER_LESSON).then((code) => {
               sceneCodes[i] = code;
               sceneErrors[i] = null;
 
@@ -1707,11 +1738,11 @@ async function generateLessonCode(
                   const previewStitched = stitchLessonCode({
                     header,
                     sceneCodes: [code],
-                    scenes: [scenes[i]],
+                    scenes: [measuredScene],
                     componentName,
                     sceneIndices: [i],
                   });
-                  const validatedPreview = validateGeneratedCode(previewStitched, componentName, scenes[i].durationInFrames);
+                  const validatedPreview = validateGeneratedCode(previewStitched, componentName, measuredScene.durationInFrames);
                   const maybePromise = onSceneCodeReady(i, validatedPreview);
                   if (maybePromise?.catch) {
                     maybePromise.catch((notifyErr) =>
@@ -1724,25 +1755,32 @@ async function generateLessonCode(
               }
 
               return code;
-            }).catch((err) => {
-              sceneErrors[i] = err;
-              throw err;
             })
-          )
-        );
-      }
+          ).catch((err) => {
+            sceneErrors[i] = err;
+            throw err;
+          })
+        )
+      );
 
-      const stillFailingIndices = scenes.map((_, i) => i).filter((i) => sceneCodes[i] === null);
+      const stillFailingIndices = scenePlan.map((_, i) => i).filter((i) => sceneCodes[i] === null);
       if (stillFailingIndices.length > 0) {
         const detail = stillFailingIndices
           .map((i) => `scene ${i + 1} (${sceneComponentName(i)}): ${describeError(sceneErrors[i])}`)
           .join(" | ");
         throw contentError(
-          `${stillFailingIndices.length}/${scenes.length} scene(s) still failing after ${SCENE_MAX_ATTEMPTS_PER_LESSON} attempts each: ${detail}`
+          `${stillFailingIndices.length}/${scenePlan.length} scene(s) still failing after ${SCENE_MAX_ATTEMPTS_PER_LESSON} attempts each: ${detail}`
         );
       }
 
-      const stitched = stitchLessonCode({ header, sceneCodes, scenes, componentName });
+      // Every scenePromises[i] is guaranteed already resolved here — each
+      // one had to resolve before its generateSceneCode call above could
+      // even start, and we just confirmed every scene has code. Promise.all
+      // is instant, not an extra wait.
+      const measuredScenes = await Promise.all(scenePromises);
+      const totalFrames = measuredScenes.reduce((sum, s) => sum + s.durationInFrames, 0);
+
+      const stitched = stitchLessonCode({ header, sceneCodes, scenes: measuredScenes, componentName });
 
       // Unchanged — final-file validation stays identical to before the
       // header/scene split. The duration-sum check should always pass by
@@ -1761,7 +1799,7 @@ async function generateLessonCode(
       console.log(
         `  [code L${lesson.lessonNumber}] Valid code generated (${validatedCode.length} chars) — took ${elapsedSec}s for ${componentName}`
       );
-      return validatedCode;
+      return { code: validatedCode, totalFrames };
     } catch (err) {
       lastError = err;
 
