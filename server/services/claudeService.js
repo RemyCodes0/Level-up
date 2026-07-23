@@ -207,23 +207,25 @@ const GLM_HEADER_MAX_CONCURRENT = Number(process.env.GLM_HEADER_MAX_CONCURRENT) 
 const limitLessonHeaderCall = createLimiter(GLM_HEADER_MAX_CONCURRENT);
 
 // Falls back to the old GLM_MAX_CONCURRENT env var if set (back-compat with
-// any deploy that already tuned it), else a default of 2. One lesson alone
+// any deploy that already tuned it), else a default of 6. One lesson alone
 // can want 8-14 concurrent scene calls, and since courseController now
 // builds lessons ONE AT A TIME (buildLessonsSequentially), this pool is no
 // longer split across sibling lessons — a single lesson's scenes get the
 // whole thing to themselves.
 //
-// Was 12, then 8, then 3, then 2, after directly measuring Z.ai's real-world
-// behavior under this exact call shape (model, reasoning-off, provider
-// preferring z-ai with fallback): firing 12 simultaneous requests produced
-// intermittent "Connection error" [ETIMEDOUT/ENETUNREACH] failures in most
-// trials (up to 50% of requests in one run), matching the exact failures
-// seen live on scenes 1, 3, and 5 of a real 12-scene lesson. Every batch
-// size tested at n<=8 came back 100% clean in that round of testing — 2 is
-// a further deliberate margin below that clean ceiling, prioritizing fewer
-// wasted retries over maximum parallelism.
+// History: 12 -> 8 -> 3 -> 2 -> 6. The drop to 2 turned out to cost far more
+// than intended: with only 2 scenes able to run at once, a 12-scene lesson
+// needs ~6 sequential waves to get through all of them, each wave gated by
+// whichever of its 2 scenes is slower — this alone produced a near-perfect
+// staircase of completion times (27s, 41s, 73s, 88s...331s) and pushed one
+// real lesson's code stage to 332s. Our own concurrency testing never
+// justified going that low: every batch size tested at n<=8 came back 100%
+// clean, and failures only showed up starting around n=10-12. 6 sits
+// comfortably under that measured-clean ceiling while recovering most of
+// the lost parallelism — a middle ground between "maximum throughput" and
+// "maximum margin against Z.ai's connection-error behavior under load."
 const GLM_SCENE_MAX_CONCURRENT =
-  Number(process.env.GLM_SCENE_MAX_CONCURRENT) || Number(process.env.GLM_MAX_CONCURRENT) || 2;
+  Number(process.env.GLM_SCENE_MAX_CONCURRENT) || Number(process.env.GLM_MAX_CONCURRENT) || 6;
 const limitLessonSceneCall = createLimiter(GLM_SCENE_MAX_CONCURRENT);
 
 const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;

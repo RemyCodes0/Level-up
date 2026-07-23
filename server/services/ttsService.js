@@ -182,20 +182,18 @@ async function generateSceneAudio(scene, retries = 3) {
   }
 }
 
-// Generates audio for all scenes with bounded concurrency (3 scenes at a
+// Generates audio for all scenes with bounded concurrency (2 scenes at a
 // time). Fully parallel (Promise.all over 13+ scenes) causes I/O contention
 // on constrained hosts — concurrent writeFileSync calls race each other and
 // can produce truncated files. Batching keeps throughput high while
 // preventing the disk from being hammered by too many simultaneous writes.
 //
-// Lowered from 5 alongside adding limitTtsChunkCall above: real concurrency
-// to the TTS endpoint is now BATCH_SIZE scenes x however many chunks each
-// needs, not BATCH_SIZE requests — the chunk-level limiter caps the ACTUAL
-// simultaneous request count regardless of this number, but keeping fewer
-// scenes "active" at once also means fewer scenes each queuing several
-// chunks against that shared limiter simultaneously, so scenes finish in a
-// steadier, more predictable order instead of all partially progressing at
-// once.
+// The real cap on simultaneous TTS requests is limitTtsChunkCall above
+// (TTS_CHUNK_MAX_CONCURRENT = 5), not this number — that limiter bounds
+// actual API concurrency regardless of how many scenes are "active" at
+// once. This number (scenes) and that one (audio requests) are deliberately
+// tuned independently: 2 scenes active at once, each of whose chunks then
+// compete for the shared 5-slot TTS request pool.
 //
 // `onSceneAudioReady(index, measuredScene)` is optional — fires as soon as
 // EACH scene's own audio finishes (not just once the whole batch settles),
@@ -205,7 +203,7 @@ async function generateSceneAudio(scene, retries = 3) {
 // instead). Lets a caller show per-scene progress before code generation
 // even starts.
 async function generateAllSceneAudio(scenes, onSceneAudioReady) {
-  const BATCH_SIZE = 3;
+  const BATCH_SIZE = 2;
   console.log(`  [tts] Generating ${scenes.length} audio clips (max ${BATCH_SIZE} scenes concurrent, max ${TTS_CHUNK_MAX_CONCURRENT} chunk requests concurrent)...`);
 
   const enriched = [];
