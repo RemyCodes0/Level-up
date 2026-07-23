@@ -5,16 +5,30 @@ const { validateGeneratedCode, validateHeaderFragment, validateSceneFragment, ge
 const { reviewGeneratedCode } = require("./codeCriticService");
 const { createLimiter } = require("../utils/concurrencyLimiter");
 
-// Single OpenRouter client for ALL code-gen providers — GLM, DeepSeek, and
-// Fable 5 are all reachable through OpenRouter's OpenAI-compatible endpoint
-// under one account/key, instead of three separate direct-provider clients
-// with three separate keys/base URLs. Model choice is just a different
-// `model` slug on the SAME client now (see CODE_PROVIDERS below).
+// Single OpenRouter client for the code-gen providers still routed through
+// it — GLM and Fable 5 are reachable through OpenRouter's OpenAI-compatible
+// endpoint under one account/key, instead of separate direct-provider
+// clients with separate keys/base URLs. Model choice is just a different
+// `model` slug on the SAME client (see CODE_PROVIDERS below).
 const openRouterClient = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
   baseURL: "https://openrouter.ai/api/v1",
   timeout: 300 * 1000, // 5 minute timeout — fail fast and retry rather than hang
   maxRetries: 0,       // handle retries manually
+});
+
+// DeepSeek now goes straight to DeepSeek's own official API instead of
+// through OpenRouter — same OpenAI-compatible chat-completions shape, just a
+// different base URL/key, so `streamCodeCompletion` below needs no changes.
+// This sidesteps the exact problem CODE_PROVIDERS.glm's `provider.order`
+// works around for OpenRouter (routing silently landing on a quantized
+// third-party backend): hitting the vendor directly means there's no
+// routing choice to get wrong.
+const deepseekClient = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: "https://api.deepseek.com",
+  timeout: 300 * 1000,
+  maxRetries: 0,
 });
 
 // ── Code-gen provider table ───────────────────────────────────────────────────
@@ -63,26 +77,44 @@ const CODE_PROVIDERS = {
     keyEnv: "OPENROUTER_API_KEY",
   },
   deepseek: {
-    client: openRouterClient,
-    model: "deepseek/deepseek-v4-pro",
+    client: deepseekClient,
+    // Flash, not Pro — first time this project has tried DeepSeek for the
+    // actual lesson CODE path (it's already used elsewhere for scene-plan/
+    // course-plan JSON, but never for animation code generation itself).
+    // No more "deepseek/" vendor prefix — that was OpenRouter's routing
+    // namespace, meaningless when talking to DeepSeek's own API directly.
+    model: "deepseek-v4-flash",
     // Tuning notes:
     //  - temperature 0.9 / top_p 0.95: enough variety for distinct, concept-
     //    driven scenes without the wild swings temp 1.0 produced (which the
     //    old "cram in maximum density" prompt leaned on but which also fed the
     //    off-model, incoherent output we're now designing against).
-    //  - reasoning effort "high" (was "max"): the new prompt asks the model to
-    //    illustrate ONE concept coherently per scene rather than plan a 50-
-    //    element pile-up, so it needs far less planning budget. "high" recovers
-    //    most of "max"'s planning depth at a fraction of the latency — the
-    //    single biggest lever on the "slow to generate" complaint. Bump back to
-    //    "xhigh" per-deploy only if a specific topic class regresses.
+    //  - reasoning effort "low": dropped from "max" specifically for
+    //    DeepSeek V4 PRO's latency (the "single biggest lever on the slow
+    //    to generate complaint" at the time). Was bumped to "xhigh" on Flash,
+    //    then back to "high" — neither paid off enough to justify the extra
+    //    latency/cost. A live lesson run at "high" showed every one of 12
+    //    scenes taking 66-121s even on success (vs GLM's per-scene calls,
+    //    which run with reasoning OFF entirely for exactly this reason —
+    //    "fastest + cheapest"). Dropped to "low" to bring per-scene latency
+    //    down toward that same baseline while keeping some reasoning budget,
+    //    since DeepSeek has no confirmed "fully off" sentinel to match GLM's
+    //    `reasoning: { enabled: false }` (see HEADER_PROVIDER's comment).
+    //  - `reasoning_effort` is DeepSeek's OWN flat field (unlike OpenRouter's
+    //    unified nested `reasoning: { effort }` shape used for GLM/Fable
+    //    above) — this now goes straight to DeepSeek's API, so it needs
+    //    DeepSeek's native param name.
+    //  - No `provider` routing field: that was purely an OpenRouter concept
+    //    (picking which upstream backend serves the model). Talking to
+    //    DeepSeek's API directly means every request is already served by
+    //    DeepSeek, so there's no routing choice left to make.
     extraParams: {
-      reasoning: { effort: "high" },
+      reasoning_effort: "low",
       temperature: 0.9,
       top_p: 0.95,
     },
     maxTokens: 100000,
-    keyEnv: "OPENROUTER_API_KEY",
+    keyEnv: "DEEPSEEK_API_KEY",
   },
   fable: {
     client: openRouterClient,
@@ -123,7 +155,23 @@ const AD_CODE_PROVIDER = resolveProvider("AD_CODE_MODEL", "fable");
 // const (rather than just reusing LESSON_CODE_PROVIDER directly) so the
 // header call can still be given a different setting from per-scene code
 // generation later without having to re-wire its call site again.
-const HEADER_PROVIDER = { ...LESSON_CODE_PROVIDER, extraParams: { ...LESSON_CODE_PROVIDER.extraParams, reasoning: { enabled: false } } };
+const HEADER_PROVIDER = (() => {
+  const { reasoning: _reasoning, reasoning_effort: _reasoningEffort, ...rest } = LESSON_CODE_PROVIDER.extraParams;
+  return {
+    ...LESSON_CODE_PROVIDER,
+    extraParams:
+      LESSON_CODE_PROVIDER.client === deepseekClient
+        // DeepSeek's native API has no confirmed "reasoning off" sentinel for
+        // its flat `reasoning_effort` field (unlike OpenRouter's unified
+        // nested `reasoning: { enabled: false }`, which is what this override
+        // used before DeepSeek moved off OpenRouter) — omit the key entirely
+        // rather than guess a value that might error or might not actually
+        // disable reasoning. Verify against DeepSeek's own docs if this ever
+        // needs to be exact.
+        ? rest
+        : { ...rest, reasoning: { enabled: false } },
+  };
+})();
 
 // Scene-plan generation (the lesson-wide breakdown into 8-14 scenes — see
 // sceneService.js's generateScenePlan) runs on GPT-5.6 Luna instead of
@@ -829,6 +877,7 @@ S5. THE 1920x1080 FRAME IS A HARD BOUNDARY. Every final x/y/cx/cy/top/left/trans
     • Orbiting: radius ≤ min(centerX-SAFE.xMin, SAFE.xMax-centerX, centerY-SAFE.yMin, SAFE.yMax-centerY). For center (960,540), radius ≤ 420 is always safe.
     • Text: also leave ≥80px margin inside SAFE, since text has width/height beyond its anchor.
     • When generating random positions, generate INSIDE SAFE from the start — SAFE.xMin + Math.random()*(SAFE.xMax-SAFE.xMin) — not Math.random()*1920 then clamp (that piles everything onto the boundary).
+    • Remotion's random(seed) returns the NUMBER itself, every time you call it — it is NOT a generator you call once to get a function back. Writing const rng = random(seed) and then calling rng() crashes with "rng is not a function". If you need several seeded values, call random() again with a different seed string each time: random(seed + "-a"), random(seed + "-b").
 
 ════════ SYNTAX TRAPS (silent break or parse error) ════════
 Y1. JSX style objects and SVG attributes are camelCase, never kebab: backgroundColor, fontSize, borderRadius, boxShadow, textShadow, zIndex, justifyContent (not background-color…); strokeWidth, strokeLinecap, strokeDasharray, textAnchor, fillOpacity, clipPath (not stroke-width…). Kebab keys are silently ignored or a syntax error.
@@ -946,6 +995,7 @@ S5. THE 1920x1080 FRAME IS A HARD BOUNDARY. Every final x/y/cx/cy/top/left/trans
     • Orbiting: radius ≤ min(centerX-SAFE.xMin, SAFE.xMax-centerX, centerY-SAFE.yMin, SAFE.yMax-centerY). For center (960,540), radius ≤ 420 is always safe.
     • Text: also leave ≥80px margin inside SAFE, since text has width/height beyond its anchor.
     • When generating random positions, generate INSIDE SAFE from the start — SAFE.xMin + Math.random()*(SAFE.xMax-SAFE.xMin) — not Math.random()*1920 then clamp (that piles everything onto the boundary).
+    • Remotion's random(seed) returns the NUMBER itself, every time you call it — it is NOT a generator you call once to get a function back. Writing const rng = random(seed) and then calling rng() crashes with "rng is not a function". If you need several seeded values, call random() again with a different seed string each time: random(seed + "-a"), random(seed + "-b").
 
 ════════ SYNTAX TRAPS (silent break or parse error) ════════
 Y1. JSX style objects and SVG attributes are camelCase, never kebab: backgroundColor, fontSize, borderRadius, boxShadow, textShadow, zIndex, justifyContent (not background-color…); strokeWidth, strokeLinecap, strokeDasharray, textAnchor, fillOpacity, clipPath (not stroke-width…). Kebab keys are silently ignored or a syntax error.
@@ -1567,10 +1617,11 @@ async function generateLessonCode(
 
   // Every scene gets its OWN full retry budget (SCENE_MAX_ATTEMPTS_PER_LESSON
   // attempts), spent entirely inside ITS OWN generateSceneCode call, which
-  // runs concurrently with every other scene from the start. A scene that
-  // keeps failing no longer throws away every other scene's already-good
-  // work (that would force a full header+all-scenes rebuild) — but it also
-  // no longer waits for its SIBLINGS to finish before it's allowed to retry.
+  // runs concurrently with its SCENE_BATCH_SIZE-1 group-mate(s) (see the
+  // batch loop below). A scene that keeps failing no longer throws away
+  // every other scene's already-good work (that would force a full
+  // header+all-scenes rebuild) — but within its own group it also no
+  // longer waits for its group-mate to finish before it's allowed to retry.
   //
   // This replaced an earlier "rounds" design (retry only the still-failing
   // scenes, but only after the ENTIRE batch settles, up to
@@ -1608,67 +1659,78 @@ async function generateLessonCode(
       const sceneCodes = new Array(scenes.length).fill(null);
       const sceneErrors = new Array(scenes.length).fill(null);
 
-      // ONE batch, every scene fired at once, each with its own full
+      // Scenes are fired in fixed-size groups of SCENE_BATCH_SIZE: every
+      // scene in a group starts at once (each with its own full
       // SCENE_MAX_ATTEMPTS_PER_LESSON-attempt budget spent entirely inside
-      // its own generateSceneCode call — no external round barrier, so a
-      // scene's 2nd/3rd/4th attempt starts the moment ITS previous attempt
-      // fails, not after every sibling scene has also finished or given up.
+      // its own generateSceneCode call), but the next group doesn't start
+      // until the WHOLE current group has settled — a group-level barrier,
+      // unlike the per-scene retry budget which has none within a group.
       //
       // Each scene's notification is attached directly to ITS OWN promise
       // via .then() below — NOT deferred to a .forEach() over the awaited
       // Promise.allSettled results. That distinction matters: awaiting the
-      // whole batch first would mean every scene's notification waits for
-      // the SLOWEST scene to finish (confirmed live — a scene needing its
-      // own internal retry delayed an already-finished sibling's
-      // notification by over a minute). Attaching .then() to each promise
-      // individually fires the moment THAT scene resolves, regardless of
-      // its neighbors.
-      await Promise.allSettled(
-        scenes.map((_, i) =>
-          generateSceneCode(lesson, scenes[i], i, scenes.length, header, headerAvailableNames, componentName, SCENE_MAX_ATTEMPTS_PER_LESSON).then((code) => {
-            sceneCodes[i] = code;
-            sceneErrors[i] = null;
+      // whole group first would mean every scene's notification waits for
+      // the SLOWEST scene in ITS group to finish (confirmed live — a scene
+      // needing its own internal retry delayed an already-finished
+      // sibling's notification by over a minute). Attaching .then() to
+      // each promise individually fires the moment THAT scene resolves,
+      // regardless of its group-mate.
+      // 8, not 12 — a live run at 12 (this project's own measured-clean
+      // ceiling is n<=8; failures start appearing at n=10-12, see
+      // GLM_SCENE_MAX_CONCURRENT's comment above) produced exactly that: one
+      // straggler scene took 197s against siblings finishing in 66-121s,
+      // and since the whole group of 12 has to settle before the stage can
+      // finish, that one scene set the pace for the entire stage.
+      const SCENE_BATCH_SIZE = 8;
+      for (let batchStart = 0; batchStart < scenes.length; batchStart += SCENE_BATCH_SIZE) {
+        const batchIndices = scenes.map((_, i) => i).slice(batchStart, batchStart + SCENE_BATCH_SIZE);
+        await Promise.allSettled(
+          batchIndices.map((i) =>
+            generateSceneCode(lesson, scenes[i], i, scenes.length, header, headerAvailableNames, componentName, SCENE_MAX_ATTEMPTS_PER_LESSON).then((code) => {
+              sceneCodes[i] = code;
+              sceneErrors[i] = null;
 
-            // Notify a caller as soon as THIS scene's code is ready — in
-            // whatever order scenes actually resolve, not just scene 0.
-            // Lets a caller show live per-scene progress (e.g. a thumbnail
-            // filmstrip) well before the whole lesson finishes. Stitched
-            // into a standalone, self-contained single-scene composition
-            // (same technique as the final full-lesson stitch, just for
-            // one scene, using its REAL index so the wrapper references
-            // the right component name) so it's directly
-            // compilable/renderable on its own. Never fatal: a
-            // stitch/validate/notify failure here is logged and otherwise
-            // ignored — it must never affect the real lesson's
-            // generation, which already succeeded for this scene.
-            if (onSceneCodeReady) {
-              try {
-                const previewStitched = stitchLessonCode({
-                  header,
-                  sceneCodes: [code],
-                  scenes: [scenes[i]],
-                  componentName,
-                  sceneIndices: [i],
-                });
-                const validatedPreview = validateGeneratedCode(previewStitched, componentName, scenes[i].durationInFrames);
-                const maybePromise = onSceneCodeReady(i, validatedPreview);
-                if (maybePromise?.catch) {
-                  maybePromise.catch((notifyErr) =>
-                    console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress notification failed (non-fatal): ${describeError(notifyErr)}`)
-                  );
+              // Notify a caller as soon as THIS scene's code is ready — in
+              // whatever order scenes actually resolve, not just scene 0.
+              // Lets a caller show live per-scene progress (e.g. a thumbnail
+              // filmstrip) well before the whole lesson finishes. Stitched
+              // into a standalone, self-contained single-scene composition
+              // (same technique as the final full-lesson stitch, just for
+              // one scene, using its REAL index so the wrapper references
+              // the right component name) so it's directly
+              // compilable/renderable on its own. Never fatal: a
+              // stitch/validate/notify failure here is logged and otherwise
+              // ignored — it must never affect the real lesson's
+              // generation, which already succeeded for this scene.
+              if (onSceneCodeReady) {
+                try {
+                  const previewStitched = stitchLessonCode({
+                    header,
+                    sceneCodes: [code],
+                    scenes: [scenes[i]],
+                    componentName,
+                    sceneIndices: [i],
+                  });
+                  const validatedPreview = validateGeneratedCode(previewStitched, componentName, scenes[i].durationInFrames);
+                  const maybePromise = onSceneCodeReady(i, validatedPreview);
+                  if (maybePromise?.catch) {
+                    maybePromise.catch((notifyErr) =>
+                      console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress notification failed (non-fatal): ${describeError(notifyErr)}`)
+                    );
+                  }
+                } catch (stitchErr) {
+                  console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress stitch/validate failed (non-fatal): ${describeError(stitchErr)}`);
                 }
-              } catch (stitchErr) {
-                console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress stitch/validate failed (non-fatal): ${describeError(stitchErr)}`);
               }
-            }
 
-            return code;
-          }).catch((err) => {
-            sceneErrors[i] = err;
-            throw err;
-          })
-        )
-      );
+              return code;
+            }).catch((err) => {
+              sceneErrors[i] = err;
+              throw err;
+            })
+          )
+        );
+      }
 
       const stillFailingIndices = scenes.map((_, i) => i).filter((i) => sceneCodes[i] === null);
       if (stillFailingIndices.length > 0) {

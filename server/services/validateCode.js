@@ -319,6 +319,26 @@ const NEVER_CALLABLE_INIT_TYPES = new Set([
   "LogicalExpression", "TemplateLiteral", "RegExpLiteral",
 ]);
 
+// Remotion's `random(seed)` — unlike the seeded-RNG-generator pattern common
+// in other libraries (call once to get a function, call THAT repeatedly) —
+// returns the number itself on every call. A real production crash: `const
+// rng = random(sceneSeed); ... rng()` inside a .map(), throwing "rng is not a
+// function" at render time. The init here is a CallExpression (not a literal
+// type in NEVER_CALLABLE_INIT_TYPES above), so this needs its own check
+// rather than fitting the generic list — we specifically know THIS callee's
+// return type because it's Remotion's own documented API, not because we can
+// infer arbitrary call-expression return types in general.
+function isUncalledRemotionRandomBinding(declaratorInit, path) {
+  if (declaratorInit.type !== "CallExpression") return false;
+  const { callee } = declaratorInit;
+  if (callee.type !== "Identifier" || callee.name !== "random") return false;
+  // Only trust this if "random" itself isn't locally shadowed by something
+  // else in scope — if it is, we have no idea what it returns, so stay silent
+  // rather than risk a false positive.
+  const randomBinding = path.scope.getBinding("random");
+  return !randomBinding;
+}
+
 function checkCalledNonFunctionConst(ast) {
   const errors = [];
   traverse(ast, {
@@ -336,7 +356,10 @@ function checkCalledNonFunctionConst(ast) {
       const declarator = binding.path.node;
       if (declarator.type !== "VariableDeclarator" || !declarator.init) return;
 
-      if (NEVER_CALLABLE_INIT_TYPES.has(declarator.init.type)) {
+      if (
+        NEVER_CALLABLE_INIT_TYPES.has(declarator.init.type) ||
+        isUncalledRemotionRandomBinding(declarator.init, binding.path)
+      ) {
         const loc = path.node.loc ? ` (line ${path.node.loc.start.line})` : "";
         errors.push(`"${callee.name}" is called as a function but is declared as a non-function value${loc}`);
       }

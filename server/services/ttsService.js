@@ -55,10 +55,16 @@ const FPS = 30;
 // 5 chunks each is ~25 simultaneous requests). That spike produced the exact
 // same kind of "Connection error" failures under load that GLM's own
 // concurrency limiter (GLM_SCENE_MAX_CONCURRENT) was lowered to fix — this
-// is the equivalent fix for the TTS side. Default of 5 matches the
-// concurrency level that was already known to work reliably before chunking
-// existed (BATCH_SIZE scenes x 1 request each).
-const TTS_CHUNK_MAX_CONCURRENT = Number(process.env.TTS_CHUNK_MAX_CONCURRENT) || 5;
+// is the equivalent fix for the TTS side. Raised 6 -> 8 to match
+// GLM_SCENE_MAX_CONCURRENT's own measured-clean ceiling (n<=8 tested 100%
+// clean, failures start at n=10-12) as the best available evidence, since
+// this limiter — unlike the scene-level BATCH_SIZE in generateAllSceneAudio
+// below — is the ACTUAL throughput ceiling on audio generation (every active
+// scene's chunks compete for this same global pool, regardless of how many
+// scenes are "active" at once). Not independently load-tested at 8 the way
+// GLM's ceiling was; watch for "Connection error" TTS failures after this
+// change and drop back to 6 if they reappear.
+const TTS_CHUNK_MAX_CONCURRENT = Number(process.env.TTS_CHUNK_MAX_CONCURRENT) || 8;
 const limitTtsChunkCall = createLimiter(TTS_CHUNK_MAX_CONCURRENT);
 
 const AUDIO_DIR = process.env.NODE_ENV === "production"
@@ -243,18 +249,18 @@ async function generateSceneAudio(scene, retries = 3) {
   }
 }
 
-// Generates audio for all scenes with bounded concurrency (2 scenes at a
+// Generates audio for all scenes with bounded concurrency (6 scenes at a
 // time). Fully parallel (Promise.all over 13+ scenes) causes I/O contention
 // on constrained hosts — concurrent writeFileSync calls race each other and
 // can produce truncated files. Batching keeps throughput high while
 // preventing the disk from being hammered by too many simultaneous writes.
 //
 // The real cap on simultaneous TTS requests is limitTtsChunkCall above
-// (TTS_CHUNK_MAX_CONCURRENT = 5), not this number — that limiter bounds
+// (TTS_CHUNK_MAX_CONCURRENT = 6), not this number — that limiter bounds
 // actual API concurrency regardless of how many scenes are "active" at
 // once. This number (scenes) and that one (audio requests) are deliberately
-// tuned independently: 2 scenes active at once, each of whose chunks then
-// compete for the shared 5-slot TTS request pool.
+// tuned independently: 6 scenes active at once, each of whose chunks then
+// compete for the shared 6-slot TTS request pool.
 //
 // `onSceneAudioReady(index, measuredScene)` is optional — fires as soon as
 // EACH scene's own audio finishes (not just once the whole batch settles),
@@ -264,7 +270,8 @@ async function generateSceneAudio(scene, retries = 3) {
 // instead). Lets a caller show per-scene progress before code generation
 // even starts.
 async function generateAllSceneAudio(scenes, onSceneAudioReady) {
-  const BATCH_SIZE = 2;
+  const BATCH_SIZE = 6;
+  const stageStart = Date.now();
   console.log(`  [tts] Generating ${scenes.length} audio clips (max ${BATCH_SIZE} scenes concurrent, max ${TTS_CHUNK_MAX_CONCURRENT} chunk requests concurrent)...`);
 
   const enriched = [];
@@ -291,7 +298,13 @@ async function generateAllSceneAudio(scenes, onSceneAudioReady) {
   }
 
   const totalFrames = enriched.reduce((sum, s) => sum + s.durationInFrames, 0);
-  console.log(`  [tts] Total: ${totalFrames} frames (${(totalFrames / FPS).toFixed(1)}s)`);
+  // NOTE: this is the narration's own PLAYBACK duration (how long the
+  // combined clips run for), not how long generation took — use the
+  // wall-clock line below for that. Kept separate on purpose: this number
+  // feeds totalFrames for the actual lesson video, that one is diagnostic
+  // only.
+  console.log(`  [tts] Total narration: ${totalFrames} frames (${(totalFrames / FPS).toFixed(1)}s playback)`);
+  console.log(`  [tts] Audio stage wall-clock: ${((Date.now() - stageStart) / 1000).toFixed(1)}s`);
 
   return { scenes: enriched, totalFrames };
 }
