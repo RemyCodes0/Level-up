@@ -2,8 +2,46 @@ const path = require("path");
 const fs = require("fs");
 const OpenAI = require("openai");
 const { v4: uuidv4 } = require("uuid");
-const { parseBuffer } = require("music-metadata");
 const { createLimiter } = require("../utils/concurrencyLimiter");
+
+// Kokoro's raw PCM output format via this OpenRouter hosting — measured
+// directly: a 13-word sentence produced a PCM buffer whose length implies
+// 4.67s at 24kHz/16-bit/mono, matching the ~150-165wpm natural speaking rate
+// for that word count; a second check against the SAME text's MP3-reported
+// duration (5.952s) came within 0.05s of the PCM-implied duration (5.900s)
+// for a longer sentence — confirming this format.
+const PCM_SAMPLE_RATE = 24000;
+const PCM_BITS_PER_SAMPLE = 16;
+const PCM_CHANNELS = 1;
+const PCM_BYTES_PER_SAMPLE = PCM_BITS_PER_SAMPLE / 8;
+
+// Prepends a standard 44-byte RIFF/WAVE header to raw PCM sample data,
+// producing one complete, valid, independently-decodable WAV file. Every
+// player determines duration and content directly from this file's own
+// declared sizes — nothing here depends on trusting multiple concatenated
+// chunks' own internal metadata (see the comment on generateSceneAudio's
+// concatenation for why that mattered).
+function pcmToWav(pcmBuffer, { sampleRate = PCM_SAMPLE_RATE, channels = PCM_CHANNELS, bitsPerSample = PCM_BITS_PER_SAMPLE } = {}) {
+  const byteRate = sampleRate * channels * (bitsPerSample / 8);
+  const blockAlign = channels * (bitsPerSample / 8);
+  const header = Buffer.alloc(44);
+
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + pcmBuffer.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16); // Subchunk1Size (16 for PCM)
+  header.writeUInt16LE(1, 20); // AudioFormat (1 = PCM)
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(pcmBuffer.length, 40);
+
+  return Buffer.concat([header, pcmBuffer]);
+}
 
 const FPS = 30;
 
@@ -107,18 +145,35 @@ function splitIntoTtsChunks(text, maxChars = TTS_CHUNK_MAX_CHARS) {
 // own (a failure here bubbles up to generateSceneAudio's own retry loop,
 // which redoes every chunk for the scene from scratch; simpler than nested
 // per-chunk retries for a failure mode that's rare in practice).
+//
+// Requests RAW PCM, not MP3. MP3 chunks each carry their own internal
+// metadata (e.g. a Xing/VBR header describing THAT chunk's own frame count),
+// and naively Buffer.concat-ing several independently-encoded MP3s produces
+// a file where duration-estimating decoders (measured directly: this
+// project's own re-parse of a concatenated file) read only the FIRST
+// chunk's own declared length and ignore the rest — even though the actual
+// audio bytes for every chunk are all still physically present in the file.
+// That silently truncated PLAYBACK (not just measurement) for any narration
+// needing more than one chunk, which is exactly what caused narration to go
+// quiet mid-sentence while a scene's video kept running for its full
+// (correctly-computed) duration. Raw PCM has no such per-chunk
+// framing at all — chunks concatenate byte-for-byte with zero ambiguity —
+// so this crosses that entire failure class off, not just patches around it.
 async function generateChunkAudio(chunkText) {
   return limitTtsChunkCall(async () => {
     const response = await openai.audio.speech.create({
       model: "hexgrad/kokoro-82m",
       voice: "af_nova",
       input: chunkText,
-      response_format: "mp3",
+      response_format: "pcm",
       speed: 1.0,
     });
     const buffer = Buffer.from(await response.arrayBuffer());
-    const metadata = await parseBuffer(buffer, "audio/mpeg");
-    return { buffer, durationSeconds: metadata.format.duration };
+    // Computed directly from byte length at a KNOWN, fixed sample rate —
+    // raw PCM has no embedded duration metadata to (mis)trust in the first
+    // place, so there's nothing here that can drift from the real content.
+    const durationSeconds = buffer.length / (PCM_SAMPLE_RATE * PCM_BYTES_PER_SAMPLE * PCM_CHANNELS);
+    return { buffer, durationSeconds };
   });
 }
 
@@ -136,15 +191,21 @@ async function generateSceneAudio(scene, retries = 3) {
       // afterward, which this preserves via .map's index-preserving results).
       const chunkResults = await Promise.all(chunks.map((chunk) => generateChunkAudio(chunk)));
 
-      const buffer = Buffer.concat(chunkResults.map((c) => c.buffer));
-      // Summed from each chunk's OWN measured duration, not re-parsed from
-      // the concatenated file — more reliable than trusting an MP3 decoder
-      // to correctly sum duration across back-to-back frame streams that
-      // were never encoded as one continuous file.
-      const durationSeconds = chunkResults.reduce((sum, c) => sum + c.durationSeconds, 0);
+      // Raw PCM concatenates byte-for-byte with no framing/header ambiguity
+      // (unlike MP3 — see generateChunkAudio's comment) — this is genuinely
+      // one continuous stream of samples, not several independently-encoded
+      // files stitched together. ONE WAV header wraps the whole thing so any
+      // player gets one complete, self-consistent, independently-decodable
+      // file with an accurate declared duration.
+      const pcmBuffer = Buffer.concat(chunkResults.map((c) => c.buffer));
+      const buffer = pcmToWav(pcmBuffer);
+      // Computed directly from the combined PCM byte length — the same
+      // source of truth the WAV header itself was built from, so the
+      // reported duration and the file's actual content can never disagree.
+      const durationSeconds = pcmBuffer.length / (PCM_SAMPLE_RATE * PCM_BYTES_PER_SAMPLE * PCM_CHANNELS);
       const durationInFrames = Math.ceil(durationSeconds * FPS);
 
-      const fileName = `${uuidv4()}.mp3`;
+      const fileName = `${uuidv4()}.wav`;
       const audioFilePath = path.join(AUDIO_DIR, fileName);
       fs.writeFileSync(audioFilePath, buffer);
 

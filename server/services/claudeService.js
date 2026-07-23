@@ -25,15 +25,12 @@ const CODE_PROVIDERS = {
   glm: {
     client: openRouterClient,
     model: "z-ai/glm-5.2",
-    // Reasoning ON at "high" effort for per-scene code generation (this is
-    // what every generateSceneCode call actually uses — HEADER_PROVIDER
-    // below explicitly overrides this back to disabled for the one-per-
-    // lesson header/scene-plan calls, so this only affects the 8-14
-    // parallel per-scene calls). Uses OpenRouter's UNIFIED `reasoning` param
-    // (not GLM's native `thinking`/`reasoning_effort` fields) since requests
-    // now go through OpenRouter for every provider. SCENE_MAX_OUTPUT_TOKENS
-    // (72000) already accounts for this — "high" reasoning caps at
-    // min(72000*0.8, 32000)=32000, leaving ~40000 for the actual code.
+    // Reasoning OFF for per-scene code generation (this is what every
+    // generateSceneCode call actually uses) — fastest + cheapest. Was tested
+    // at `{ effort: "high" }`; reverted back to disabled. Uses OpenRouter's
+    // UNIFIED `reasoning` param (not GLM's native `thinking`/
+    // `reasoning_effort` fields) since requests now go through OpenRouter
+    // for every provider.
     //
     // `provider: { order: ["z-ai"], allow_fallbacks: true }` PREFERS Z.ai's
     // own official backend for every request, but permits falling back to
@@ -61,7 +58,7 @@ const CODE_PROVIDERS = {
     // another provider immediately instead of failing outright — accepting
     // occasional quantized-backend output as the tradeoff for fewer outright
     // connection failures under high concurrency.
-    extraParams: { reasoning: { effort: "high" }, provider: { order: ["z-ai"], allow_fallbacks: true } },
+    extraParams: { reasoning: { enabled: false }, provider: { order: ["z-ai"], allow_fallbacks: true } },
     maxTokens: 100000,
     keyEnv: "OPENROUTER_API_KEY",
   },
