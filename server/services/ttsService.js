@@ -13,8 +13,12 @@ if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
 
 const SERVER_BASE_URL = process.env.SERVER_BASE_URL || "http://localhost:5000";
 
+// OpenRouter's OpenAI-compatible /audio/speech endpoint — same account/key
+// as the code-gen providers in claudeService.js, instead of a separate
+// OpenAI key just for TTS.
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENROUTER_API_KEY,
+  baseURL: "https://openrouter.ai/api/v1",
   timeout: 150 * 1000, // 150 seconds — scenes 12-13 with long narration were timing out at 90s
   maxRetries: 0,       // handle retries manually below with backoff
 });
@@ -25,10 +29,15 @@ async function generateSceneAudio(scene, retries = 3) {
     try {
       console.log(`  [tts] Scene ${scene.id}: generating audio (attempt ${attempt}/${retries})...`);
 
+      // Kokoro 82M (hexgrad) via OpenRouter — "af_nova" is Kokoro's American
+      // Female "Nova" voice, the closest equivalent to the OpenAI "nova"
+      // voice this replaced. response_format explicit (not left to default)
+      // since the mp3 parsing below assumes it.
       const response = await openai.audio.speech.create({
-        model: "tts-1",
-        voice: "nova",
+        model: "hexgrad/kokoro-82m",
+        voice: "af_nova",
         input: scene.narration,
+        response_format: "mp3",
         speed: 1.0,
       });
 

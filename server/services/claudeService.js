@@ -5,33 +5,16 @@ const { validateGeneratedCode, validateHeaderFragment, validateSceneFragment, ge
 const { reviewGeneratedCode } = require("./codeCriticService");
 const { createLimiter } = require("../utils/concurrencyLimiter");
 
-// GLM-5.2 client for lesson code generation — OpenAI-compatible
-const glmClient = new OpenAI({
-  apiKey: process.env.ZAI_API_KEY,
-  baseURL: "https://api.z.ai/api/paas/v4/",
-  timeout: 300 * 1000, // 5 minute timeout — if GLM takes longer, fail fast and retry
+// Single OpenRouter client for ALL code-gen providers — GLM, DeepSeek, and
+// Fable 5 are all reachable through OpenRouter's OpenAI-compatible endpoint
+// under one account/key, instead of three separate direct-provider clients
+// with three separate keys/base URLs. Model choice is just a different
+// `model` slug on the SAME client now (see CODE_PROVIDERS below).
+const openRouterClient = new OpenAI({
+  apiKey: process.env.OPENROUTER_API_KEY,
+  baseURL: "https://openrouter.ai/api/v1",
+  timeout: 300 * 1000, // 5 minute timeout — fail fast and retry rather than hang
   maxRetries: 0,       // handle retries manually
-});
-
-// DeepSeek client for lesson code generation — also OpenAI-compatible, so the
-// same SDK works with just a different baseURL/key.
-const deepseekClient = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: "https://api.deepseek.com",
-  timeout: 300 * 1000,
-  maxRetries: 0,
-});
-
-// Claude Fable 5 via Anthropic's OpenAI-COMPATIBLE endpoint, so it slots into
-// the same streaming .chat.completions loop as GLM/DeepSeek with no rewrite.
-// Fable 5 is a much stronger creative-code model, but MUCH pricier (~$15/$75
-// per M tokens vs GLM's cents) — used deliberately for ads (low volume, one
-// per user action), not the 6-lessons-per-course code path.
-const fableClient = new OpenAI({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  baseURL: "https://api.anthropic.com/v1/",
-  timeout: 300 * 1000,
-  maxRetries: 0,
 });
 
 // ── Code-gen provider table ───────────────────────────────────────────────────
@@ -40,47 +23,56 @@ const fableClient = new OpenAI({
 // selected INDEPENDENTLY (see LESSON_CODE_PROVIDER / AD_CODE_PROVIDER below).
 const CODE_PROVIDERS = {
   glm: {
-    client: glmClient,
-    model: "glm-5.2",
-    // thinking disabled = faster + cheaper. The prompt now leans on a short,
-    // coherence-first rule set (not brute reasoning) to do the heavy lifting,
-    // so extra chain-of-thought buys little here and costs latency on the
-    // high-volume 6-lessons-per-course path.
-    extraParams: { thinking: { type: "disabled" } },
+    client: openRouterClient,
+    model: "z-ai/glm-5.2",
+    // Reasoning ON at "high" effort for per-scene code generation (this is
+    // what every generateSceneCode call actually uses). Uses OpenRouter's
+    // UNIFIED `reasoning` param (not GLM's native `thinking`/`reasoning_effort`
+    // fields) since requests now go through OpenRouter for every provider —
+    // OpenRouter translates this onto whatever the underlying model natively
+    // expects. Was disabled entirely (fastest + cheapest); revert to
+    // `{ reasoning: { enabled: false } }` if "high" here doesn't pay off
+    // relative to its extra latency/cost on the high-volume, N-scenes-in-
+    // parallel path. See HEADER_PROVIDER below for the separate, higher
+    // ("xhigh"/GLM's "max") setting used for the one-per-lesson header/
+    // scene-plan calls instead of this one.
+    extraParams: { reasoning: { effort: "high" } },
     maxTokens: 100000,
-    keyEnv: "ZAI_API_KEY",
+    keyEnv: "OPENROUTER_API_KEY",
   },
   deepseek: {
-    client: deepseekClient,
-    model: "deepseek-v4-pro",
+    client: openRouterClient,
+    model: "deepseek/deepseek-v4-pro",
     // Tuning notes:
     //  - temperature 0.9 / top_p 0.95: enough variety for distinct, concept-
     //    driven scenes without the wild swings temp 1.0 produced (which the
     //    old "cram in maximum density" prompt leaned on but which also fed the
     //    off-model, incoherent output we're now designing against).
-    //  - reasoning_effort "high" (was "max"): the new prompt asks the model to
+    //  - reasoning effort "high" (was "max"): the new prompt asks the model to
     //    illustrate ONE concept coherently per scene rather than plan a 50-
     //    element pile-up, so it needs far less planning budget. "high" recovers
     //    most of "max"'s planning depth at a fraction of the latency — the
     //    single biggest lever on the "slow to generate" complaint. Bump back to
-    //    "max" per-deploy only if a specific topic class regresses.
+    //    "xhigh" per-deploy only if a specific topic class regresses.
     extraParams: {
-      reasoning_effort: "high",
-      thinking: { type: "enabled" },
+      reasoning: { effort: "high" },
       temperature: 0.9,
       top_p: 0.95,
     },
     maxTokens: 100000,
-    keyEnv: "DEEPSEEK_API_KEY",
+    keyEnv: "OPENROUTER_API_KEY",
   },
   fable: {
-    client: fableClient,
-    model: "claude-fable-5",
+    client: openRouterClient,
+    model: "anthropic/claude-fable-5",
     // Fable 5's max output is far lower than GLM's, so cap max_tokens or the
-    // request errors. 32k is plenty for an ad composition.
+    // request errors. 32k is plenty for an ad composition. MUCH pricier than
+    // GLM/DeepSeek (~$15/$75 per M tokens vs cents) — used deliberately for
+    // ads (low volume, one per user action), not the 6-lessons-per-course
+    // code path.
     extraParams: { temperature: 1.0 },
     maxTokens: 32000,
-    keyEnv: "ANTHROPIC_API_KEY",
+    keyEnv: "OPENROUTER_API_KEY",
   },
 };
 
@@ -100,6 +92,17 @@ const LESSON_CODE_PROVIDER = resolveProvider("LESSON_CODE_MODEL", "glm");
 // stronger, pricier model, affordable specifically because ad volume is low.
 // Override per-deploy with AD_CODE_MODEL.
 const AD_CODE_PROVIDER = resolveProvider("AD_CODE_MODEL", "fable");
+
+// Reasoning ON at "xhigh" effort — OpenRouter's vocabulary, not GLM's; GLM-
+// 5.2's own chat template maps "xhigh" onto its native "max" reasoning tier
+// (its deepest level, above "high") — for the two lesson-WIDE planning calls
+// only (header here, scene plan in sceneService.js). Each is ONE call per
+// lesson, not one per scene, so the extra cost of the deepest reasoning tier
+// is cheap here, while per-scene code generation (LESSON_CODE_PROVIDER)
+// stays one tier down at "high" to keep the 8-14-scenes-in-parallel path
+// comparatively fast — see the claudeService.js:generateSceneCode /
+// claudeService.js:generateLessonHeader split below.
+const HEADER_PROVIDER = { ...LESSON_CODE_PROVIDER, extraParams: { ...LESSON_CODE_PROVIDER.extraParams, reasoning: { effort: "xhigh" } } };
 
 console.log(
   `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | deepseek | glm to switch) | ` +
@@ -465,17 +468,17 @@ ${rules}
 
   // Course plan generation is a bounded, fixed-shape JSON task (6 lessons, 20
   // questions) — it gets no benefit from deep chain-of-thought, and reasoning
-  // tokens draw from the SAME max_tokens budget as the JSON output. Strip
-  // reasoning_effort and force thinking off for this call, regardless of
-  // provider, so the whole budget goes to the JSON.
-  const { reasoning_effort: _reasoningEffort, ...planExtraParams } = LESSON_CODE_PROVIDER.extraParams;
+  // tokens draw from the SAME max_tokens budget as the JSON output. Strip any
+  // provider's `reasoning` setting and force it off for this call, regardless
+  // of provider, so the whole budget goes to the JSON.
+  const { reasoning: _reasoning, ...planExtraParams } = LESSON_CODE_PROVIDER.extraParams;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await LESSON_CODE_PROVIDER.client.chat.completions.create({
         model: LESSON_CODE_PROVIDER.model,
         ...planExtraParams,
-        thinking: { type: "disabled" },
+        reasoning: { enabled: false },
         max_tokens: 8000,
         messages,
       });
@@ -564,9 +567,9 @@ Rules:
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await glmClient.chat.completions.create({
-        model: "glm-5.2",
-        thinking: { type: "disabled" },
+      const response = await openRouterClient.chat.completions.create({
+        model: "z-ai/glm-5.2",
+        reasoning: { enabled: false },
         max_tokens: 2000,
         messages,
       });
@@ -588,7 +591,7 @@ Rules:
     } catch (err) {
       lastError = err;
       if (isNonRetryable(err)) {
-        throw new Error(`Remedial lesson plan generation failed with a non-retryable error (check ZAI_API_KEY): ${describeError(err)}`);
+        throw new Error(`Remedial lesson plan generation failed with a non-retryable error (check OPENROUTER_API_KEY): ${describeError(err)}`);
       }
       console.warn(`  [remedial] Attempt ${attempt}/${maxAttempts} failed: ${describeError(err)}. Retrying...`);
       if (attempt < maxAttempts) await backoffDelay(attempt);
@@ -633,9 +636,9 @@ Rules:
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await glmClient.chat.completions.create({
-        model: "glm-5.2",
-        thinking: { type: "disabled" },
+      const response = await openRouterClient.chat.completions.create({
+        model: "z-ai/glm-5.2",
+        reasoning: { enabled: false },
         max_tokens: 1000,
         messages,
       });
@@ -649,7 +652,7 @@ Rules:
     } catch (err) {
       lastError = err;
       if (isNonRetryable(err)) {
-        throw new Error(`Next-course suggestions generation failed with a non-retryable error (check ZAI_API_KEY): ${describeError(err)}`);
+        throw new Error(`Next-course suggestions generation failed with a non-retryable error (check OPENROUTER_API_KEY): ${describeError(err)}`);
       }
       if (attempt < maxAttempts) await backoffDelay(attempt);
     }
@@ -1293,8 +1296,21 @@ async function streamCodeCompletion({ limiter, provider, systemPrompt, userConte
   });
 }
 
-const HEADER_MAX_OUTPUT_TOKENS = 16000;
-const SCENE_MAX_OUTPUT_TOKENS = 20000;
+// Header's budget is much bigger than its ~16k of actual code needs because
+// HEADER_PROVIDER now runs with reasoning ON ("xhigh" effort, GLM's native
+// "max") — reasoning tokens draw from this SAME max_tokens budget, not a
+// separate pool. OpenRouter's effort→budget formula caps reasoning at
+// min(max_tokens * ratio, 32000) tokens regardless of "high" vs "xhigh"'s
+// different ratios (both comfortably exceed the 32000 cap at this size), so
+// at 60000 total: ~32000 goes to reasoning, leaving ~28000 for the actual
+// header code — comfortably above the ~16000 it used when reasoning was off.
+const HEADER_MAX_OUTPUT_TOKENS = 60000;
+// Scene code generation now ALSO runs with reasoning ON ("high" effort, see
+// CODE_PROVIDERS.glm) — same reasoning-eats-the-same-budget issue as the
+// header above. At 72000 total, "high" reasoning caps at 32000, leaving
+// ~40000 for the actual scene code — the same code budget scenes had before
+// reasoning was turned on here, not a regression.
+const SCENE_MAX_OUTPUT_TOKENS = 72000;
 
 // Generates the shared header (imports, palette/motif, shared helper
 // components) for a lesson — one small call, own retry loop, same
@@ -1317,8 +1333,8 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2) {
 
       const { text, stopReason } = await streamCodeCompletion({
         limiter: limitLessonHeaderCall,
-        provider: LESSON_CODE_PROVIDER,
-        systemPrompt: selectHeaderSystemPrompt(LESSON_CODE_PROVIDER),
+        provider: HEADER_PROVIDER,
+        systemPrompt: selectHeaderSystemPrompt(HEADER_PROVIDER),
         userContent,
         maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
       });
@@ -1788,6 +1804,11 @@ module.exports = {
   // configured for lesson code (LESSON_CODE_MODEL=glm|deepseek|fable) instead
   // of a separately hardcoded model — one provider choice, one place to change it.
   LESSON_CODE_PROVIDER,
+  // "high"-reasoning variant of LESSON_CODE_PROVIDER, for the lesson-WIDE
+  // planning calls only (this file's own header generation, and
+  // sceneService.js's scene-plan generation) — see the comment where it's
+  // defined for why per-scene code generation deliberately does NOT use this.
+  HEADER_PROVIDER,
   streamCodeCompletion,
   limitLessonHeaderCall,
   describeError,

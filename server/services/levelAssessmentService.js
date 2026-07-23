@@ -16,18 +16,21 @@
 // The conversation is intentionally short: MAX_QUESTIONS keeps it to a quick
 // 3-4 exchange check, not a full exam.
 
-const Anthropic = require("@anthropic-ai/sdk");
+const OpenAI = require("openai");
 
+// GLM-5.2 via OpenRouter's OpenAI-compatible endpoint — same account/key as
+// the rest of the app's AI calls (see claudeService.js, ttsService.js).
 // maxRetries: the SDK auto-retries failed requests (including network
 // timeouts like ETIMEDOUT) this many times with backoff before giving up —
 // important for unstable connections. timeout: how long to wait per attempt.
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
+const client = new OpenAI({
+  apiKey: process.env.OPENROUTER_API_KEY,
+  baseURL: "https://openrouter.ai/api/v1",
   maxRetries: 3,
   timeout: 60 * 1000,
 });
 
-const MODEL = "claude-haiku-4-5-20251001"; // fast + cheap, fine for short MCQs
+const MODEL = "z-ai/glm-5.2"; // fast + cheap, fine for short MCQs
 const MAX_QUESTIONS = 3;
 
 // Builds the system prompt that defines how the assessor behaves.
@@ -53,7 +56,7 @@ Rules for each question:
 }`;
 }
 
-// Converts our stored conversation turns into Anthropic message format.
+// Converts our stored conversation turns into OpenAI-style message format.
 // `turns` is an array of { question, options, answer } objects representing
 // what's already been asked and how the user replied.
 function buildMessages(turns) {
@@ -96,20 +99,29 @@ async function streamNextQuestion(topic, turns, onToken, maxAttempts = 3) {
     let fullText = "";
     let emittedAny = false;
     try {
-      const stream = client.messages.stream({
+      const stream = await client.chat.completions.create({
         model: MODEL,
         max_tokens: 400,
-        system: buildSystemPrompt(topic),
-        messages: buildMessages(turns),
+        // Off: this is a live "typing" question generator — reasoning would
+        // add latency to what should feel instant, and writing one simple
+        // self-report MCQ doesn't need it.
+        reasoning: { enabled: false },
+        stream: true,
+        messages: [
+          { role: "system", content: buildSystemPrompt(topic) },
+          ...buildMessages(turns),
+        ],
       });
 
-      stream.on("text", (textChunk) => {
-        fullText += textChunk;
-        emittedAny = true;
-        onToken(textChunk);
-      });
+      for await (const chunk of stream) {
+        const textChunk = chunk.choices?.[0]?.delta?.content;
+        if (textChunk) {
+          fullText += textChunk;
+          emittedAny = true;
+          onToken(textChunk);
+        }
+      }
 
-      await stream.finalMessage();
       return fullText;
     } catch (err) {
       lastErr = err;
@@ -133,11 +145,15 @@ async function determineLevel(topic, turns) {
     .map((t, i) => `Q${i + 1}: ${t.question}\nThey answered: "${t.answer}"`)
     .join("\n\n");
 
-  const response = await client.messages.create({
+  const response = await client.chat.completions.create({
     model: MODEL,
     max_tokens: 50,
-    system: `You determine what level to pitch a course on "${topic}" at, based on a learner's SELF-REPORTED background (their education, prior familiarity with the topic, and goal). Weigh familiarity with the specific topic most heavily, then education/background, then goal. Respond with ONLY one lowercase word: "beginner", "intermediate", or "advanced". No punctuation, no explanation.`,
+    reasoning: { enabled: false }, // a one-word verdict needs no reasoning
     messages: [
+      {
+        role: "system",
+        content: `You determine what level to pitch a course on "${topic}" at, based on a learner's SELF-REPORTED background (their education, prior familiarity with the topic, and goal). Weigh familiarity with the specific topic most heavily, then education/background, then goal. Respond with ONLY one lowercase word: "beginner", "intermediate", or "advanced". No punctuation, no explanation.`,
+      },
       {
         role: "user",
         content: `Here's what they told me about themselves:\n\n${transcript}\n\nWhat level should their course be pitched at?`,
@@ -145,7 +161,7 @@ async function determineLevel(topic, turns) {
     ],
   });
 
-  const raw = (response.content?.[0]?.text || "").toLowerCase().trim();
+  const raw = (response.choices?.[0]?.message?.content || "").toLowerCase().trim();
   if (raw.includes("advanced")) return "advanced";
   if (raw.includes("intermediate")) return "intermediate";
   return "beginner"; // safe default
