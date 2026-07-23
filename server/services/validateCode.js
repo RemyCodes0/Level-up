@@ -153,39 +153,27 @@ function checkInterpolateCalls(ast) {
         );
       }
 
-      // Both arrays passed the "is an ArrayExpression" check above, but that
-      // only confirms the OUTER `[...]` shape — nothing yet stops an element
-      // INSIDE from being an expression (`[start, start + 20]`) instead of a
-      // plain number. That distinction matters: a literal-only array's
-      // values are known right now, at validation time; an expression's
-      // value depends on runtime data (e.g. a computed start frame) that
-      // this validator can never see — so if the model gets the arithmetic
-      // wrong for some specific input, nothing catches it until a real
-      // user's browser throws "inputRange must be strictly monotonically
-      // increasing" (a real incident this closes off). Reject non-literal
-      // elements outright rather than trying to guess their runtime value.
-      let hasNonLiteralElement = false;
-      for (const [rangeName, range] of [["inputRange", inputRange], ["outputRange", outputRange]]) {
-        for (const el of range.elements) {
-          if (literalNumericValue(el) === null) {
-            errors.push(
-              `interpolate()'s ${rangeName} contains a non-literal element${loc} — every value must be a plain number (e.g. [0, 30]), never a variable or expression (NOT [start, start + 20])`
-            );
-            hasNonLiteralElement = true;
-          }
-        }
-      }
-
-      // Only checkable once every inputRange element is confirmed to be a
-      // real literal above — Remotion's OWN runtime requirement (unlike
-      // outputRange, which has no such constraint: a fade-out [1, 0] is
-      // valid) is that inputRange is STRICTLY increasing. This is the exact
-      // static equivalent of the "inputRange must be strictly monotonically
-      // increasing" crash Remotion throws — catching it here means a
-      // scene that would fail this way gets rejected and retried during
-      // generation instead of crashing a real user's playback.
-      if (!hasNonLiteralElement) {
-        const inputValues = inputRange.elements.map(literalNumericValue);
+      // Remotion's OWN runtime requirement (unlike outputRange, which has no
+      // such constraint — a fade-out [1, 0] is valid) is that inputRange is
+      // STRICTLY increasing. Only checkable when every element is a plain
+      // number literal — an expression like `start + 20` is common,
+      // legitimate, and usually provably safe by construction (start + 20 >
+      // start whenever 20 is a positive literal). An earlier version of this
+      // check REJECTED any non-literal element outright, on the theory that
+      // an expression's runtime value can't be verified here — but a live
+      // course run showed that false-positiving on nearly every single
+      // scene (this exact `[start, start + 20]` shape is apparently how
+      // this model normally writes staggered animations), causing far more
+      // retry churn than the rare genuine ordering bug it was meant to
+      // catch. Reverted to the narrow, zero-false-positive version: only
+      // catches what's fully knowable right now — a DIRECTLY-written
+      // decreasing literal range like [500, 490], the exact static
+      // equivalent of the "inputRange must be strictly monotonically
+      // increasing" crash Remotion throws. A non-literal element is
+      // silently allowed through this specific check (content it can't
+      // verify, not content it has evidence is wrong).
+      const inputValues = inputRange.elements.map(literalNumericValue);
+      if (inputValues.every((v) => v !== null)) {
         for (let i = 1; i < inputValues.length; i++) {
           if (inputValues[i] <= inputValues[i - 1]) {
             errors.push(
