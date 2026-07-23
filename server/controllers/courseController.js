@@ -258,14 +258,29 @@ async function buildLesson(courseId, lesson) {
 }
 
 
-// Builds a list of lessons 2 at a time, in order — shared by processCourse
+// Builds a list of lessons ONE AT A TIME, in order — shared by processCourse
 // (the normal path) and unlockRemainingLessonsHandler (resuming a
-// free-trial course after the user buys credits), so the pairing logic
-// only lives in one place.
-async function buildLessonsInPairs(courseId, lessons) {
-  for (let i = 0; i < lessons.length; i += 2) {
-    const batch = lessons.slice(i, i + 2);
-    await Promise.allSettled(batch.map((l) => buildLesson(courseId, l)));
+// free-trial course after the user buys credits), so this logic only lives
+// in one place.
+//
+// Was 2 lessons at once (Promise.allSettled over pairs). Changed because
+// GLM_SCENE_MAX_CONCURRENT (limitLessonSceneCall in claudeService.js) is a
+// single process-wide semaphore, not one per lesson — building 2 lessons
+// concurrently meant their scene-generation calls competed for the SAME
+// slot pool, so each lesson's OWN scenes queued behind a sibling lesson's
+// scenes instead of running fully in parallel. One lesson at a time gives
+// each lesson's (up to ~12-14) scenes the entire pool to themselves.
+//
+// This trades total course-completion time for time-to-next-lesson-ready:
+// lesson N+1 doesn't start generating until lesson N is fully done, so
+// there's no cross-lesson pipelining overlap — but each individual lesson
+// finishes faster, and since lessons are watched sequentially (each taking
+// several minutes), lesson N+1 generating during the time the user spends
+// watching lesson N is the thing that actually matters for the user, not
+// the aggregate wall-clock time to build all 6.
+async function buildLessonsSequentially(courseId, lessons) {
+  for (const lesson of lessons) {
+    await buildLesson(courseId, lesson);
   }
 }
 
@@ -298,8 +313,8 @@ async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = fal
       questions,
     });
 
-    // Build all 6 lessons in pairs, regardless of trial status.
-    await buildLessonsInPairs(courseId, lessons);
+    // Build all 6 lessons one at a time, regardless of trial status.
+    await buildLessonsSequentially(courseId, lessons);
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
     const totalMin = ((Date.now() - courseStart) / 60000).toFixed(1);
@@ -686,7 +701,7 @@ async function retryLessonHandler(req, res) {
 // ── Unlock the rest of a free-trial course ──────────────────────────────────
 // Called after the user buys credits and wants to continue a course that
 // was capped at lesson 1. Costs 1 credit (same price as any other course),
-// then builds lessons 2-6 in pairs, same as a normal paid course would.
+// then builds lessons 2-6 one at a time, same as a normal paid course would.
 async function unlockRemainingLessonsHandler(req, res) {
   try {
     const { courseId } = req.params;
@@ -746,7 +761,7 @@ async function unlockRemainingLessonsHandler(req, res) {
       keyPoints: l.keyPoints,
     }));
 
-    buildLessonsInPairs(courseId, lessonsToBuild)
+    buildLessonsSequentially(courseId, lessonsToBuild)
       .then(() => Course.findByIdAndUpdate(courseId, { status: "ready" }))
       .catch((err) => {
         console.error(`[${courseId}] Unlock build failed:`, err.message);

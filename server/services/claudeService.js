@@ -25,18 +25,42 @@ const CODE_PROVIDERS = {
   glm: {
     client: openRouterClient,
     model: "z-ai/glm-5.2",
-    // Reasoning ON at "high" effort for per-scene code generation (this is
-    // what every generateSceneCode call actually uses). Uses OpenRouter's
-    // UNIFIED `reasoning` param (not GLM's native `thinking`/`reasoning_effort`
-    // fields) since requests now go through OpenRouter for every provider —
-    // OpenRouter translates this onto whatever the underlying model natively
-    // expects. Was disabled entirely (fastest + cheapest); revert to
-    // `{ reasoning: { enabled: false } }` if "high" here doesn't pay off
-    // relative to its extra latency/cost on the high-volume, N-scenes-in-
-    // parallel path. See HEADER_PROVIDER below for the separate, higher
-    // ("xhigh"/GLM's "max") setting used for the one-per-lesson header/
-    // scene-plan calls instead of this one.
-    extraParams: { reasoning: { effort: "high" } },
+    // Reasoning OFF for GLM across the board — fastest + cheapest. Uses
+    // OpenRouter's UNIFIED `reasoning` param (not GLM's native `thinking`/
+    // `reasoning_effort` fields) since requests now go through OpenRouter for
+    // every provider. Tested at `{ reasoning: { effort: "high" } }` for
+    // per-scene code and `{ effort: "xhigh" }` (GLM's native "max") for the
+    // one-per-lesson header/scene-plan calls (see HEADER_PROVIDER below) —
+    // didn't pay off enough to justify the extra latency/cost, so both are
+    // back to disabled.
+    //
+    // `provider: { order: ["z-ai"], allow_fallbacks: true }` PREFERS Z.ai's
+    // own official backend for every request, but permits falling back to
+    // another provider if Z.ai specifically fails or is unavailable for that
+    // request. Without any preference at all, OpenRouter's DEFAULT behavior
+    // is to load-balance across ALL providers serving "z-ai/glm-5.2", ordered
+    // by PRICE — which can silently route to a heavily quantized (FP4/Int4)
+    // third-party backend serving the same model name for cheaper. This is a
+    // documented, known issue (GLM-4.7 users hit the same thing as corrupted
+    // CJK text; here it manifests as code that passes static validation but
+    // crashes at runtime — unguarded property access, malformed interpolate
+    // calls, orphaned SVG tags) and is unrelated to the reasoning toggle
+    // above — quantization is a routing-time choice made independently of
+    // whether reasoning is on.
+    //
+    // Was `{ only: ["z-ai"] }` (never falls back, ever) — direct testing
+    // showed Z.ai's own backend intermittently drops connections under
+    // concurrency (firing 10-12 simultaneous requests failed 10-50% of the
+    // time across repeated trials, matching real "Connection error
+    // [ETIMEDOUT/ENETUNREACH]" failures seen live on several scenes of one
+    // lesson). `only` meant those requests had nowhere to go but fail and
+    // wait for our own retry loop. `order` + `allow_fallbacks: true` keeps
+    // the SAME quality preference for the common case, but lets an
+    // individual request that Z.ai can't currently serve fall through to
+    // another provider immediately instead of failing outright — accepting
+    // occasional quantized-backend output as the tradeoff for fewer outright
+    // connection failures under high concurrency.
+    extraParams: { reasoning: { enabled: false }, provider: { order: ["z-ai"], allow_fallbacks: true } },
     maxTokens: 100000,
     keyEnv: "OPENROUTER_API_KEY",
   },
@@ -93,16 +117,38 @@ const LESSON_CODE_PROVIDER = resolveProvider("LESSON_CODE_MODEL", "glm");
 // Override per-deploy with AD_CODE_MODEL.
 const AD_CODE_PROVIDER = resolveProvider("AD_CODE_MODEL", "fable");
 
-// Reasoning ON at "xhigh" effort — OpenRouter's vocabulary, not GLM's; GLM-
-// 5.2's own chat template maps "xhigh" onto its native "max" reasoning tier
-// (its deepest level, above "high") — for the two lesson-WIDE planning calls
-// only (header here, scene plan in sceneService.js). Each is ONE call per
-// lesson, not one per scene, so the extra cost of the deepest reasoning tier
-// is cheap here, while per-scene code generation (LESSON_CODE_PROVIDER)
-// stays one tier down at "high" to keep the 8-14-scenes-in-parallel path
-// comparatively fast — see the claudeService.js:generateSceneCode /
-// claudeService.js:generateLessonHeader split below.
-const HEADER_PROVIDER = { ...LESSON_CODE_PROVIDER, extraParams: { ...LESSON_CODE_PROVIDER.extraParams, reasoning: { effort: "xhigh" } } };
+// Reasoning OFF, matching LESSON_CODE_PROVIDER — was tested at "xhigh"
+// effort (OpenRouter's vocabulary; GLM-5.2's chat template maps it onto its
+// native "max" reasoning tier) for this lesson-WIDE header call, one per
+// lesson rather than one per scene. Didn't pay off enough to justify the
+// extra latency/cost, so disabled like every other GLM call. Kept as its own
+// const (rather than just reusing LESSON_CODE_PROVIDER directly) so the
+// header call can still be given a different setting from per-scene code
+// generation later without having to re-wire its call site again.
+const HEADER_PROVIDER = { ...LESSON_CODE_PROVIDER, extraParams: { ...LESSON_CODE_PROVIDER.extraParams, reasoning: { enabled: false } } };
+
+// Scene-plan generation (the lesson-wide breakdown into 8-14 scenes — see
+// sceneService.js's generateScenePlan) runs on GPT-5.6 Luna instead of
+// GLM/DeepSeek — a deliberate, separate model choice from LESSON_CODE_PROVIDER/
+// HEADER_PROVIDER's own GLM selection, not something the LESSON_CODE_MODEL
+// env var affects. (Was DeepSeek V4 Flash — swapped for OpenAI's faster,
+// pricier tier; see the model comparison this choice was based on.)
+const SCENE_PLAN_PROVIDER = {
+  client: openRouterClient,
+  model: "openai/gpt-5.6-luna",
+  // Reasoning off — matches this codebase's own finding that reasoning
+  // didn't pay off enough for GLM's equivalent one-per-lesson planning calls
+  // either; likely a no-op here since Luna is OpenAI's lightweight,
+  // non-reasoning tier, but harmless to state explicitly either way.
+  // `provider: { only: ["openai"] }` pins to OpenAI's own backend — mostly a
+  // formality for a closed/proprietary model (unlike GLM/DeepSeek's open
+  // weights, no third party can legally host OpenAI's own model, so
+  // OpenRouter has nowhere else to route this to regardless), but kept for
+  // consistency with every other provider entry in this file.
+  extraParams: { reasoning: { enabled: false }, provider: { only: ["openai"] } },
+  maxTokens: 40000,
+  keyEnv: "OPENROUTER_API_KEY",
+};
 
 console.log(
   `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | deepseek | glm to switch) | ` +
@@ -145,20 +191,39 @@ async function backoffDelay(attempt, baseMs = 500, capMs = 8000) {
 //
 // Two SEPARATE limiters for lesson code-gen, not one shared pool. A lesson's
 // scene calls are already gated behind its own header call resolving (see
-// generateLessonCode below), so there's no in-lesson starvation risk — the
-// real risk is CROSS-lesson: courseController's buildLessonsInPairs runs 2
-// lessons concurrently, and a shared pool would let one lesson's 8-14 scene
-// calls starve another lesson's (short, cheap) header call from even
-// starting. A small dedicated header limiter guarantees that never happens.
+// generateLessonCode below), so there's no in-lesson starvation risk from
+// that ordering alone — but a shared pool would still let one lesson's 8-14
+// scene calls starve a DIFFERENT lesson's (short, cheap) header call from
+// even starting whenever more than one header/scene-plan/course-plan-style
+// call happens to be in flight at once (header generation, scene-plan
+// generation, and course-plan generation all share this same header pool —
+// see HEADER_PROVIDER/SCENE_PLAN_PROVIDER). A small dedicated header limiter
+// guarantees the cheap calls never queue for ages behind the expensive ones.
+// (Lessons themselves build one at a time now — see courseController's
+// buildLessonsSequentially — so this is no longer about cross-lesson
+// contention specifically, just keeping the cheap/expensive call types from
+// blocking each other.)
 const GLM_HEADER_MAX_CONCURRENT = Number(process.env.GLM_HEADER_MAX_CONCURRENT) || 4;
 const limitLessonHeaderCall = createLimiter(GLM_HEADER_MAX_CONCURRENT);
 
 // Falls back to the old GLM_MAX_CONCURRENT env var if set (back-compat with
-// any deploy that already tuned it), else a new default of 12 — up from 6,
-// since one lesson alone can now want 8-14 concurrent scene calls (vs. 1
-// whole-lesson call before this split), and 2 lessons can build in parallel.
+// any deploy that already tuned it), else a default of 2. One lesson alone
+// can want 8-14 concurrent scene calls, and since courseController now
+// builds lessons ONE AT A TIME (buildLessonsSequentially), this pool is no
+// longer split across sibling lessons — a single lesson's scenes get the
+// whole thing to themselves.
+//
+// Was 12, then 8, then 3, then 2, after directly measuring Z.ai's real-world
+// behavior under this exact call shape (model, reasoning-off, provider
+// preferring z-ai with fallback): firing 12 simultaneous requests produced
+// intermittent "Connection error" [ETIMEDOUT/ENETUNREACH] failures in most
+// trials (up to 50% of requests in one run), matching the exact failures
+// seen live on scenes 1, 3, and 5 of a real 12-scene lesson. Every batch
+// size tested at n<=8 came back 100% clean in that round of testing — 2 is
+// a further deliberate margin below that clean ceiling, prioritizing fewer
+// wasted retries over maximum parallelism.
 const GLM_SCENE_MAX_CONCURRENT =
-  Number(process.env.GLM_SCENE_MAX_CONCURRENT) || Number(process.env.GLM_MAX_CONCURRENT) || 12;
+  Number(process.env.GLM_SCENE_MAX_CONCURRENT) || Number(process.env.GLM_MAX_CONCURRENT) || 2;
 const limitLessonSceneCall = createLimiter(GLM_SCENE_MAX_CONCURRENT);
 
 const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;
@@ -466,17 +531,20 @@ ${rules}
 
   let lastError = null;
 
-  // Course plan generation is a bounded, fixed-shape JSON task (6 lessons, 20
-  // questions) — it gets no benefit from deep chain-of-thought, and reasoning
-  // tokens draw from the SAME max_tokens budget as the JSON output. Strip any
-  // provider's `reasoning` setting and force it off for this call, regardless
-  // of provider, so the whole budget goes to the JSON.
-  const { reasoning: _reasoning, ...planExtraParams } = LESSON_CODE_PROVIDER.extraParams;
+  // Course plan generation runs on SCENE_PLAN_PROVIDER (GPT-5.6 Luna) —
+  // same reasoning as sceneService.js's scene-plan call: a bounded,
+  // fixed-shape JSON task (6 lessons, 20 questions), not code, so it doesn't
+  // need to share whatever model LESSON_CODE_MODEL selects for the actual
+  // animation code. It gets no benefit from deep chain-of-thought either, and
+  // reasoning tokens draw from the SAME max_tokens budget as the JSON
+  // output, so strip any provider's `reasoning` setting and force it off for
+  // this call regardless of provider, so the whole budget goes to the JSON.
+  const { reasoning: _reasoning, ...planExtraParams } = SCENE_PLAN_PROVIDER.extraParams;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const response = await LESSON_CODE_PROVIDER.client.chat.completions.create({
-        model: LESSON_CODE_PROVIDER.model,
+      const response = await SCENE_PLAN_PROVIDER.client.chat.completions.create({
+        model: SCENE_PLAN_PROVIDER.model,
         ...planExtraParams,
         reasoning: { enabled: false },
         max_tokens: 8000,
@@ -570,6 +638,12 @@ Rules:
       const response = await openRouterClient.chat.completions.create({
         model: "z-ai/glm-5.2",
         reasoning: { enabled: false },
+        // Prefer Z.ai's own backend, fall back to another provider if it's
+        // unavailable — see CODE_PROVIDERS.glm's comment for the full
+        // reasoning (avoids OpenRouter's default price-ordered routing
+        // silently picking a quantized third-party backend, while not
+        // failing outright if Z.ai specifically can't serve this request).
+        provider: { order: ["z-ai"], allow_fallbacks: true },
         max_tokens: 2000,
         messages,
       });
@@ -639,6 +713,12 @@ Rules:
       const response = await openRouterClient.chat.completions.create({
         model: "z-ai/glm-5.2",
         reasoning: { enabled: false },
+        // Prefer Z.ai's own backend, fall back to another provider if it's
+        // unavailable — see CODE_PROVIDERS.glm's comment for the full
+        // reasoning (avoids OpenRouter's default price-ordered routing
+        // silently picking a quantized third-party backend, while not
+        // failing outright if Z.ai specifically can't serve this request).
+        provider: { order: ["z-ai"], allow_fallbacks: true },
         max_tokens: 1000,
         messages,
       });
@@ -1485,15 +1565,26 @@ async function generateLessonCode(
   let lastError = null;
   const lessonStart = Date.now();
 
-  // Extra rounds of retrying ONLY the scenes still missing, on top of each
-  // scene's own internal maxAttempts. A scene that keeps failing no longer
-  // throws away every other scene's already-good work — it used to force a
-  // full header+all-scenes rebuild (confirmed costly in production: one
-  // stubborn scene wasted ~150s regenerating 12 scenes that were already
-  // fine). Only if a scene is STILL failing after all these rounds — or the
-  // header itself fails — does the outer attempt loop below kick in and
-  // regenerate everything from scratch, same as before this change.
-  const EXTRA_SCENE_RETRY_ROUNDS = 2;
+  // Every scene gets its OWN full retry budget (SCENE_MAX_ATTEMPTS_PER_LESSON
+  // attempts), spent entirely inside ITS OWN generateSceneCode call, which
+  // runs concurrently with every other scene from the start. A scene that
+  // keeps failing no longer throws away every other scene's already-good
+  // work (that would force a full header+all-scenes rebuild) — but it also
+  // no longer waits for its SIBLINGS to finish before it's allowed to retry.
+  //
+  // This replaced an earlier "rounds" design (retry only the still-failing
+  // scenes, but only after the ENTIRE batch settles, up to
+  // EXTRA_SCENE_RETRY_ROUNDS times) — confirmed live to add real, avoidable
+  // serial delay: a scene that failed early still had to wait for the
+  // SLOWEST scene in the batch to finish before its own retry could even
+  // begin, then paid for that retry entirely on top, e.g. one run where
+  // scene 12 finished at 133s and a stuck scene 4's retry then added another
+  // 58s AFTER that — 191s of a 235s code stage from essentially two scenes,
+  // serialized by the round barrier rather than overlapping. Giving each
+  // scene its whole retry budget up front removes that barrier entirely: a
+  // failing scene's 2nd/3rd/4th attempt runs at whatever moment IT is ready,
+  // overlapping with however long its siblings take, not after them.
+  const SCENE_MAX_ATTEMPTS_PER_LESSON = 6; // same total ceiling the old 3-round design allowed (2 attempts x 3 rounds), just no longer serialized
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -1517,76 +1608,67 @@ async function generateLessonCode(
       const sceneCodes = new Array(scenes.length).fill(null);
       const sceneErrors = new Array(scenes.length).fill(null);
 
-      for (let round = 0; round <= EXTRA_SCENE_RETRY_ROUNDS; round++) {
-        const pendingIndices = scenes.map((_, i) => i).filter((i) => sceneCodes[i] === null);
-        if (pendingIndices.length === 0) break;
+      // ONE batch, every scene fired at once, each with its own full
+      // SCENE_MAX_ATTEMPTS_PER_LESSON-attempt budget spent entirely inside
+      // its own generateSceneCode call — no external round barrier, so a
+      // scene's 2nd/3rd/4th attempt starts the moment ITS previous attempt
+      // fails, not after every sibling scene has also finished or given up.
+      //
+      // Each scene's notification is attached directly to ITS OWN promise
+      // via .then() below — NOT deferred to a .forEach() over the awaited
+      // Promise.allSettled results. That distinction matters: awaiting the
+      // whole batch first would mean every scene's notification waits for
+      // the SLOWEST scene to finish (confirmed live — a scene needing its
+      // own internal retry delayed an already-finished sibling's
+      // notification by over a minute). Attaching .then() to each promise
+      // individually fires the moment THAT scene resolves, regardless of
+      // its neighbors.
+      await Promise.allSettled(
+        scenes.map((_, i) =>
+          generateSceneCode(lesson, scenes[i], i, scenes.length, header, headerAvailableNames, componentName, SCENE_MAX_ATTEMPTS_PER_LESSON).then((code) => {
+            sceneCodes[i] = code;
+            sceneErrors[i] = null;
 
-        if (round > 0) {
-          console.log(
-            `  [code L${lesson.lessonNumber}] Retrying ${pendingIndices.length} still-failing scene(s) (round ${round}/${EXTRA_SCENE_RETRY_ROUNDS}): ${pendingIndices.map((i) => sceneComponentName(i)).join(", ")}`
-          );
-        }
-
-        // Each scene's notification is attached directly to ITS OWN promise
-        // via .then() below — NOT deferred to a .forEach() over the awaited
-        // Promise.allSettled results. That distinction matters: awaiting the
-        // whole batch first would mean every scene's notification waits for
-        // the SLOWEST scene in this round to finish (confirmed live — a scene
-        // needing its own internal retry delayed an already-finished
-        // sibling's notification by over a minute). Attaching .then() to each
-        // promise individually fires the moment THAT scene resolves,
-        // regardless of its neighbors.
-        const results = await Promise.allSettled(
-          pendingIndices.map((i) =>
-            generateSceneCode(lesson, scenes[i], i, scenes.length, header, headerAvailableNames, componentName).then((code) => {
-              sceneCodes[i] = code;
-              sceneErrors[i] = null;
-
-              // Notify a caller as soon as THIS scene's code is ready — in
-              // whatever order scenes actually resolve, not just scene 0.
-              // Lets a caller show live per-scene progress (e.g. a thumbnail
-              // filmstrip) well before the whole lesson finishes. Stitched
-              // into a standalone, self-contained single-scene composition
-              // (same technique as the final full-lesson stitch, just for
-              // one scene, using its REAL index so the wrapper references
-              // the right component name) so it's directly
-              // compilable/renderable on its own. Never fatal: a
-              // stitch/validate/notify failure here is logged and otherwise
-              // ignored — it must never affect the real lesson's
-              // generation, which already succeeded for this scene.
-              if (onSceneCodeReady) {
-                try {
-                  const previewStitched = stitchLessonCode({
-                    header,
-                    sceneCodes: [code],
-                    scenes: [scenes[i]],
-                    componentName,
-                    sceneIndices: [i],
-                  });
-                  const validatedPreview = validateGeneratedCode(previewStitched, componentName, scenes[i].durationInFrames);
-                  const maybePromise = onSceneCodeReady(i, validatedPreview);
-                  if (maybePromise?.catch) {
-                    maybePromise.catch((notifyErr) =>
-                      console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress notification failed (non-fatal): ${describeError(notifyErr)}`)
-                    );
-                  }
-                } catch (stitchErr) {
-                  console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress stitch/validate failed (non-fatal): ${describeError(stitchErr)}`);
+            // Notify a caller as soon as THIS scene's code is ready — in
+            // whatever order scenes actually resolve, not just scene 0.
+            // Lets a caller show live per-scene progress (e.g. a thumbnail
+            // filmstrip) well before the whole lesson finishes. Stitched
+            // into a standalone, self-contained single-scene composition
+            // (same technique as the final full-lesson stitch, just for
+            // one scene, using its REAL index so the wrapper references
+            // the right component name) so it's directly
+            // compilable/renderable on its own. Never fatal: a
+            // stitch/validate/notify failure here is logged and otherwise
+            // ignored — it must never affect the real lesson's
+            // generation, which already succeeded for this scene.
+            if (onSceneCodeReady) {
+              try {
+                const previewStitched = stitchLessonCode({
+                  header,
+                  sceneCodes: [code],
+                  scenes: [scenes[i]],
+                  componentName,
+                  sceneIndices: [i],
+                });
+                const validatedPreview = validateGeneratedCode(previewStitched, componentName, scenes[i].durationInFrames);
+                const maybePromise = onSceneCodeReady(i, validatedPreview);
+                if (maybePromise?.catch) {
+                  maybePromise.catch((notifyErr) =>
+                    console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress notification failed (non-fatal): ${describeError(notifyErr)}`)
+                  );
                 }
+              } catch (stitchErr) {
+                console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress stitch/validate failed (non-fatal): ${describeError(stitchErr)}`);
               }
+            }
 
-              return code;
-            })
-          )
-        );
-
-        // sceneCodes[i] is already set above for every fulfilled promise —
-        // this loop only needs to capture failures now.
-        results.forEach((r, idx) => {
-          const i = pendingIndices[idx];
-          if (r.status === "rejected") sceneErrors[i] = r.reason;
-        });
-      }
+            return code;
+          }).catch((err) => {
+            sceneErrors[i] = err;
+            throw err;
+          })
+        )
+      );
 
       const stillFailingIndices = scenes.map((_, i) => i).filter((i) => sceneCodes[i] === null);
       if (stillFailingIndices.length > 0) {
@@ -1594,7 +1676,7 @@ async function generateLessonCode(
           .map((i) => `scene ${i + 1} (${sceneComponentName(i)}): ${describeError(sceneErrors[i])}`)
           .join(" | ");
         throw contentError(
-          `${stillFailingIndices.length}/${scenes.length} scene(s) still failing after ${EXTRA_SCENE_RETRY_ROUNDS + 1} rounds: ${detail}`
+          `${stillFailingIndices.length}/${scenes.length} scene(s) still failing after ${SCENE_MAX_ATTEMPTS_PER_LESSON} attempts each: ${detail}`
         );
       }
 
@@ -1804,11 +1886,13 @@ module.exports = {
   // configured for lesson code (LESSON_CODE_MODEL=glm|deepseek|fable) instead
   // of a separately hardcoded model — one provider choice, one place to change it.
   LESSON_CODE_PROVIDER,
-  // "high"-reasoning variant of LESSON_CODE_PROVIDER, for the lesson-WIDE
-  // planning calls only (this file's own header generation, and
-  // sceneService.js's scene-plan generation) — see the comment where it's
-  // defined for why per-scene code generation deliberately does NOT use this.
+  // Used for this file's own header generation only — see the comment where
+  // it's defined for why per-scene code generation deliberately does NOT use
+  // this.
   HEADER_PROVIDER,
+  // Used by sceneService.js's generateScenePlan — GPT-5.6 Luna, not
+  // GLM/DeepSeek, see the comment where it's defined.
+  SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
   limitLessonHeaderCall,
   describeError,

@@ -18,11 +18,12 @@
 
 const OpenAI = require("openai");
 
-// GLM-5.2 via OpenRouter's OpenAI-compatible endpoint — same account/key as
-// the rest of the app's AI calls (see claudeService.js, ttsService.js).
-// maxRetries: the SDK auto-retries failed requests (including network
-// timeouts like ETIMEDOUT) this many times with backoff before giving up —
-// important for unstable connections. timeout: how long to wait per attempt.
+// GPT-5.6 Luna via OpenRouter's OpenAI-compatible endpoint — same
+// account/key as the rest of the app's AI calls (see claudeService.js,
+// ttsService.js). maxRetries: the SDK auto-retries failed requests
+// (including network timeouts like ETIMEDOUT) this many times with backoff
+// before giving up — important for unstable connections. timeout: how long
+// to wait per attempt.
 const client = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
   baseURL: "https://openrouter.ai/api/v1",
@@ -30,7 +31,7 @@ const client = new OpenAI({
   timeout: 60 * 1000,
 });
 
-const MODEL = "z-ai/glm-5.2"; // fast + cheap, fine for short MCQs
+const MODEL = "openai/gpt-5.6-luna"; // fast, fine for short MCQs (was DeepSeek V4 Flash)
 const MAX_QUESTIONS = 3;
 
 // Builds the system prompt that defines how the assessor behaves.
@@ -106,6 +107,13 @@ async function streamNextQuestion(topic, turns, onToken, maxAttempts = 3) {
         // add latency to what should feel instant, and writing one simple
         // self-report MCQ doesn't need it.
         reasoning: { enabled: false },
+        // Pin to OpenAI's own backend — mostly a formality for a closed
+        // model (unlike GLM/DeepSeek's open weights, OpenRouter has nowhere
+        // else to route this), kept for consistency with every other
+        // provider in this codebase (see claudeService.js's
+        // CODE_PROVIDERS.glm for why this matters much more for open-weight
+        // models).
+        provider: { only: ["openai"] },
         stream: true,
         messages: [
           { role: "system", content: buildSystemPrompt(topic) },
@@ -149,6 +157,7 @@ async function determineLevel(topic, turns) {
     model: MODEL,
     max_tokens: 50,
     reasoning: { enabled: false }, // a one-word verdict needs no reasoning
+    provider: { only: ["openai"] }, // pin to OpenAI's own backend — see streamNextQuestion's call above for why
     messages: [
       {
         role: "system",

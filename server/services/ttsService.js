@@ -3,8 +3,25 @@ const fs = require("fs");
 const OpenAI = require("openai");
 const { v4: uuidv4 } = require("uuid");
 const { parseBuffer } = require("music-metadata");
+const { createLimiter } = require("../utils/concurrencyLimiter");
 
 const FPS = 30;
+
+// GLOBAL cap on simultaneous TTS chunk requests, across ALL scenes in
+// flight at once — not per-scene. Chunking (see splitIntoTtsChunks below)
+// fixed Kokoro's per-call truncation bug, but each scene now fires several
+// chunk requests in parallel, and generateAllSceneAudio already runs
+// multiple SCENES concurrently — multiplying to a much bigger real
+// concurrency spike than the previous "1 request per scene" baseline ever
+// produced (a 140-190 word scene needs ~4-6 chunks; 5 concurrent scenes x
+// 5 chunks each is ~25 simultaneous requests). That spike produced the exact
+// same kind of "Connection error" failures under load that GLM's own
+// concurrency limiter (GLM_SCENE_MAX_CONCURRENT) was lowered to fix — this
+// is the equivalent fix for the TTS side. Default of 5 matches the
+// concurrency level that was already known to work reliably before chunking
+// existed (BATCH_SIZE scenes x 1 request each).
+const TTS_CHUNK_MAX_CONCURRENT = Number(process.env.TTS_CHUNK_MAX_CONCURRENT) || 5;
+const limitTtsChunkCall = createLimiter(TTS_CHUNK_MAX_CONCURRENT);
 
 const AUDIO_DIR = process.env.NODE_ENV === "production"
   ? "/data/audio"
@@ -23,27 +40,108 @@ const openai = new OpenAI({
   maxRetries: 0,       // handle retries manually below with backoff
 });
 
+// Kokoro (via this OpenRouter hosting) silently TRUNCATES any single call's
+// audio past roughly 240-290 characters (~36-52 words) — measured directly:
+// a 36-word/240-char input played fully at a natural ~150-165 words/minute
+// (14.30s), while 52-word/286-char and 143-word/962-char inputs BOTH got cut
+// short to the exact same 9.43s, no matter how much MORE text was fed in.
+// There's no error, warning, or short response — the returned audio is just
+// quietly shorter than the input narration calls for. This is why raising
+// the scene-plan's narration word-count target never produced longer
+// lessons: the extra words were being discarded by the TTS call, never
+// actually spoken. Fix: split narration into chunks safely under that
+// truncation boundary, generate each as its OWN TTS call, and concatenate
+// the resulting audio — the standard workaround for Kokoro's per-call length
+// cap (its documented ~510-token/~500-char context limit, though this
+// specific hosting's effective boundary measured tighter than that).
+const TTS_CHUNK_MAX_CHARS = 180; // comfortably under the measured ~240-290 char truncation boundary
+
+// Splits narration into TTS-safe chunks, always breaking on sentence
+// boundaries (never mid-sentence) so each chunk still sounds natural in
+// isolation. A single sentence longer than the limit (rare) falls back to a
+// word-level split for just that sentence, rather than sending it whole and
+// risking Kokoro truncating it mid-word.
+function splitIntoTtsChunks(text, maxChars = TTS_CHUNK_MAX_CHARS) {
+  const sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
+  const chunks = [];
+  let current = "";
+
+  for (const rawSentence of sentences) {
+    const sentence = rawSentence.trim();
+    if (!sentence) continue;
+
+    if (sentence.length > maxChars) {
+      if (current) {
+        chunks.push(current.trim());
+        current = "";
+      }
+      const words = sentence.split(/\s+/);
+      let wordChunk = "";
+      for (const word of words) {
+        const candidate = wordChunk ? `${wordChunk} ${word}` : word;
+        if (candidate.length > maxChars && wordChunk) {
+          chunks.push(wordChunk.trim());
+          wordChunk = word;
+        } else {
+          wordChunk = candidate;
+        }
+      }
+      if (wordChunk) chunks.push(wordChunk.trim());
+      continue;
+    }
+
+    const candidate = current ? `${current} ${sentence}` : sentence;
+    if (candidate.length > maxChars && current) {
+      chunks.push(current.trim());
+      current = sentence;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current.trim());
+
+  return chunks;
+}
+
+// Generates one narration chunk's audio — a single TTS call, no retry of its
+// own (a failure here bubbles up to generateSceneAudio's own retry loop,
+// which redoes every chunk for the scene from scratch; simpler than nested
+// per-chunk retries for a failure mode that's rare in practice).
+async function generateChunkAudio(chunkText) {
+  return limitTtsChunkCall(async () => {
+    const response = await openai.audio.speech.create({
+      model: "hexgrad/kokoro-82m",
+      voice: "af_nova",
+      input: chunkText,
+      response_format: "mp3",
+      speed: 1.0,
+    });
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const metadata = await parseBuffer(buffer, "audio/mpeg");
+    return { buffer, durationSeconds: metadata.format.duration };
+  });
+}
+
 // Generates audio for a single scene with manual retry + exponential backoff
 async function generateSceneAudio(scene, retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       console.log(`  [tts] Scene ${scene.id}: generating audio (attempt ${attempt}/${retries})...`);
 
-      // Kokoro 82M (hexgrad) via OpenRouter — "af_nova" is Kokoro's American
-      // Female "Nova" voice, the closest equivalent to the OpenAI "nova"
-      // voice this replaced. response_format explicit (not left to default)
-      // since the mp3 parsing below assumes it.
-      const response = await openai.audio.speech.create({
-        model: "hexgrad/kokoro-82m",
-        voice: "af_nova",
-        input: scene.narration,
-        response_format: "mp3",
-        speed: 1.0,
-      });
+      // "af_nova" is Kokoro's American Female "Nova" voice, the closest
+      // equivalent to the OpenAI "nova" voice this replaced.
+      const chunks = splitIntoTtsChunks(scene.narration);
+      // Chunks are independent TTS calls — fire them in parallel (order of
+      // the REQUESTS doesn't matter, only the order they're concatenated in
+      // afterward, which this preserves via .map's index-preserving results).
+      const chunkResults = await Promise.all(chunks.map((chunk) => generateChunkAudio(chunk)));
 
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const metadata = await parseBuffer(buffer, "audio/mpeg");
-      const durationSeconds = metadata.format.duration;
+      const buffer = Buffer.concat(chunkResults.map((c) => c.buffer));
+      // Summed from each chunk's OWN measured duration, not re-parsed from
+      // the concatenated file — more reliable than trusting an MP3 decoder
+      // to correctly sum duration across back-to-back frame streams that
+      // were never encoded as one continuous file.
+      const durationSeconds = chunkResults.reduce((sum, c) => sum + c.durationSeconds, 0);
       const durationInFrames = Math.ceil(durationSeconds * FPS);
 
       const fileName = `${uuidv4()}.mp3`;
@@ -84,11 +182,20 @@ async function generateSceneAudio(scene, retries = 3) {
   }
 }
 
-// Generates audio for all scenes with bounded concurrency (5 at a time).
-// Fully parallel (Promise.all over 13+ scenes) causes I/O contention on
-// constrained hosts — concurrent writeFileSync calls race each other and
+// Generates audio for all scenes with bounded concurrency (3 scenes at a
+// time). Fully parallel (Promise.all over 13+ scenes) causes I/O contention
+// on constrained hosts — concurrent writeFileSync calls race each other and
 // can produce truncated files. Batching keeps throughput high while
 // preventing the disk from being hammered by too many simultaneous writes.
+//
+// Lowered from 5 alongside adding limitTtsChunkCall above: real concurrency
+// to the TTS endpoint is now BATCH_SIZE scenes x however many chunks each
+// needs, not BATCH_SIZE requests — the chunk-level limiter caps the ACTUAL
+// simultaneous request count regardless of this number, but keeping fewer
+// scenes "active" at once also means fewer scenes each queuing several
+// chunks against that shared limiter simultaneously, so scenes finish in a
+// steadier, more predictable order instead of all partially progressing at
+// once.
 //
 // `onSceneAudioReady(index, measuredScene)` is optional — fires as soon as
 // EACH scene's own audio finishes (not just once the whole batch settles),
@@ -98,9 +205,9 @@ async function generateSceneAudio(scene, retries = 3) {
 // instead). Lets a caller show per-scene progress before code generation
 // even starts.
 async function generateAllSceneAudio(scenes, onSceneAudioReady) {
-  console.log(`  [tts] Generating ${scenes.length} audio clips (max 5 concurrent)...`);
+  const BATCH_SIZE = 3;
+  console.log(`  [tts] Generating ${scenes.length} audio clips (max ${BATCH_SIZE} scenes concurrent, max ${TTS_CHUNK_MAX_CONCURRENT} chunk requests concurrent)...`);
 
-  const BATCH_SIZE = 5;
   const enriched = [];
 
   for (let i = 0; i < scenes.length; i += BATCH_SIZE) {
