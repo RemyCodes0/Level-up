@@ -837,7 +837,7 @@ Y1. JSX style objects and SVG attributes are camelCase, never kebab: backgroundC
 Y2. JSX attribute names differ from HTML: class → className, for → htmlFor.
 Y3. Prefer string concatenation ("a" + b + "c") over template literals for dynamic colors/transforms/paths — zero risk of an unbalanced backtick. If you do use a template literal, every backtick must be paired (total count even); one stray backtick corrupts the whole rest of the file.
 Y4. Never put comma-separated expressions bare in JSX braces ({a, b} is invalid). Never write a literal { or } as JSX text ("f(x) = {x}" breaks parsing) — write braces as string expressions {"{"} or reword to avoid them.
-Y5. Any wrapper component you nest content inside MUST accept and render {children} ({ children }: { children?: React.ReactNode } … then {children} in its body). A wrapper missing {children} silently drops everything inside it — the #1 cause of blank scenes. If unsure, put the background as a sibling <AbsoluteFill> BEHIND the content instead of wrapping it.
+Y5. Any wrapper component you nest content inside MUST accept and render {children} ({ children } — NO type annotation; "React" is NOT imported/available here, so "React.ReactNode" or any other "React.X" type crashes with "React is not defined" … then {children} in its body). A wrapper missing {children} silently drops everything inside it — the #1 cause of blank scenes. If unsure, put the background as a sibling <AbsoluteFill> BEHIND the content instead of wrapping it.
 
 ════════ HEADER CRAFT ════════
 Your job is the FOUNDATION, not a scene. Concretely produce:
@@ -954,7 +954,7 @@ Y1. JSX style objects and SVG attributes are camelCase, never kebab: backgroundC
 Y2. JSX attribute names differ from HTML: class → className, for → htmlFor.
 Y3. Prefer string concatenation ("a" + b + "c") over template literals for dynamic colors/transforms/paths — zero risk of an unbalanced backtick. If you do use a template literal, every backtick must be paired (total count even); one stray backtick corrupts the whole rest of the file.
 Y4. Never put comma-separated expressions bare in JSX braces ({a, b} is invalid). Never write a literal { or } as JSX text ("f(x) = {x}" breaks parsing) — write braces as string expressions {"{"} or reword to avoid them.
-Y5. Any wrapper component you nest content inside MUST accept and render {children} ({ children }: { children?: React.ReactNode } … then {children} in its body). A wrapper missing {children} silently drops everything inside it — the #1 cause of blank scenes. If unsure, put the background as a sibling <AbsoluteFill> BEHIND the content instead of wrapping it.
+Y5. Any wrapper component you nest content inside MUST accept and render {children} ({ children } — NO type annotation; "React" is NOT imported/available here, so "React.ReactNode" or any other "React.X" type crashes with "React is not defined" … then {children} in its body). A wrapper missing {children} silently drops everything inside it — the #1 cause of blank scenes. If unsure, put the background as a sibling <AbsoluteFill> BEHIND the content instead of wrapping it.
 
 ════════ ANIMATION CRAFT — this is where the product lives ════════
 
