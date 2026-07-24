@@ -1,10 +1,10 @@
-// Runs scene-plan generation on SCENE_PLAN_PROVIDER (GPT-5.6 Luna, see
-// claudeService.js) — a deliberate, separate model choice from whichever
-// model LESSON_CODE_MODEL selects for the actual animation CODE, since this
-// is lighter structured JSON generation (scene timing, narration text,
-// visual descriptions), not code. No circular require risk: claudeService.js
-// never requires this file (only courseController.js does), so a top-level
-// require here is safe.
+// Runs scene-plan generation on SCENE_PLAN_PROVIDER (DeepSeek V4 Flash,
+// native API, see claudeService.js) — a deliberate, separate model choice
+// from whichever model LESSON_CODE_MODEL selects for the actual animation
+// CODE, since this is lighter structured JSON generation (scene timing,
+// narration text, visual descriptions), not code. No circular require risk:
+// claudeService.js never requires this file (only courseController.js
+// does), so a top-level require here is safe.
 const {
   SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
@@ -118,8 +118,8 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
 
       const { text, stopReason } = await streamCodeCompletion({
         limiter: limitLessonHeaderCall,
-        // GPT-5.6 Luna, reasoning off — see SCENE_PLAN_PROVIDER's
-        // definition in claudeService.js.
+        // DeepSeek V4 Flash, native API, reasoning off — see
+        // SCENE_PLAN_PROVIDER's definition in claudeService.js.
         provider: SCENE_PLAN_PROVIDER,
         systemPrompt: SCENE_PLAN_SYSTEM_PROMPT,
         userContent,

@@ -180,25 +180,34 @@ const HEADER_PROVIDER = (() => {
 
 // Scene-plan generation (the lesson-wide breakdown into 8-14 scenes — see
 // sceneService.js's generateScenePlan) runs on GPT-5.6 Luna instead of
-// GLM/DeepSeek — a deliberate, separate model choice from LESSON_CODE_PROVIDER/
-// HEADER_PROVIDER's own GLM selection, not something the LESSON_CODE_MODEL
-// env var affects. (Was DeepSeek V4 Flash — swapped for OpenAI's faster,
-// pricier tier; see the model comparison this choice was based on.)
+// GLM/whatever LESSON_CODE_MODEL selects — a deliberate, separate model
+// choice from LESSON_CODE_PROVIDER/HEADER_PROVIDER's own selection, not
+// something the LESSON_CODE_MODEL env var affects. History: DeepSeek V4
+// Flash -> swapped to GPT-5.6 Luna (OpenRouter) for speed/quality -> back to
+// DeepSeek V4 Flash, this time on DeepSeek's own native API directly instead
+// of OpenRouter (same migration CODE_PROVIDERS.deepseek and ttsService.js
+// already went through this session) — avoids this call sharing OpenRouter's
+// account balance/credit limits with GLM/Fable, and this call in particular
+// was hitting exactly that ("This request requires more credits...") even
+// after the lesson-CODE path had already moved to DeepSeek directly.
 const SCENE_PLAN_PROVIDER = {
-  client: openRouterClient,
-  model: "openai/gpt-5.6-luna",
-  // Reasoning off — matches this codebase's own finding that reasoning
-  // didn't pay off enough for GLM's equivalent one-per-lesson planning calls
-  // either; likely a no-op here since Luna is OpenAI's lightweight,
-  // non-reasoning tier, but harmless to state explicitly either way.
-  // `provider: { only: ["openai"] }` pins to OpenAI's own backend — mostly a
-  // formality for a closed/proprietary model (unlike GLM/DeepSeek's open
-  // weights, no third party can legally host OpenAI's own model, so
-  // OpenRouter has nowhere else to route this to regardless), but kept for
-  // consistency with every other provider entry in this file.
-  extraParams: { reasoning: { enabled: false }, provider: { only: ["openai"] } },
+  client: deepseekClient,
+  model: "deepseek-v4-flash",
+  // No `reasoning_effort` key at all — matches CODE_PROVIDERS.deepseek's
+  // HEADER_PROVIDER treatment: DeepSeek's native flat `reasoning_effort`
+  // field has no confirmed "off" sentinel, so omitting it entirely (rather
+  // than guessing a value) is the safest way to say "reasoning off" here.
+  // This is a fixed-shape JSON task (6 lessons, 20 questions), not code —
+  // it gets no benefit from chain-of-thought, and reasoning tokens would
+  // draw from the SAME max_tokens budget as the JSON output itself, so the
+  // whole budget should go to the JSON.
+  // No `provider` routing field either — that was purely an OpenRouter
+  // concept (picking which upstream backend serves a model); talking to
+  // DeepSeek's API directly means every request is already served by
+  // DeepSeek, so there's no routing choice left to make.
+  extraParams: {},
   maxTokens: 40000,
-  keyEnv: "OPENROUTER_API_KEY",
+  keyEnv: "DEEPSEEK_API_KEY",
 };
 
 console.log(
@@ -584,22 +593,23 @@ ${rules}
 
   let lastError = null;
 
-  // Course plan generation runs on SCENE_PLAN_PROVIDER (GPT-5.6 Luna) —
-  // same reasoning as sceneService.js's scene-plan call: a bounded,
-  // fixed-shape JSON task (6 lessons, 20 questions), not code, so it doesn't
-  // need to share whatever model LESSON_CODE_MODEL selects for the actual
-  // animation code. It gets no benefit from deep chain-of-thought either, and
-  // reasoning tokens draw from the SAME max_tokens budget as the JSON
-  // output, so strip any provider's `reasoning` setting and force it off for
-  // this call regardless of provider, so the whole budget goes to the JSON.
-  const { reasoning: _reasoning, ...planExtraParams } = SCENE_PLAN_PROVIDER.extraParams;
-
+  // Course plan generation runs on SCENE_PLAN_PROVIDER (DeepSeek V4 Flash,
+  // native API) — same reasoning as sceneService.js's scene-plan call: a
+  // bounded, fixed-shape JSON task (6 lessons, 20 questions), not code, so it
+  // doesn't need to share whatever model LESSON_CODE_MODEL selects for the
+  // actual animation code. SCENE_PLAN_PROVIDER's own extraParams already
+  // omits any reasoning-effort key entirely (see its own comment — no
+  // confirmed "off" sentinel for DeepSeek's native field), so there's
+  // nothing left to strip/force here the way the old OpenRouter-routed setup
+  // needed — this used to hardcode OpenRouter's unified `reasoning: {
+  // enabled: false }` shape regardless of provider, which is meaningless
+  // (and would've been silently ignored) now that this talks to DeepSeek's
+  // API directly.
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await SCENE_PLAN_PROVIDER.client.chat.completions.create({
         model: SCENE_PLAN_PROVIDER.model,
-        ...planExtraParams,
-        reasoning: { enabled: false },
+        ...SCENE_PLAN_PROVIDER.extraParams,
         max_tokens: 8000,
         messages,
       });
