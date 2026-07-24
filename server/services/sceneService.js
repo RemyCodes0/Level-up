@@ -118,14 +118,15 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
 
       const { text, stopReason } = await streamCodeCompletion({
         limiter: limitLessonHeaderCall,
-        // DeepSeek V4 Flash, native API, reasoning off — see
+        // DeepSeek V4 Flash, native API, reasoning effort "low" — see
         // SCENE_PLAN_PROVIDER's definition in claudeService.js.
         provider: SCENE_PLAN_PROVIDER,
         systemPrompt: SCENE_PLAN_SYSTEM_PROMPT,
         userContent,
-        // 40000 is generous headroom for a plain JSON scenes array (no
-        // reasoning tax to eat into it, reasoning is off) — plenty of margin
-        // over what 8-14 scenes of narration/visualDescription actually need.
+        // 40000 is generous headroom for a plain JSON scenes array — even
+        // with "low" reasoning eating into this same budget, still plenty
+        // of margin over what 8-14 scenes of narration/visualDescription
+        // actually need.
         maxOutputTokens: 40000,
       });
 

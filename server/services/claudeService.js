@@ -193,19 +193,19 @@ const HEADER_PROVIDER = (() => {
 const SCENE_PLAN_PROVIDER = {
   client: deepseekClient,
   model: "deepseek-v4-flash",
-  // No `reasoning_effort` key at all — matches CODE_PROVIDERS.deepseek's
-  // HEADER_PROVIDER treatment: DeepSeek's native flat `reasoning_effort`
-  // field has no confirmed "off" sentinel, so omitting it entirely (rather
-  // than guessing a value) is the safest way to say "reasoning off" here.
-  // This is a fixed-shape JSON task (6 lessons, 20 questions), not code —
-  // it gets no benefit from chain-of-thought, and reasoning tokens would
-  // draw from the SAME max_tokens budget as the JSON output itself, so the
-  // whole budget should go to the JSON.
-  // No `provider` routing field either — that was purely an OpenRouter
-  // concept (picking which upstream backend serves a model); talking to
-  // DeepSeek's API directly means every request is already served by
-  // DeepSeek, so there's no routing choice left to make.
-  extraParams: {},
+  // reasoning effort "low" — matches CODE_PROVIDERS.deepseek's own current
+  // setting for the lesson CODE path. This is a fixed-shape JSON task (6
+  // lessons, 20 questions), not code, and reasoning tokens draw from the
+  // SAME max_tokens budget as the JSON output itself, so a lighter effort
+  // tier leaves more of that budget for the actual JSON — but "low" (rather
+  // than omitting the key entirely) keeps a little reasoning budget for
+  // getting the lesson breakdown/sequencing right, which matters more for
+  // course-level structure than it does for pure narration-JSON word counts.
+  // No `provider` routing field — that was purely an OpenRouter concept
+  // (picking which upstream backend serves a model); talking to DeepSeek's
+  // API directly means every request is already served by DeepSeek, so
+  // there's no routing choice left to make.
+  extraParams: { reasoning_effort: "low" },
   maxTokens: 40000,
   keyEnv: "DEEPSEEK_API_KEY",
 };
