@@ -906,6 +906,7 @@ Your job is the FOUNDATION, not a scene. Concretely produce:
   • The palette + motif consts/components described above, named clearly (e.g. PALETTE, Backdrop, Motif) so scenes can reference them without guessing.
   • The ZONES const from S5 — every scene relies on these exact numbers to avoid stacking text on text or letting a diagram creep into the text bands.
   • Any other TRULY shared utility worth extracting once (e.g. a Label component, a Panel/frame component) — only if more than one scene would plausibly need it. Do not invent scene-specific content; you have not been told what any individual scene shows.
+  • If this lesson's subject involves direction, vectors, forces, or angles (physics, math, engineering, navigation) — build shared Arrow({from,to,...}) and AngleArc({vertex,...}) helpers here using the exact atan2-based math described in the scene rules' §C2, so every scene reuses the SAME correct direction/angle geometry instead of each one re-deriving it independently.
   • Never leave a "TODO" or placeholder — every const/component you declare must be complete, working code a scene could use immediately.
 
 ════════ CODE QUALITY ════════
@@ -1044,6 +1045,58 @@ Y5. Any wrapper component you nest content inside MUST accept and render {childr
    • Proportion: the main diagram dominates (~40-60% of frame width) in ZONES.diagram; labels are subordinate to what they label; contained items are a small fraction of their container; clamp any animated size to a sane range (a radius formula that can hit 0 or 900 is a bug).
    • NO SHAPE-ON-SHAPE OVERLAP IS A MECHANICAL CHECK, NOT A JUDGMENT CALL: list your major elements' (x, y, radius-or-half-width) at 3 checkpoints — scene start, the mid-pacing stage from §B, and the end. For each pair of elements simultaneously visible (opacity > 0) at a checkpoint, their centers must be farther apart than the sum of their radii/half-widths, i.e. no two bounding boxes intersect. If two elements are close, either increase the gap between their anchor coordinates or stagger their entrances (§B) so they're never both fully opaque at the same frame.
 
+§C2 — ARROWS, VECTORS & ANGLES. Wrong arrow direction and wrong angle arcs are almost always the SAME root cause as §C: the angle/sweep was hand-guessed or hand-typed instead of computed from the same coordinates that drew the thing it points at. Never hardcode a rotation degree, never eyeball an arrowhead's orientation.
+   • DIRECTION IS ALWAYS atan2, NEVER GUESSED: for an arrow/vector from a point "from" to a point "to", the correct angle is:
+       const dx = to.x - from.x, dy = to.y - from.y;
+       const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+     This works with ZERO extra sign flip or "y-axis correction" — screen/SVG coordinates already have y increasing downward, and both Math.atan2(dy,dx) and CSS/SVG rotate() treat positive degrees as CLOCKWISE in that same coordinate space, so they agree automatically. Do NOT negate angleDeg and do NOT swap dx/dy "to fix the direction" — if an arrow points wrong, the bug is almost always a stale/wrong (from, to) pair, not the rotation formula.
+   • ARROWHEAD PATTERN (nest inside your scene function): draw the shaft and head from the SAME from/to, so the head can never point a different way than the shaft:
+       function Arrow({ from, to, color, width }: { from: { x: number; y: number }; to: { x: number; y: number }; color: string; width: number }) {
+         const dx = to.x - from.x, dy = to.y - from.y;
+         const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+         return (
+           <svg style={{ position: "absolute", left: 0, top: 0, overflow: "visible", pointerEvents: "none" }}>
+             <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={color} strokeWidth={width} />
+             <g transform={"translate(" + to.x + "," + to.y + ") rotate(" + angleDeg + ")"}>
+               <polygon points={"0,0 -18,-9 -18,9"} fill={color} />
+             </g>
+           </svg>
+         );
+       }
+     The arrowhead polygon is authored pointing toward +x (angle 0) at the origin; rotating the whole <g> by angleDeg after translating to "to" is what aims it — never rotate the polygon's own point coordinates by hand.
+   • A MOVING TARGET MEANS A MOVING ANGLE: if "to" (or "from") is animated, angleDeg MUST be recomputed from the SAME live from/to values every frame (read them from the §C anchor const, do not cache the angle from frame 0) — this is the vector-arrow version of "an arrow pointing at nothing".
+   • ANGLE ARCS BETWEEN TWO RAYS (e.g. showing the angle at a vertex between two lines): compute each ray's angle with the SAME atan2 pattern from the vertex to a point on that ray — never type the angle as a literal degree guess:
+       const angle1 = Math.atan2(rayEnd1.y - vertex.y, rayEnd1.x - vertex.x) * 180 / Math.PI;
+       const angle2 = Math.atan2(rayEnd2.y - vertex.y, rayEnd2.x - vertex.x) * 180 / Math.PI;
+       function AngleArc({ vertex, angle1, angle2, radius, color }: { vertex: { x: number; y: number }; angle1: number; angle2: number; radius: number; color: string }) {
+         let delta = angle2 - angle1;
+         delta = ((delta + 180) % 360 + 360) % 360 - 180; // normalize to (-180, 180] — the SHORT way around, matching the visible angle between the rays
+         const sweep = delta >= 0 ? 1 : 0;
+         const toRad = (d: number) => d * Math.PI / 180;
+         const x1 = vertex.x + radius * Math.cos(toRad(angle1)), y1 = vertex.y + radius * Math.sin(toRad(angle1));
+         const x2 = vertex.x + radius * Math.cos(toRad(angle1 + delta)), y2 = vertex.y + radius * Math.sin(toRad(angle1 + delta));
+         const d = "M " + x1 + " " + y1 + " A " + radius + " " + radius + " 0 0 " + sweep + " " + x2 + " " + y2;
+         return <svg style={{ position: "absolute", left: 0, top: 0, overflow: "visible", pointerEvents: "none" }}><path d={d} stroke={color} strokeWidth={3} fill="none" /></svg>;
+       }
+     Put any angle-value label at the BISECTOR, not a guessed offset: labelAngleDeg = angle1 + delta / 2, positioned at vertex + (radius + 24) in that direction (same toRad/cos/sin as above) — never a hardcoded label offset that only happens to look right for one specific pair of angles.
+
+§C3 — PROGRESSIVE CIRCLE / ARC REVEAL. A circle or arc that "draws itself" over time is a stroke-dasharray reveal, NOT a per-frame recomputed path — hand-recomputing an SVG arc's "A" command every frame is the #1 source of a progressive circle that looks subtly WRONG (starts from the wrong point, seems to draw backward, or suddenly jumps partway through), because it requires a large-arc-flag that must flip from 0 to 1 exactly when the swept angle crosses 180° and that flip is easy to get backwards or forget.
+   • DEFAULT TO THIS PATTERN for any circle/ring that fills in over time (progress bars, orbit traces, a ring closing around a target):
+       const r = 140;
+       const circumference = 2 * Math.PI * r;
+       const progress = interpolate(frame, [30, 150], [0, 1], CLAMP); // 0 = empty, 1 = fully drawn
+       <circle
+         cx={center.x} cy={center.y} r={r} fill="none" stroke={color} strokeWidth={6}
+         strokeDasharray={circumference}
+         strokeDashoffset={circumference * (1 - progress)}
+         transform={"rotate(-90 " + center.x + " " + center.y + ")"}
+         strokeLinecap="round"
+       />
+     Two details are EXACTLY what makes this "feel off" when skipped — both are silent, no-crash bugs, so they must be gotten right by construction, not caught by testing:
+       - transform="rotate(-90 cx cy)" is REQUIRED: an SVG <circle>'s stroke path always starts at its rightmost point (3 o'clock / angle 0) and draws CLOCKWISE from there. Without this rotation the circle visibly starts drawing from 3 o'clock instead of the top (12 o'clock) — reads as "wrong" even though every number is technically correct.
+       - strokeDashoffset MUST be circumference * (1 - progress), never circumference * progress. Dashoffset shifts the dash pattern BACKWARD along the path, so it has to SHRINK as progress grows (progress=0 → offset=circumference, fully hidden; progress=1 → offset=0, fully revealed). Inverting this makes the circle appear to erase itself, or start fully drawn and vanish, instead of drawing in.
+   • ONLY use a hand-built path "A" arc (as in AngleArc, §C2) when you need a FIXED start/end angle that isn't a simple 0→1 fill (e.g. always show just the top-right quarter) — and even then, derive both angles from atan2 per §C2, never from a growing "progress" value multiplied into a degree count by hand.
+
 §D — READABLE TEXT LAYER. Use the header's ZONES for every text block: titles live in ZONES.title, captions in ZONES.caption (e.g. position with top: ZONES.title.yMin or top: ZONES.caption.yMin), and keep the diagram — including its full motion range, clamped per S5 — entirely inside ZONES.diagram; never let a clamped diagram position cross into ZONES.title or ZONES.caption. Give text a zIndex above the diagram plus a textShadow (or subtle dark backing) for contrast over any color. Body ≥28px, titles ≥36px.
    NON-OVERLAP IS MECHANICAL, NOT A JUDGMENT CALL: if two text blocks occupy the SAME zone one after another (e.g. two captions), the second block's fade-in START frame must be a LITERAL number that is ≥ the first block's fade-out END frame — compute both as adjacent literals together, e.g. first caption fades out over [140, 170], second caption fades in starting at exactly 170 (not 150, not "whenever it looks right"). Never write two interpolate() calls for the same zone whose opacity ranges can both be > 0 at the same frame.
    TOTAL READABLE-TEXT CAP: count every simultaneously-visible text item across ALL zones at any single frame — title + caption + diagram labels combined. Keep that count to roughly 4-5 at most. A frame that's technically non-overlapping but crammed with 10 small labels still reads as cluttered and confusing — the same INFORMATION BUDGET from §A applies to the whole frame, not just the diagram.
@@ -1152,6 +1205,8 @@ Notice: the window NARROWS across the whole duration (staged progress, §B), the
 • Every style key camelCase; no class=/for=; backtick count even; no bare braces in JSX text; every content-wrapper renders {children}.
 • Motion on every frame but motivated (§B); the mechanism visibly progresses start→end (§A); related elements share one anchor (§C).
 • RAN THE §C OVERLAP CHECK at start/mid/end: no two simultaneously-visible elements' bounding boxes intersect.
+• ANY arrow/vector direction and any angle-arc sweep is COMPUTED via Math.atan2 from live from/to/vertex coordinates (§C2) — not a hardcoded rotation degree, not hand-guessed, and recomputed every frame if its endpoints move.
+• ANY progressively-drawn circle/ring uses the strokeDasharray/strokeDashoffset pattern with rotate(-90 cx cy) and offset = circumference * (1 - progress) (§C3) — not a hand-recomputed arc path.
 • Every text block sits in its ZONES band (title/diagram/caption never cross into each other, §D); onScreenText rendered verbatim, legible; any two text blocks sharing a zone have adjacent, non-overlapping fade frames, never both opacity > 0 at once.
 • COUNT your simultaneously-visible text items at the busiest frame (title + caption + diagram labels) — if it's above ~4-5, cut labels or stage them across the timeline instead (§A, §D). A crowded frame is a FAIL even with zero overlap.
 • Uses the header's palette/motif/ZONES — does not invent new ones.
