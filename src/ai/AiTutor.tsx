@@ -46,7 +46,7 @@ import {
   Award, TrendingUp, TrendingDown, ClipboardList, Trophy,
   X, Check, PanelLeft, PenSquare, GraduationCap, Loader2, Trash2, XCircle,
   CreditCard, Zap, Minus, Plus, MessageSquare, Share2, Globe2,
-  User as UserIcon, LogOut, ChevronsUpDown,
+  User as UserIcon, LogOut, ChevronsUpDown, Search,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -1140,7 +1140,13 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
   user: { name: string; email: string; role?: string } | null;
   onLogout: () => void;
 }) {
-  const groups = history.reduce<Record<string, HistoryEntry[]>>((acc, e) => {
+  const [searchQuery, setSearchQuery] = useState("");
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const filteredHistory = trimmedQuery
+    ? history.filter((e) => e.fileName.toLowerCase().includes(trimmedQuery))
+    : history;
+
+  const groups = filteredHistory.reduce<Record<string, HistoryEntry[]>>((acc, e) => {
     const diffDays = Math.floor((Date.now() - e.createdAt.getTime()) / 86400000);
     const label = diffDays === 0 ? "Today" : diffDays === 1 ? "Yesterday" : diffDays <= 7 ? "Previous 7 days" : diffDays <= 30 ? "Previous 30 days" : e.createdAt.toLocaleString("default", { month: "long", year: "numeric" });
     if (!acc[label]) acc[label] = [];
@@ -1210,6 +1216,29 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
         </div>
       )}
 
+      {history.length > 0 && (
+        <div className="px-3 pt-3 pb-1">
+          <div className="relative">
+            <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search courses…"
+              className="w-full pl-8 pr-7 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 transition-all"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-all"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <nav className="flex-1 overflow-y-auto py-2">
         {history.length === 0 ? (
           <div className="px-4 py-8 text-center">
@@ -1231,6 +1260,11 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
                 <p className="text-xs text-slate-400 mt-0.5">Generate one to get started.</p>
               </>
             )}
+          </div>
+        ) : filteredHistory.length === 0 ? (
+          <div className="px-4 py-8 text-center">
+            <Search className="h-7 w-7 text-slate-300 mx-auto mb-2" />
+            <p className="text-xs text-slate-400">No courses match "{searchQuery.trim()}".</p>
           </div>
         ) : sortedGroups.map((group) => (
           <div key={group} className="mb-1">
