@@ -76,8 +76,8 @@ Rules:
 // duration is derived directly from its OWN measured audio length, so a
 // too-short narration means a too-short scene, not a sync bug).
 //
-// Calibrated to this project's ACTUAL TTS voice (Kokoro/af_nova via
-// OpenRouter, chunked — see ttsService.js's splitIntoTtsChunks), measured
+// Calibrated to this project's TTS voice AT THE TIME (Kokoro/af_nova via
+// OpenRouter, chunked to work around a per-call truncation bug), measured
 // directly: 22-36 word inputs played fully at a natural ~150-165 words/
 // minute. 15 seconds at that rate needs ~38-41 words; this floor sits just
 // under that so a legitimately terse-but-complete scene isn't rejected,
@@ -85,6 +85,10 @@ Rules:
 // (NOT the ~330wpm figure from an earlier, mistaken measurement — that
 // number came from measuring TTS audio that was being silently truncated by
 // a since-fixed Kokoro bug, not the model's real speaking rate.)
+// ttsService.js has since moved back to OpenAI's tts-1/"nova" directly (no
+// more chunking — tts-1 has no per-call truncation limit) — this floor's
+// wpm basis hasn't been re-measured against that voice's actual speaking
+// rate, so treat it as a reasonable carryover estimate, not a verified one.
 const MIN_NARRATION_WORDS = 40;
 
 // Mechanical check, not a judgment call — see the comment above

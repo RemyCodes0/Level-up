@@ -63,6 +63,7 @@ function App() {
       <Route path="/tutors/:id" element={<TutorProfilePage/>}/>
       <Route path="/tutors" element={<TutorsPage/>}/>
       <Route path="/ai_tutor" element={<AILearningPage/>}/>
+      <Route path="/ai_tutor/:courseId" element={<AILearningPage/>}/>
       <Route path="/ai_showcase" element={<ShowcasePage/>}/>
       <Route path="/ai_admin" element={<AdminDashboard/>}/>
       <Route path="/bookings" element={<BookingsPage/>}/>

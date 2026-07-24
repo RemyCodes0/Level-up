@@ -1,6 +1,7 @@
 import { Player } from "@remotion/player";
 import type { PlayerRef } from "@remotion/player";
-import { useRef, useEffect, useState, useCallback } from "react";
+import { Component as ReactComponent, useRef, useEffect, useState, useCallback } from "react";
+import type { ErrorInfo, ReactNode } from "react";
 import {
   Loader2, RefreshCw, Play, Pause, Volume2, VolumeX,
   Maximize2, Minimize2, RotateCcw, SkipBack, SkipForward,
@@ -46,6 +47,41 @@ function formatTime(frame: number, fps: number): string {
   const m = Math.floor(totalSeconds / 60);
   const s = totalSeconds % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// Shared crash UI — used both by DynamicPlayer's own render-time error state
+// below (compile errors, Remotion Player "error" events) AND by
+// PlayerErrorBoundary further down (crashes that happen BEFORE DynamicPlayer
+// even reaches those — see PlayerErrorBoundary's own comment). Factored out
+// once so both paths show the identical message instead of two near-copies
+// drifting apart over time.
+function PlayerErrorFallback({ onRetry, retrying, phase = "preparing" }: { onRetry?: () => void; retrying?: boolean; phase?: "preparing" | "playing" }) {
+  return (
+    <div
+      style={{ aspectRatio: "16/9" }}
+      className="flex flex-col items-center justify-center bg-slate-900 rounded-xl text-red-400 text-sm p-6 text-center"
+    >
+      <p className="font-semibold mb-1">This animation hit an error</p>
+      <p className="text-red-400/60 text-xs max-w-sm">
+        Something went wrong while {phase} this lesson's animation.
+        Regenerating it usually fixes this.
+      </p>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          disabled={retrying}
+          className="mt-4 px-4 py-2 rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 hover:text-red-200 transition-all text-xs font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {retrying ? (
+            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Regenerating…</>
+          ) : (
+            <><RefreshCw className="h-3.5 w-3.5" /> Regenerate this lesson</>
+          )}
+        </button>
+      )}
+      {!onRetry && <p className="text-red-500/50 text-xs mt-2">Try regenerating this lesson</p>}
+    </div>
+  );
 }
 
 // ── Custom control bar ──────────────────────────────────────────────────────
@@ -497,32 +533,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   }, [error]);
 
   if (error || renderError) {
-    return (
-      <div
-        style={{ aspectRatio: "16/9" }}
-        className="flex flex-col items-center justify-center bg-slate-900 rounded-xl text-red-400 text-sm p-6 text-center"
-      >
-        <p className="font-semibold mb-1">This animation hit an error</p>
-        <p className="text-red-400/60 text-xs max-w-sm">
-          Something went wrong while {renderError ? "playing" : "preparing"} this
-          lesson's animation. Regenerating it usually fixes this.
-        </p>
-        {onRetry && (
-          <button
-            onClick={onRetry}
-            disabled={retrying}
-            className="mt-4 px-4 py-2 rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 hover:text-red-200 transition-all text-xs font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {retrying ? (
-              <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Regenerating…</>
-            ) : (
-              <><RefreshCw className="h-3.5 w-3.5" /> Regenerate this lesson</>
-            )}
-          </button>
-        )}
-        {!onRetry && <p className="text-red-500/50 text-xs mt-2">Try regenerating this lesson</p>}
-      </div>
-    );
+    return <PlayerErrorFallback onRetry={onRetry} retrying={retrying} phase={renderError ? "playing" : "preparing"} />;
   }
 
   if (!Component) {
@@ -642,3 +653,63 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
     </div>
   );
 };
+
+interface PlayerErrorBoundaryProps {
+  onRetry?: () => void;
+  retrying?: boolean;
+  children: ReactNode;
+}
+interface PlayerErrorBoundaryState {
+  hasError: boolean;
+}
+
+// Catches crashes that happen BEFORE DynamicPlayer even reaches Remotion's
+// own <Player> — which has its OWN error containment (the "error" event
+// listener above + its errorFallback prop), but only for crashes that occur
+// DURING normal frame rendering, AFTER <Player> has already mounted. A real
+// incident: AI-generated code called a React hook (useMemo/useCallback/
+// useRef) at the top level of its script instead of inside its component
+// function. That call executes the moment useCompilation's own useMemo runs
+// it (see useCompilation.ts), which happens INSIDE DynamicPlayer's OWN
+// render, before <Player> is ever reached — so Remotion's containment can't
+// help, and (confirmed: no ErrorBoundary existed anywhere in this app before
+// this) nothing else did either. The crash propagated all the way to the
+// React root and took down the ENTIRE page to a blank white screen, not just
+// this one lesson's player.
+//
+// validateCode.js's static checks (checkHooksCalledOutsideFunction and
+// friends) reduce how often broken generated code reaches the browser at
+// all, but can never reach zero — there will always be some crash pattern
+// not yet anticipated there. This is the last-resort containment that
+// matters regardless of how good upstream validation gets: whatever slips
+// through should cost this ONE lesson's player, never the whole app.
+//
+// A React class component is the only way to implement this — there is no
+// hooks-based equivalent for componentDidCatch/getDerivedStateFromError.
+// Keyed by `code` at the call site (VideoPlayer in AiTutor.tsx) so a
+// successful regenerate — which replaces `code` with freshly generated code
+// — mounts a BRAND NEW boundary instance instead of staying stuck showing
+// the previous crash forever.
+export class PlayerErrorBoundary extends ReactComponent<PlayerErrorBoundaryProps, PlayerErrorBoundaryState> {
+  constructor(props: PlayerErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // Console-only, like every other crash-detail path in this file — never
+    // surfaced in the UI (could reveal internals of the generated code).
+    console.error("[PlayerErrorBoundary] Caught a crash rendering the lesson player:", error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <PlayerErrorFallback onRetry={this.props.onRetry} retrying={this.props.retrying} phase="preparing" />;
+    }
+    return this.props.children;
+  }
+}

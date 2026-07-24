@@ -5,6 +5,7 @@ import { Helmet } from "react-helmet-async";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -28,7 +29,7 @@ import { getProgress, markLessonWatched } from "../api/ProgressApi";
 import { submitQuiz as submitQuizApi, getLatestAttempt } from "../api/QuizApi";
 import type { QuizResult } from "../api/QuizApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
-import { DynamicPlayer } from "../remotion/DynamicPlayer";
+import { DynamicPlayer, PlayerErrorBoundary } from "../remotion/DynamicPlayer";
 import { Thumbnail } from "@remotion/player";
 import { useCompilation } from "../remotion/useCompilation";
 import { ReferralCard } from "../components/ReferralCard";
@@ -47,7 +48,7 @@ import {
   CreditCard, Zap, Minus, Plus, MessageSquare, Share2, Globe2,
   User as UserIcon, LogOut, ChevronsUpDown,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
@@ -479,6 +480,86 @@ function UploadPhase({ onGenerate, credits }: {
 const GENERATION_PHASES = ["Planning the scenes…", "Writing narration…", "Recording the voiceover…", "Animating the lesson…"];
 const SCENE_BLOCK_COUNT = 8;
 
+// Shown while a course's full details (lesson code, quiz questions) are
+// being fetched from the server — see restoreEntry's lazy code-backfill
+// fetch and the URL-reading effect in AILearningPage, both of which only
+// run once per course per session (the sidebar's list endpoint deliberately
+// excludes this heavy data — see courseController.js's listCoursesHandler —
+// so opening a course pays one network round trip the first time). This is
+// DELIBERATELY distinct from GeneratingLessonPreview below: that one means
+// "the server is still generating this lesson," this one means "the lesson
+// is already done, we're just fetching it to this browser" — conflating the
+// two was exactly the reported bug (a finished lesson looking stuck
+// "generating" with no way to tell it apart from a genuinely mid-generation
+// one). Plain content-shape placeholders (YouTube/most modern apps' loading
+// pattern) rather than the richer generation-specific animation, since
+// there's no real per-scene progress to show here — just "still loading."
+// A more visible alternative to plain shadcn <Skeleton> (which only pulses
+// opacity) — a diagonal light sweep crossing each box right-to-left, same
+// "angled gradient animated via background-position" technique used by most
+// modern skeleton screens (YouTube, LinkedIn, etc.). Built on top of
+// <Skeleton> (keeps its base color/rounding), the sweep itself is a second,
+// angled gradient layered on top via backgroundImage, animated by sliding
+// backgroundPosition from off-screen-right to off-screen-left. `count` lets
+// each box start its sweep at a different point in the cycle (a shared
+// negative animationDelay) so a grid of them doesn't all sweep in unison,
+// which reads as more alive — same staggering idea GeneratingLessonPreview
+// below already uses for its own filmstrip blocks.
+const SKELETON_SHIMMER_KEYFRAMES = `
+  @keyframes course-skeleton-sweep {
+    0% { background-position: 150% 0; }
+    100% { background-position: -50% 0; }
+  }
+`;
+
+function ShimmerBox({ className, style, delay = 0 }: { className?: string; style?: React.CSSProperties; delay?: number }) {
+  return (
+    <Skeleton
+      className={className}
+      style={{
+        ...style,
+        backgroundImage: "linear-gradient(110deg, transparent 35%, rgba(255,255,255,0.85) 50%, transparent 65%)",
+        backgroundSize: "250% 100%",
+        animation: `course-skeleton-sweep 1.7s ease-in-out infinite`,
+        animationDelay: `${delay}s`,
+      }}
+    />
+  );
+}
+
+function LessonListSkeleton({ count = 6 }: { count?: number }) {
+  return (
+    <div className="px-4 space-y-1" aria-hidden="true">
+      <style>{SKELETON_SHIMMER_KEYFRAMES}</style>
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="flex items-start gap-3 py-3">
+          <ShimmerBox className="h-4 w-4 rounded-full mt-0.5 shrink-0" delay={i * 0.12} />
+          <div className="min-w-0 flex-1 space-y-2">
+            <ShimmerBox className="h-3 w-3/4" delay={i * 0.12} />
+            <ShimmerBox className="h-2.5 w-1/2" delay={i * 0.12} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Mirrors the real main-content pane's shape (a 16:9 video area + a row of
+// action buttons below it) so the swap-in of real content doesn't visually
+// jump once it arrives.
+function CourseContentSkeleton() {
+  return (
+    <div className="space-y-6" aria-hidden="true">
+      <style>{SKELETON_SHIMMER_KEYFRAMES}</style>
+      <ShimmerBox className="w-full rounded-xl" style={{ aspectRatio: "16/9" }} />
+      <div className="flex items-center justify-between gap-2 pt-2">
+        <ShimmerBox className="h-9 w-24 rounded-lg" delay={0.15} />
+        <ShimmerBox className="h-9 w-36 rounded-lg" delay={0.3} />
+      </div>
+    </div>
+  );
+}
+
 function GeneratingLessonPreview() {
   const [phase, setPhase] = useState(0);
   useEffect(() => {
@@ -686,15 +767,24 @@ function VideoPlayer({
   return (
     <div className="space-y-4">
       <div className="relative">
-        <DynamicPlayer
-          key={`lesson-${lessonNumber}-full`}
-          code={lesson.code}
-          durationInFrames={lesson.totalFrames ?? 3600}
-          onEnded={handleEnded}
-          onRetry={onRetry}
-          retrying={retrying}
-          onFrameUpdate={handleFrameUpdate}
-        />
+        {/* PlayerErrorBoundary is keyed by the lesson's OWN code — a crash
+            here (e.g. bad generated code calling a hook outside its
+            component, before DynamicPlayer ever reaches Remotion's <Player>)
+            would otherwise take down the whole app, not just this player.
+            A successful "Regenerate this lesson" replaces `code`, changing
+            this key so the boundary mounts fresh instead of staying stuck
+            on the previous crash. */}
+        <PlayerErrorBoundary key={lesson.code ?? "no-code"} onRetry={onRetry} retrying={retrying}>
+          <DynamicPlayer
+            key={`lesson-${lessonNumber}-full`}
+            code={lesson.code}
+            durationInFrames={lesson.totalFrames ?? 3600}
+            onEnded={handleEnded}
+            onRetry={onRetry}
+            retrying={retrying}
+            onFrameUpdate={handleFrameUpdate}
+          />
+        </PlayerErrorBoundary>
         {showUpNext && (
           <div className="absolute bottom-4 right-4 z-10 bg-slate-900/95 backdrop-blur rounded-xl shadow-xl border border-white/10 p-3 flex items-center gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="min-w-0">
@@ -1207,12 +1297,22 @@ function LessonStatusIcon({ status, completed, isActive }: { status: LessonStatu
 }
 
 export default function AILearningPage() {
-  const [phase, setPhase] = useState<AppPhase>("upload");
+  const router = useNavigate();
+  // Read BEFORE `phase`/`courseDetailsLoading` below, specifically so their
+  // OWN initial state can depend on it (see those lazy initializers) — a
+  // direct load/refresh of /ai_tutor/:courseId must never show the "upload a
+  // new course" page even for the single frame before any effect has had a
+  // chance to run. `phase` defaulting to plain "upload" regardless of the
+  // URL was exactly the old bug: refreshing on a course's URL would flash
+  // (or, if the fetch was slow/failing, effectively get stuck showing) the
+  // new-course page before the URL-reading effect below finally corrected
+  // it.
+  const { courseId: urlCourseId } = useParams<{ courseId?: string }>();
+  const [phase, setPhase] = useState<AppPhase>(() => (urlCourseId ? "course" : "upload"));
   const [fileName, setFileName] = useState("");
   // Holds the topic + file the user submitted, while the optional level-check
   // chat runs, before we actually kick off generation.
   const [pendingGeneration, setPendingGeneration] = useState<{ name: string; file?: File | null } | null>(null);
-  const router = useNavigate();
   const [lessons, setLessons] = useState<Lesson[]>(MOCK_LESSONS);
   const [lessonStatuses, setLessonStatuses] = useState<LessonStatus[]>(MOCK_LESSONS.map(() => "generating"));
   const [activeSection, setActiveSection] = useState<CourseSection>("video");
@@ -1229,6 +1329,17 @@ export default function AILearningPage() {
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+  // True during the lazy course-detail fetch (restoreEntry's code-backfill
+  // branch, or the URL-reading effect below) — drives LessonListSkeleton/
+  // CourseContentSkeleton so a course that's actually ready doesn't look
+  // indistinguishable from one still generating on the server while its
+  // details are simply in flight to this browser. Starts true (not false)
+  // when the URL already names a course — same reasoning as `phase` above:
+  // a direct load/refresh is ABOUT to fetch that course on the very next
+  // effect tick, so starting false here would flash MOCK_LESSONS'
+  // placeholder content for a frame before the URL-reading effect even gets
+  // a chance to set it true itself.
+  const [courseDetailsLoading, setCourseDetailsLoading] = useState(() => !!urlCourseId);
 
   // course_completed: fire once, only for courses generated in THIS session
   // (startedCoursesRef), the first time all their lessons finish. Guards prevent
@@ -1278,6 +1389,13 @@ export default function AILearningPage() {
 
   const bgTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const pollCancelRef = useRef<(() => void) | null>(null);
+  // Mirrors activeHistoryId for use inside async callbacks (e.g. restoreEntry's
+  // one-off code-backfill fetch below) that need to check, AT RESOLUTION TIME,
+  // whether the user is still even looking at the course that fetch was for —
+  // reading `activeHistoryId` state directly from a closure captured before
+  // an await would only ever see the value from when the closure was created.
+  const activeHistoryIdRef = useRef<string | null>(null);
+  useEffect(() => { activeHistoryIdRef.current = activeHistoryId; }, [activeHistoryId]);
   const lessonProgresses = useLessonProgress(lessonStatuses);
   const isMobile = useIsMobile();
 
@@ -1506,7 +1624,7 @@ export default function AILearningPage() {
 
   const handleDeleteCourse = async (id: string) => {
     setHistory((prev) => prev.filter((e) => e.id !== id));
-    if (activeHistoryId === id) { if (pollCancelRef.current) pollCancelRef.current(); setActiveHistoryId(null); setPhase("upload"); }
+    if (activeHistoryId === id) { if (pollCancelRef.current) pollCancelRef.current(); setActiveHistoryId(null); setPhase("upload"); router("/ai_tutor", { replace: true }); }
     try { await deleteCourse(id); } catch (err) { console.error("Failed to delete course:", err); }
   };
 
@@ -1553,7 +1671,8 @@ export default function AILearningPage() {
       const freshLessons = MOCK_LESSONS.map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null }));
       const freshStatuses: LessonStatus[] = freshLessons.map(() => "generating");
       setHistory((prev) => [{ id: courseId, fileName: name, createdAt: new Date(), completedLessons: 0, quizScore: null, lessons: freshLessons, lessonStatuses: freshStatuses, quizAnswers: [], quizDone: false, questions: [] }, ...prev]);
-      setActiveHistoryId(courseId); setLessons(freshLessons); setLessonStatuses(freshStatuses);
+      setActiveHistoryId(courseId); router(`/ai_tutor/${courseId}`, { replace: true });
+      setLessons(freshLessons); setLessonStatuses(freshStatuses);
       setQuizQuestions([]); setActiveSection("video"); setActiveLesson(0); setQuizAnswers([]); setQuizDone(false);
       seenFailuresRef.current.clear(); setFailureBanner(null);
       pollCancelRef.current = pollCourse(courseId, (course: CourseFromAPI) => {
@@ -1579,7 +1698,21 @@ export default function AILearningPage() {
 
   const restoreEntry = (entry: HistoryEntry) => {
     if (pollCancelRef.current) pollCancelRef.current();
-    setActiveHistoryId(entry.id); setFileName(entry.fileName); setLessons(entry.lessons);
+    // Reset unconditionally on every call — if a PREVIOUS entry's lazy fetch
+    // is still in flight when the user opens ANOTHER course entirely (that
+    // fetch has no cancellation of its own), this entry might not need any
+    // fetch at all, and would otherwise be stuck showing a skeleton that was
+    // really left over from the abandoned previous one. The lazy-fetch
+    // branch further down flips this back to true, only if THIS entry
+    // actually needs it.
+    setCourseDetailsLoading(false);
+    // Only navigate if we're not ALREADY at this course's URL — restoreEntry
+    // is also called by the URL-reading effect below (loading straight from
+    // /ai_tutor/:courseId), where we're already there; navigating again would
+    // just push a redundant duplicate entry onto the browser history stack.
+    setActiveHistoryId(entry.id);
+    if (urlCourseId !== entry.id) router(`/ai_tutor/${entry.id}`);
+    setFileName(entry.fileName); setLessons(entry.lessons);
     setActiveCourseIsFreeTrial(!!entry.isFreeTrialCourse);
     setLessonStatuses(entry.lessonStatuses ?? entry.lessons.map(() => "ready"));
     setQuizAnswers(entry.quizAnswers); setQuizDone(entry.quizDone); setQuizQuestions(entry.questions ?? []);
@@ -1600,6 +1733,7 @@ export default function AILearningPage() {
       // show a title list. Fetch this ONE course's full detail now that the
       // user is actually watching it, and cache the result back into
       // `history` so re-selecting the same entry later doesn't fetch again.
+      setCourseDetailsLoading(true);
       getCourseStatus(entry.id)
         .then((course) => {
           const fillCode = (prevLessons: Lesson[]) =>
@@ -1608,12 +1742,66 @@ export default function AILearningPage() {
               if (!a) return l;
               return { ...l, videoUrl: a.videoUrl ?? l.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress };
             });
-          setLessons(fillCode);
+          // Always safe to cache the fetched code back into `history` — it's
+          // correct data for THAT entry regardless of what's on screen now.
           setHistory((prev) => prev.map((e) => (e.id === entry.id ? { ...e, lessons: fillCode(e.lessons) } : e)));
+          // But only overwrite the CURRENTLY DISPLAYED lessons (and clear the
+          // loading flag) if the user is still looking at this same course —
+          // this fetch has no cancellation of its own, so if the user
+          // clicked into a DIFFERENT course while it was in flight, applying
+          // either here would silently corrupt that other course's state (a
+          // real bug: wrong lesson code shown, or the wrong course's
+          // skeleton dismissed, after fast switching).
+          if (activeHistoryIdRef.current === entry.id) { setLessons(fillCode); setCourseDetailsLoading(false); }
         })
-        .catch((err) => console.error(`Failed to load full lesson code for course ${entry.id}:`, err));
+        .catch((err) => {
+          console.error(`Failed to load full lesson code for course ${entry.id}:`, err);
+          if (activeHistoryIdRef.current === entry.id) setCourseDetailsLoading(false);
+        });
     }
   };
+
+  // Makes a course's URL (/ai_tutor/:courseId) an actual source of truth,
+  // not just a label restoreEntry happens to also set — a fresh load,
+  // browser back/forward, or a pasted link all land here. Deliberately
+  // depends ONLY on urlCourseId (not `history`, not `activeHistoryId`):
+  // fetching directly via getCourseStatus works regardless of whether
+  // `history`'s paginated list has even loaded yet, or whether this course
+  // is on a later page than what's currently fetched — waiting on `history`
+  // would mean a deep link to an older course could hang or silently fail
+  // depending on pagination state, for no real benefit (one direct fetch by
+  // id is cheap either way).
+  //
+  // The activeHistoryIdRef check is what keeps this from fighting the FOUR
+  // places that already write the URL (restoreEntry, runGeneration,
+  // handleDeleteCourse, the "new course" buttons) — each of those sets
+  // activeHistoryId (and therefore the ref, via its own effect) synchronously
+  // alongside its own navigate() call, so by the time THIS effect's
+  // dependency (urlCourseId) changes as a result, the ref already matches
+  // and this effect no-ops. It only does real work when the URL changed for
+  // a reason other than this component's own navigation.
+  useEffect(() => {
+    if (!urlCourseId) return;
+    if (urlCourseId === activeHistoryIdRef.current) return;
+    // Cleared automatically once restoreEntry runs below (it unconditionally
+    // resets this at its own top) — this entry already has full code from
+    // THIS fetch, so restoreEntry's own lazy-fetch branch won't re-set it.
+    setCourseDetailsLoading(true);
+    getCourseStatus(urlCourseId)
+      .then((course) => restoreEntry(mapCourseToEntry(course)))
+      .catch((err) => {
+        console.error(`Failed to load course ${urlCourseId} from URL:`, err);
+        setCourseDetailsLoading(false);
+        // `phase` starts as "course" whenever the URL names one (see its
+        // lazy initializer above) — if THIS is the very first load and the
+        // fetch fails, nothing has ever set phase to "course" for a real
+        // reason, so without resetting it here it would stay stuck on the
+        // course view's (empty) shell even after navigating back to the
+        // bare /ai_tutor URL below.
+        setPhase("upload");
+        router("/ai_tutor", { replace: true });
+      });
+  }, [urlCourseId]);
 
   const allLessonsReady = lessonStatuses.every((s) => s === "ready" || s === "failed");
 
@@ -1623,7 +1811,7 @@ export default function AILearningPage() {
         {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
         <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => { setPendingGeneration(null); setPhase("upload"); }} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
+          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => { setPendingGeneration(null); setPhase("upload"); router("/ai_tutor"); }} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
           <div className="flex-1 overflow-hidden flex flex-col bg-white/40">
             <LevelAssessmentChat
@@ -1705,7 +1893,7 @@ export default function AILearningPage() {
         })}</script>
       </Helmet>
       <div className="flex h-screen relative">
-        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => setPhase("upload")} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
+        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => { setPhase("upload"); router("/ai_tutor"); }} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
         {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
 
         {isMobile && courseSidebarOpen && (
@@ -1721,8 +1909,16 @@ export default function AILearningPage() {
               <Sparkles className="h-4 w-4 text-blue-600 shrink-0" />
               <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">AI Course</span>
             </div>
-            <h2 className="font-bold text-slate-900 text-sm leading-snug line-clamp-2">{fileName}</h2>
-            {!allLessonsReady && (
+            {courseDetailsLoading ? (
+              // No own <style> tag needed — LessonListSkeleton right below
+              // renders one whenever this does (same courseDetailsLoading
+              // condition, same visible panel), so the keyframe is already
+              // in the DOM by the time this animation runs.
+              <ShimmerBox className="h-4 w-2/3" />
+            ) : (
+              <h2 className="font-bold text-slate-900 text-sm leading-snug line-clamp-2">{fileName}</h2>
+            )}
+            {!courseDetailsLoading && !allLessonsReady && (
               <div className="mt-3 flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
                 <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin shrink-0" />
                 <p className="text-xs text-blue-700">{lessonStatuses.filter((s) => s === "generating").length} lesson{lessonStatuses.filter((s) => s === "generating").length !== 1 ? "s" : ""} generating…</p>
@@ -1734,7 +1930,7 @@ export default function AILearningPage() {
             <div className="px-4 mb-1">
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Video Lessons</p>
             </div>
-            {lessons.map((lesson, i) => {
+            {courseDetailsLoading ? <LessonListSkeleton count={lessons.length || 6} /> : lessons.map((lesson, i) => {
               const status = lessonStatuses[i];
               const isGenerating = status === "generating";
               const isFailed = status === "failed";
@@ -1835,7 +2031,8 @@ export default function AILearningPage() {
               {courseSidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
               {courseSidebarOpen ? "Hide" : "Show"} course nav
             </button>
-            {activeSection === "video" && (
+            {courseDetailsLoading && <CourseContentSkeleton />}
+            {!courseDetailsLoading && activeSection === "video" && (
               <div className="space-y-6">
                 <VideoPlayer
                   lesson={lessons[activeLesson]}
@@ -1905,7 +2102,7 @@ export default function AILearningPage() {
                 </div>
               </div>
             )}
-            {activeSection === "quiz" && <QuizSection questions={quizQuestions} onSubmit={(answers) => {
+            {!courseDetailsLoading && activeSection === "quiz" && <QuizSection questions={quizQuestions} onSubmit={(answers) => {
               setQuizAnswers(answers); setQuizDone(true); setActiveSection("results");
               // Score is recomputed and stored server-side — the client-sent
               // answers are never trusted as-is for the score itself. This is
@@ -1926,7 +2123,7 @@ export default function AILearningPage() {
                 setTimeout(() => setShowFeedback(true), 3000);
               }
             }} />}
-            {activeSection === "results" && (
+            {!courseDetailsLoading && activeSection === "results" && (
               <>
                 <ResultsSection answers={quizAnswers} questions={quizQuestions} serverResult={serverQuizResult} courseId={activeHistoryId} />
                 <Card className="border-0 shadow-md bg-gradient-to-r from-blue-50 to-indigo-50 p-4 sm:p-5 mt-6">

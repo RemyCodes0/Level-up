@@ -6,6 +6,27 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// A 401 here means the stored token is missing/expired/invalid — the server
+// is rejecting every request as that user, not anything to do with course
+// generation itself. Before this check existed, every authenticated call in
+// this file just threw a generic "Failed to ..." error that calling code
+// either logged to the console and silently gave up (pollCourse, and
+// AiTutor.tsx's lazy code-backfill fetch) or surfaced as an unhelpful
+// message — with NOTHING telling the user their session had died, and
+// nothing retrying, a course whose lesson genuinely finished generating
+// would show "generating" FOREVER, since the one fetch that would have
+// populated its code never got a working retry path. Same sign-out
+// sequence as AiTutor.tsx's handleLogout / Profile.tsx's handleLogout (this
+// is a plain module, not a component, so it can't call useNavigate() —
+// a full-page redirect is also the safest recovery here anyway, since it
+// resets whatever stale React state the silent failures left behind).
+function handleUnauthorized(res: Response) {
+  if (res.status !== 401) return;
+  localStorage.removeItem("user");
+  localStorage.removeItem("token");
+  if (typeof window !== "undefined") window.location.href = "/login";
+}
+
 // ── Shapes returned by the backend ───────────────────────────────────────────
 
 // One entry per expected scene, populated incrementally WHILE a lesson is
@@ -75,6 +96,7 @@ export async function startCourseGeneration(
     headers: { ...authHeaders() },
     body: formData,
   });
+  handleUnauthorized(res);
   if (!res.ok) throw new Error("Failed to start course generation");
   return res.json();
 }
@@ -84,6 +106,7 @@ export async function getCourseStatus(courseId: string): Promise<CourseFromAPI> 
   const res = await fetch(`${BASE_URL}/api/course/status/${courseId}`, {
     headers: { ...authHeaders() },
   });
+  handleUnauthorized(res);
   if (!res.ok) throw new Error("Failed to get course status");
   return res.json();
 }
@@ -98,6 +121,7 @@ export async function listCourses(page = 1, limit = 8): Promise<ListCoursesResul
   const res = await fetch(`${BASE_URL}/api/course/list?page=${page}&limit=${limit}`, {
     headers: { ...authHeaders() },
   });
+  handleUnauthorized(res);
   if (!res.ok) throw new Error("Failed to list courses");
   return res.json();
 }
@@ -108,6 +132,7 @@ export async function deleteCourse(courseId: string): Promise<void> {
     method: "DELETE",
     headers: { ...authHeaders() },
   });
+  handleUnauthorized(res);
   if (!res.ok) throw new Error("Failed to delete course");
 }
 
@@ -117,6 +142,7 @@ export async function retryLesson(courseId: string, lessonIndex: number): Promis
     method: "POST",
     headers: { ...authHeaders() },
   });
+  handleUnauthorized(res);
   if (!res.ok) throw new Error("Failed to retry lesson");
 }
 
@@ -128,6 +154,7 @@ export async function unlockCourse(courseId: string): Promise<{ ok: true; messag
     method: "POST",
     headers: { ...authHeaders() },
   });
+  handleUnauthorized(res);
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.message || data.error || "Failed to unlock course");
@@ -152,6 +179,7 @@ export async function getNextSuggestions(courseId: string): Promise<NextCourseSu
   const res = await fetch(`${BASE_URL}/api/course/${courseId}/next-suggestions`, {
     headers: { ...authHeaders() },
   });
+  handleUnauthorized(res);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Failed to load suggestions");
   return data.suggestions;
@@ -169,6 +197,7 @@ export async function publishCourse(courseId: string): Promise<PublishResult> {
     method: "POST",
     headers: { ...authHeaders() },
   });
+  handleUnauthorized(res);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Failed to publish course");
   return data;
@@ -179,6 +208,7 @@ export async function unpublishCourse(courseId: string): Promise<void> {
     method: "DELETE",
     headers: { ...authHeaders() },
   });
+  handleUnauthorized(res);
   if (!res.ok) throw new Error("Failed to unpublish course");
 }
 

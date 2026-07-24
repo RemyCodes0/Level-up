@@ -716,9 +716,24 @@ async function retryLessonHandler(req, res) {
 
     const lesson = course.lessons[idx];
 
-    // Mark as rendering so the frontend shows the loading state
+    // Mark as rendering so the frontend shows the loading state. Also flip
+    // the PARENT course.status back to "generating" — the course was
+    // "ready" before this retry (every lesson had finished), but
+    // pollCourse (CourseApi.ts) stops polling the instant course.status is
+    // "ready", checking only that top-level field, never per-lesson status.
+    // Without this, pollCourse's very first tick would see the still-"ready"
+    // course, fire onUpdate once, then immediately stop — leaving the
+    // frontend's lessonStatuses stuck on that one stale "rendering" snapshot
+    // forever, even after this retry actually finishes and the lesson is
+    // fully playable (a real reported symptom: "it's done but still shows
+    // loading"). Same fix already applied in unlockRemainingLessonsHandler
+    // for the identical hazard.
     await Course.findByIdAndUpdate(courseId, {
-      $set: { [`lessons.${idx}.status`]: "rendering", [`lessons.${idx}.code`]: null },
+      $set: {
+        [`lessons.${idx}.status`]: "rendering",
+        [`lessons.${idx}.code`]: null,
+        status: "generating",
+      },
     });
 
     res.json({ ok: true, message: "Regenerating lesson" });
@@ -731,9 +746,23 @@ async function retryLessonHandler(req, res) {
       keyPoints: lesson.keyPoints,
     };
 
-    buildLesson(courseId, lessonData).catch((err) => {
-      console.error(`[${courseId}] Retry lesson ${idx + 1} failed:`, err.message);
-    });
+    // buildLesson resolves normally whether this lesson ends up "ready" or
+    // permanently "failed" (it handles its own error paths internally and
+    // never rethrows for a content/generation failure — only for a truly
+    // unexpected exception does the .catch below fire) — so flipping
+    // course.status back to "ready" here, unconditionally on resolution,
+    // mirrors how the initial course build treats "ready" as "not actively
+    // generating anymore," not "every lesson definitely succeeded" (see
+    // processCourse's own unconditional `status: "ready"` after
+    // buildLessonsSequentially). Without this, course.status would stay
+    // "generating" forever after a retry, since nothing else ever flips it
+    // back — the opposite failure mode from the bug this whole change fixes
+    // (pollCourse would never stop, instead of stopping too early).
+    buildLesson(courseId, lessonData)
+      .then(() => Course.findByIdAndUpdate(courseId, { status: "ready" }))
+      .catch((err) => {
+        console.error(`[${courseId}] Retry lesson ${idx + 1} failed:`, err.message);
+      });
   } catch (err) {
     console.error("retryLessonHandler error:", err);
     res.status(500).json({ error: "Failed to retry lesson" });

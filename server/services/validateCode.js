@@ -484,6 +484,46 @@ function checkUsedBeforeDeclared(ast) {
   return errors;
 }
 
+// The only React hooks exposed to generated code at all (see the sandbox's
+// SCOPE in useCompilation.ts — useState is deliberately NOT in scope, so
+// calling it there already fails as a separate, already-caught "X is not
+// defined" error; these three are the ones that actually need this check).
+const REACT_HOOK_NAMES = new Set(["useMemo", "useCallback", "useRef"]);
+
+// A real production crash: generated code called useMemo(...) (or
+// useCallback/useRef) directly at the TOP LEVEL of the header/scene script —
+// e.g. `const PALETTE = useMemo(() => ({...}), []);` sitting outside any
+// function — instead of inside the header/scene's own component function.
+// The sandbox executes this script by calling it as a plain function
+// (useCompilation.ts's `factory(React, scope)`), itself invoked from INSIDE
+// that hook's OWN useMemo() call — so a top-level hook call in the
+// generated code executes WHILE REACT is mid-processing a DIFFERENT
+// component's hooks, corrupting that component's hook accounting. This
+// produces the exact pair of errors seen live: "Do not call Hooks inside
+// useEffect(...), useMemo(...)..." followed immediately by "Should have a
+// queue. You are likely calling Hooks conditionally" — often attributed to
+// whatever component happens to own the corrupted hook list, not to the
+// generated code that actually caused it, which is what made this hard to
+// place from the browser console alone. Uses Babel's own
+// `path.getFunctionParent()` — the direct, built-in way to ask "is this
+// node inside ANY function" — rather than reimplementing that walk.
+function checkHooksCalledOutsideFunction(ast) {
+  const errors = [];
+  traverse(ast, {
+    CallExpression(path) {
+      const { callee } = path.node;
+      if (callee.type !== "Identifier" || !REACT_HOOK_NAMES.has(callee.name)) return;
+      if (!path.getFunctionParent()) {
+        const loc = path.node.loc ? ` (line ${path.node.loc.start.line})` : "";
+        errors.push(
+          `"${callee.name}(...)" is called at the top level${loc}, not inside a function — this throws a "Should have a queue" / invalid-hook-call crash at runtime; every hook call must be inside the scene's (or header's) own component function`
+        );
+      }
+    },
+  });
+  return errors;
+}
+
 // Sum every <Series.Sequence durationInFrames={N}> and compare to the real
 // audio-measured total. Small drift gets auto-corrected on the LAST sequence
 // (absorbing rounding slop there is harmless); large drift means something
@@ -586,6 +626,11 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
     throw new Error(`Generated code has a temporal-dead-zone violation:\n${usedBeforeDeclared.join("\n")}`);
   }
 
+  const badHookCalls = checkHooksCalledOutsideFunction(ast);
+  if (badHookCalls.length > 0) {
+    throw new Error(`Generated code calls a hook outside a function:\n${badHookCalls.join("\n")}`);
+  }
+
   return checkDurationSum(tsxCode, ast, expectedTotalFrames);
 }
 
@@ -685,6 +730,11 @@ function validateHeaderFragment(code, { reservedNames = [] } = {}) {
     throw new Error(`Header has a temporal-dead-zone violation:\n${usedBeforeDeclared.join("\n")}`);
   }
 
+  const badHookCalls = checkHooksCalledOutsideFunction(ast);
+  if (badHookCalls.length > 0) {
+    throw new Error(`Header calls a hook outside a function:\n${badHookCalls.join("\n")}`);
+  }
+
   // Everything above validated the header AS WRITTEN (its own imports were
   // enough for ITS OWN code). What's returned, though, is import-canonicalized
   // — see canonicalizeHeaderImports — so every scene generated against this
@@ -762,6 +812,11 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
   const usedBeforeDeclared = checkUsedBeforeDeclared(ast);
   if (usedBeforeDeclared.length > 0) {
     throw new Error(`${sceneName} has a temporal-dead-zone violation:\n${usedBeforeDeclared.join("\n")}`);
+  }
+
+  const badHookCalls = checkHooksCalledOutsideFunction(ast);
+  if (badHookCalls.length > 0) {
+    throw new Error(`${sceneName} calls a hook outside a function:\n${badHookCalls.join("\n")}`);
   }
 
   return code;
