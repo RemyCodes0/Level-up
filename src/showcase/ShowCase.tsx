@@ -76,6 +76,38 @@ export default function ShowcasePage() {
         />
       </Helmet>
 
+      {/* Structured Data: the catalog as an ItemList of Course entries, so
+          search engines can understand (and potentially rich-result) the
+          actual AI-generated content on this page, not just its title/description. */}
+      {courses && courses.length > 0 && (
+        <Helmet>
+          <script type="application/ld+json">{JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "ItemList",
+            "name": "Level Up AI — Course Catalog",
+            "itemListElement": courses.map((course, i) => ({
+              "@type": "ListItem",
+              "position": i + 1,
+              "item": {
+                "@type": "Course",
+                "name": toCourseTitle(course.topic),
+                "description": `An AI-generated, narrated, animated video course on ${toCourseTitle(course.topic)} — ${course.lessons.length} lessons and a ${course.questions.length}-question quiz.`,
+                "provider": {
+                  "@type": "Organization",
+                  "name": "Level Up AI",
+                  "sameAs": "https://leveluppedu.app",
+                },
+                "hasCourseInstance": {
+                  "@type": "CourseInstance",
+                  "courseMode": "online",
+                  "courseWorkload": `${course.lessons.length} video lessons`,
+                },
+              },
+            })),
+          })}</script>
+        </Helmet>
+      )}
+
       <style>{`
         .sc-root { font-family: 'Inter', sans-serif; color: #1C2333; }
         .sc-display { font-family: 'Fraunces', serif; }
