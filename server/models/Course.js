@@ -149,6 +149,16 @@ const courseSchema = new mongoose.Schema(
 
 courseSchema.index({ status: 1 });
 
+// Admin "recent activity" feed (getRecentActivity): sorts ALL courses by
+// createdAt with no other filter. Without an index on createdAt alone, Mongo
+// has no way to satisfy that sort except pulling the entire collection into
+// memory first — which blows past the 32MB in-memory sort limit once courses
+// accumulate (each embeds full lesson content, so documents aren't small).
+// Reproduced directly against the DB: "Sort exceeded memory limit of
+// 33554432 bytes ... Aborting operation." This index lets Mongo walk
+// createdAt in order and take the first 30 without sorting anything.
+courseSchema.index({ createdAt: -1 });
+
 // Sidebar history list (listCoursesHandler): filters by userId, sorts by
 // createdAt desc. Without this compound index, only the userId half of that
 // query is covered by an index — Mongo still has to pull every matching

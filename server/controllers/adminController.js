@@ -119,11 +119,19 @@ exports.getRecentActivity = async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
 
+    // Only lessons.status is read below (to count ready/failed) — NOT the
+    // full lessons field. A lesson subdocument can run 600KB+ once you
+    // include `code` and `sceneProgress` (which duplicates every scene's
+    // code again as `previewCode` for live progress tracking — see
+    // COURSE_LIST_EXCLUDED_FIELDS in courseController.js, the same fix
+    // already applied to the course-list sidebar). Fetching that for 30
+    // courses at once was tens of MB of code/audio data this feed never
+    // renders, which is what made it hang instead of just being slow.
     const courses = await Course.find({})
       .sort({ createdAt: -1 })
       .limit(limit)
       .populate("userId", "name email")
-      .select("topic status isFreeTrialCourse lessons createdAt updatedAt userId")
+      .select("topic status isFreeTrialCourse lessons.status createdAt updatedAt userId")
       .lean();
 
     const activity = courses.map((c) => {
