@@ -1,4 +1,5 @@
 const OpenAI = require("openai");
+const Anthropic = require("@anthropic-ai/sdk");
 const pdfParse = require("pdf-parse");
 const JSZip = require("jszip");
 const { validateGeneratedCode, validateHeaderFragment, validateSceneFragment, getHeaderExposedNames, compactHeaderForPrompt } = require("./validateCode");
@@ -31,6 +32,18 @@ const zaiClient = new OpenAI({
   maxRetries: 0,
 });
 
+// Anthropic direct — Claude Sonnet 5 lesson/scene/ad code. NOT OpenRouter:
+// this hits Anthropic's own Messages API, which is a different wire shape
+// from the OpenAI-compatible chat-completions surface the two clients above
+// use (content blocks + top-level `stop_reason`/`usage.input_tokens`, not
+// `delta.content` + `finish_reason`/`usage.prompt_tokens`) — streamCodeCompletion
+// branches on provider.isAnthropicNative to speak the right one.
+const anthropicClient = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 300 * 1000,
+  maxRetries: 0,
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PROVIDER TABLE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -59,11 +72,25 @@ const CODE_PROVIDERS = {
     maxTokens: 32000,
     keyEnv: "OPENROUTER_API_KEY",
   },
+  // Claude Sonnet 5, called directly against Anthropic's own API (not
+  // OpenRouter, not Z.ai) via anthropicClient. No extraParams: Sonnet 5
+  // rejects non-default temperature/top_p/top_k outright (400). maxTokens
+  // is a fallback only — every call site below passes its own explicit
+  // maxOutputTokens (HEADER/SCENE_MAX_OUTPUT_TOKENS), well under Sonnet 5's
+  // 128k ceiling.
+  claude: {
+    client: anthropicClient,
+    isAnthropicNative: true,
+    model: "claude-sonnet-5",
+    extraParams: {},
+    maxTokens: 100000,
+    keyEnv: "ANTHROPIC_API_KEY",
+  },
 };
 
 function resolveProvider(envVar, defaultKey) {
   const requested = process.env[envVar];
-  const provider = CODE_PROVIDERS[["fable", "glm"].includes(requested) ? requested : defaultKey];
+  const provider = CODE_PROVIDERS[["fable", "glm", "claude"].includes(requested) ? requested : defaultKey];
   if (!process.env[provider.keyEnv]) {
     console.warn(`[codegen] WARNING: ${provider.keyEnv} is not set — ${envVar} generation will fail with an auth error.`);
   }
@@ -78,9 +105,19 @@ const AD_CODE_PROVIDER = resolveProvider("AD_CODE_MODEL", "fable");
 // Derive reasoning-off variants for the header and per-scene calls. Kept as
 // separate consts (not just LESSON_CODE_PROVIDER reused) so either can be
 // given different settings later without re-wiring call sites.
+//
+// The reasoning-toggle FIELD differs by client, same distinction as the
+// clients comment above: Z.ai's native API and Anthropic's own Messages API
+// both take `thinking: {type}` (Z.ai mirrors Anthropic's wire shape).
+// OpenRouter (fable) takes its own unified `reasoning: {enabled}` instead —
+// sending the wrong shape is either ignored or a 400, not a no-op, so this
+// can't be one hardcoded field for every provider.
 function withReasoningOff(provider) {
-  const { thinking: _t, reasoning_effort: _r, ...rest } = provider.extraParams;
-  return { ...provider, extraParams: { ...rest, thinking: { type: "disabled" } } };
+  const { thinking: _t, reasoning_effort: _r, reasoning: _ro, ...rest } = provider.extraParams;
+  const reasoningOffParam = provider.client === openRouterClient
+    ? { reasoning: { enabled: false } }
+    : { thinking: { type: "disabled" } };
+  return { ...provider, extraParams: { ...rest, ...reasoningOffParam } };
 }
 const HEADER_PROVIDER = withReasoningOff(LESSON_CODE_PROVIDER);
 const SCENE_CODE_PROVIDER = withReasoningOff(LESSON_CODE_PROVIDER);
@@ -120,8 +157,8 @@ const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;
 const limitAdCodeCall = createLimiter(AD_CODE_MAX_CONCURRENT);
 
 console.log(
-  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm to switch) | ` +
-  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm to switch)`
+  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude to switch) | ` +
+  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude to switch)`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1390,57 +1427,134 @@ function logUsage(label, usage) {
 const STREAM_IDLE_TIMEOUT_MS = Number(process.env.CODEGEN_STREAM_IDLE_TIMEOUT_MS) || 90 * 1000;
 
 async function streamCodeCompletion({ limiter, provider, systemPrompt, userContent, maxOutputTokens }) {
-  return limiter(async () => {
-    const controller = new AbortController();
-    const stream = await provider.client.chat.completions.create(
-      {
-        model: provider.model,
-        ...provider.extraParams,
-        max_tokens: maxOutputTokens ?? provider.maxTokens ?? 100000,
-        stream: true,
-        // OpenAI-spec field — without it, a streamed response never carries a
-        // `usage` chunk at all, so cache hit/miss and completion tokens would
-        // be invisible to this codebase entirely.
-        stream_options: { include_usage: true },
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-      },
-      { signal: controller.signal }
-    );
+  return limiter(() =>
+    provider.isAnthropicNative
+      ? streamAnthropicNative({ provider, systemPrompt, userContent, maxOutputTokens })
+      : streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens })
+  );
+}
 
-    let streamedText = "";
-    let finishReason = null;
-    let usage = null;
-    let lastChunkAt = Date.now();
-    const watchdog = setInterval(() => {
-      if (Date.now() - lastChunkAt > STREAM_IDLE_TIMEOUT_MS) controller.abort();
-    }, 5000);
+// GLM (Z.ai) and Fable (OpenRouter) both speak the OpenAI chat-completions
+// wire shape — this is that path.
+async function streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens }) {
+  const controller = new AbortController();
+  const stream = await provider.client.chat.completions.create(
+    {
+      model: provider.model,
+      ...provider.extraParams,
+      max_tokens: maxOutputTokens ?? provider.maxTokens ?? 100000,
+      stream: true,
+      // OpenAI-spec field — without it, a streamed response never carries a
+      // `usage` chunk at all, so cache hit/miss and completion tokens would
+      // be invisible to this codebase entirely.
+      stream_options: { include_usage: true },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userContent },
+      ],
+    },
+    { signal: controller.signal }
+  );
 
-    try {
-      for await (const chunk of stream) {
-        lastChunkAt = Date.now();
-        const delta = chunk.choices?.[0]?.delta;
-        if (delta?.content) streamedText += delta.content; // ignore reasoning_content
-        if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
-        // The usage chunk arrives LAST with an empty `choices` array — never
-        // gate it behind the finish_reason check above.
-        if (chunk.usage) usage = chunk.usage;
-      }
-    } catch (err) {
-      if (controller.signal.aborted) {
-        throw new Error(
-          `Stream stalled — no data received for ${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)}s, idle watchdog aborted the request (had ${streamedText.length} chars so far)`
-        );
-      }
-      throw err;
-    } finally {
-      clearInterval(watchdog);
+  let streamedText = "";
+  let finishReason = null;
+  let usage = null;
+  let lastChunkAt = Date.now();
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastChunkAt > STREAM_IDLE_TIMEOUT_MS) controller.abort();
+  }, 5000);
+
+  try {
+    for await (const chunk of stream) {
+      lastChunkAt = Date.now();
+      const delta = chunk.choices?.[0]?.delta;
+      if (delta?.content) streamedText += delta.content; // ignore reasoning_content
+      if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
+      // The usage chunk arrives LAST with an empty `choices` array — never
+      // gate it behind the finish_reason check above.
+      if (chunk.usage) usage = chunk.usage;
     }
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `Stream stalled — no data received for ${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)}s, idle watchdog aborted the request (had ${streamedText.length} chars so far)`
+      );
+    }
+    throw err;
+  } finally {
+    clearInterval(watchdog);
+  }
 
-    return { text: streamedText, stopReason: finishReason, usage };
-  });
+  return { text: streamedText, stopReason: finishReason, usage };
+}
+
+// Claude Sonnet 5 direct — Anthropic's own Messages API. Different wire
+// shape from the OpenAI-compatible path above: content arrives as
+// content_block_delta events (not delta.content), truncation is signaled by
+// stop_reason "max_tokens" (not finish_reason "length" — normalized below so
+// every call site's `stopReason === "length"` check keeps working
+// unmodified), and usage fields are input_tokens/output_tokens plus separate
+// cache_read/cache_creation counts rather than a single prompt/completion
+// pair — normalized into the same shape logUsage() already expects so it
+// doesn't need a provider-specific branch either.
+async function streamAnthropicNative({ provider, systemPrompt, userContent, maxOutputTokens }) {
+  const controller = new AbortController();
+  const stream = provider.client.messages.stream(
+    {
+      model: provider.model,
+      ...provider.extraParams,
+      max_tokens: maxOutputTokens ?? provider.maxTokens ?? 100000,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userContent }],
+    },
+    { signal: controller.signal }
+  );
+
+  let streamedText = "";
+  let stopReason = null;
+  let rawUsage = null;
+  let lastChunkAt = Date.now();
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastChunkAt > STREAM_IDLE_TIMEOUT_MS) controller.abort();
+  }, 5000);
+
+  try {
+    for await (const event of stream) {
+      lastChunkAt = Date.now();
+      if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+        streamedText += event.delta.text;
+      } else if (event.type === "message_delta") {
+        if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
+        if (event.usage) rawUsage = { ...rawUsage, ...event.usage };
+      } else if (event.type === "message_start" && event.message?.usage) {
+        rawUsage = { ...rawUsage, ...event.message.usage };
+      }
+    }
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `Stream stalled — no data received for ${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)}s, idle watchdog aborted the request (had ${streamedText.length} chars so far)`
+      );
+    }
+    throw err;
+  } finally {
+    clearInterval(watchdog);
+  }
+
+  // "max_tokens" -> "length" so the shared truncation check downstream
+  // (`stopReason === "length"`) doesn't need to know which provider ran.
+  const normalizedStopReason = stopReason === "max_tokens" ? "length" : stopReason;
+
+  const usage = rawUsage
+    ? {
+        prompt_tokens: (rawUsage.input_tokens ?? 0) + (rawUsage.cache_creation_input_tokens ?? 0) + (rawUsage.cache_read_input_tokens ?? 0),
+        completion_tokens: rawUsage.output_tokens ?? 0,
+        prompt_cache_hit_tokens: rawUsage.cache_read_input_tokens ?? 0,
+        prompt_cache_miss_tokens: (rawUsage.input_tokens ?? 0) + (rawUsage.cache_creation_input_tokens ?? 0),
+      }
+    : null;
+
+  return { text: streamedText, stopReason: normalizedStopReason, usage };
 }
 
 // Reasoning is OFF for both, so these budgets only need to cover the actual
