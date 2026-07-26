@@ -5,6 +5,10 @@ const {
   getRecentActivity,
   getCourseDetail,
 } = require("../controllers/adminController");
+const {
+  getAdminPricingConfig,
+  updateAdminPricingConfig,
+} = require("../controllers/pricingConfigController");
 const { protect } = require("../middleware/authMiddleware");
 const { requireAdmin } = require("../middleware/requireAdmin");
 
@@ -16,6 +20,11 @@ router.use(protect, requireAdmin);
 router.get("/overview", getOverview);
 router.get("/activity", getRecentActivity);
 router.get("/courses/:courseId", getCourseDetail);
+
+// Course tiers + credit packs — admin-adjustable, not hardcoded (see
+// pricingConfigService.js's cache, invalidated on every PUT here).
+router.get("/pricing-config", getAdminPricingConfig);
+router.put("/pricing-config", updateAdminPricingConfig);
 
 module.exports = router;
 

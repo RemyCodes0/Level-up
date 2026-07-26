@@ -105,6 +105,56 @@ function literalNumericValue(node) {
   return null;
 }
 
+// Constant-folding evaluator for interpolate-range elements. Where
+// literalNumericValue only reads a directly-written literal, this also
+// RESOLVES the two shapes the model actually writes in practice when it
+// deviates from pure literals:
+//   - an Identifier bound to a `const x = <numeric literal>` in an enclosing
+//     scope (`const end = 210; ... [180, end]`)
+//   - simple arithmetic over resolvable operands (`[start, start + 20]`,
+//     `[end - 30, end]`)
+// This converts a whole class of previously-uncheckable ranges into
+// fully-checked ones (finite? strictly increasing?) with ZERO new false
+// positives: anything that doesn't resolve (a function parameter, a loop
+// index, a call result) returns null and is skipped exactly as before —
+// unresolvable is still "can't verify", never "reject".
+function resolveNumericExpression(node, path, depth = 0) {
+  if (!node || depth > 6) return null; // depth cap: real expressions are 1-3 deep
+
+  const direct = literalNumericValue(node);
+  if (direct !== null) return direct;
+
+  if (node.type === "Identifier") {
+    const binding = path.scope.getBinding(node.name);
+    if (!binding || binding.kind !== "const") return null;
+    // A reassigned or destructured binding can't be trusted to hold its init.
+    if (!binding.constant) return null;
+    const decl = binding.path.node;
+    if (decl.type !== "VariableDeclarator" || !decl.init) return null;
+    return resolveNumericExpression(decl.init, binding.path, depth + 1);
+  }
+
+  if (node.type === "BinaryExpression") {
+    const left = resolveNumericExpression(node.left, path, depth + 1);
+    const right = resolveNumericExpression(node.right, path, depth + 1);
+    if (left === null || right === null) return null;
+    switch (node.operator) {
+      case "+": return left + right;
+      case "-": return left - right;
+      case "*": return left * right;
+      case "/": return right === 0 ? null : left / right; // 0-division: unresolvable, not a verdict
+      default: return null;
+    }
+  }
+
+  if (node.type === "UnaryExpression" && node.operator === "-") {
+    const inner = resolveNumericExpression(node.argument, path, depth + 1);
+    return inner === null ? null : -inner;
+  }
+
+  return null;
+}
+
 function checkInterpolateCalls(ast) {
   const errors = [];
   traverse(ast, {
@@ -155,33 +205,68 @@ function checkInterpolateCalls(ast) {
 
       // Remotion's OWN runtime requirement (unlike outputRange, which has no
       // such constraint — a fade-out [1, 0] is valid) is that inputRange is
-      // STRICTLY increasing. Only checkable when every element is a plain
-      // number literal — an expression like `start + 20` is common,
-      // legitimate, and usually provably safe by construction (start + 20 >
-      // start whenever 20 is a positive literal). An earlier version of this
-      // check REJECTED any non-literal element outright, on the theory that
-      // an expression's runtime value can't be verified here — but a live
-      // course run showed that false-positiving on nearly every single
-      // scene (this exact `[start, start + 20]` shape is apparently how
-      // this model normally writes staggered animations), causing far more
-      // retry churn than the rare genuine ordering bug it was meant to
-      // catch. Reverted to the narrow, zero-false-positive version: only
-      // catches what's fully knowable right now — a DIRECTLY-written
-      // decreasing literal range like [500, 490], the exact static
-      // equivalent of the "inputRange must be strictly monotonically
-      // increasing" crash Remotion throws. A non-literal element is
-      // silently allowed through this specific check (content it can't
-      // verify, not content it has evidence is wrong).
-      const inputValues = inputRange.elements.map(literalNumericValue);
+      // STRICTLY increasing, and every element finite. Checked via
+      // resolveNumericExpression, which constant-folds the expression shapes
+      // the model actually writes (`[start, start + 20]` where start is a
+      // const literal, `[end - 30, end]`) instead of only accepting
+      // directly-written literals — an earlier literal-only version silently
+      // skipped exactly the ranges that later crashed live with
+      // "inputRange must contain only finite numbers, but got [NaN,NaN]".
+      // Anything genuinely unresolvable (loop index math, function params)
+      // still passes through unchecked — "can't verify" is never a verdict.
+      const inputValues = inputRange.elements.map((el) => resolveNumericExpression(el, path));
       if (inputValues.every((v) => v !== null)) {
-        for (let i = 1; i < inputValues.length; i++) {
-          if (inputValues[i] <= inputValues[i - 1]) {
-            errors.push(
-              `interpolate()'s inputRange must be strictly increasing but got [${inputValues.join(", ")}]${loc} — this throws "inputRange must be strictly monotonically increasing" at runtime`
-            );
-            break;
+        if (inputValues.some((v) => !Number.isFinite(v))) {
+          errors.push(
+            `interpolate()'s inputRange resolves to a non-finite value ([${inputValues.join(", ")}])${loc} — this throws "inputRange must contain only finite numbers" at runtime`
+          );
+        } else {
+          for (let i = 1; i < inputValues.length; i++) {
+            if (inputValues[i] <= inputValues[i - 1]) {
+              errors.push(
+                `interpolate()'s inputRange must be strictly increasing but resolves to [${inputValues.join(", ")}]${loc} — this throws "inputRange must be strictly monotonically increasing" at runtime`
+              );
+              break;
+            }
           }
         }
+      }
+    },
+  });
+  return errors;
+}
+
+// spring() without fps throws "fps must be provided" at runtime — one of the
+// oldest crash classes in this pipeline (crash-safety rule S2 in both code-gen
+// prompts). Only flags the provably-wrong shape: an INLINE object literal with
+// no `fps` property and no spread (a spread could inject fps invisibly, and an
+// options object passed as a variable can't be inspected here) — same
+// zero-false-positive philosophy as every other check in this file.
+function checkSpringFpsCalls(ast) {
+  const errors = [];
+  traverse(ast, {
+    CallExpression(path) {
+      const { node } = path;
+      if (node.callee.type !== "Identifier" || node.callee.name !== "spring") return;
+      // Respect local shadowing — a scene-defined helper named spring isn't Remotion's.
+      const binding = path.scope.getBinding("spring");
+      if (binding && binding.kind !== "module") return;
+
+      const arg = node.arguments[0];
+      if (!arg || arg.type !== "ObjectExpression") return;
+      if (arg.properties.some((p) => p.type === "SpreadElement")) return;
+
+      const hasFps = arg.properties.some(
+        (p) =>
+          p.type === "ObjectProperty" &&
+          ((p.key.type === "Identifier" && p.key.name === "fps") ||
+            (p.key.type === "StringLiteral" && p.key.value === "fps"))
+      );
+      if (!hasFps) {
+        const loc = node.loc ? ` (line ${node.loc.start.line})` : "";
+        errors.push(
+          `spring() called without fps${loc} — throws "fps must be provided" at runtime. Use spring({ frame, fps, config }) with const { fps } = useVideoConfig().`
+        );
       }
     },
   });
@@ -386,6 +471,52 @@ function isUncalledRemotionRandomBinding(declaratorInit, path) {
   return !randomBinding;
 }
 
+// Remotion's AbsoluteFill/Series/Sequence/Audio/Loop are COMPONENTS — they
+// must be used as JSX (<AbsoluteFill>...</AbsoluteFill>), never invoked
+// directly as a plain function call. A real production crash: a header
+// invented a fictional "call the component with a props object" convention
+// instead of writing real JSX — every helper in it did
+//   return AbsoluteFill({ style: {...}, children: [ { type: "rect", ... }, ... ] })
+// instead of
+//   return <AbsoluteFill style={{...}}><rect .../></AbsoluteFill>
+// which throws "AbsoluteFill is not a function" the instant Remotion tries
+// to render it (Remotion's components aren't plain callable functions —
+// they're wrapped/memoized objects, so calling one directly isn't just
+// unconventional, it's a guaranteed TypeError). Scoped to just these five
+// names, not every remotion import: interpolate, spring, useCurrentFrame,
+// useVideoConfig, Easing.*, interpolateColors, and random are ALL
+// genuinely meant to be called as plain functions — only component-shaped
+// exports are ever JSX-only.
+const REMOTION_COMPONENT_ONLY_NAMES = new Set(["AbsoluteFill", "Series", "Sequence", "Audio", "Loop"]);
+
+function checkCalledRemotionComponent(ast) {
+  const errors = [];
+  traverse(ast, {
+    CallExpression(path) {
+      const { callee } = path.node;
+      if (callee.type !== "Identifier" || !REMOTION_COMPONENT_ONLY_NAMES.has(callee.name)) return;
+
+      // Respect real shadowing (same philosophy as isUncalledRemotionRandomBinding
+      // above): if this name resolves to a genuine LOCAL declaration (not an
+      // import), we have no idea what it actually is here, so stay silent
+      // rather than risk a false positive. No binding at all, or a binding
+      // that IS an import ("module" kind), both mean this call will resolve
+      // to Remotion's real component at runtime — a guaranteed crash either way
+      // (headers always end up importing the full canonical set — see
+      // canonicalizeHeaderImports — even if this fragment didn't write the
+      // import itself).
+      const binding = path.scope.getBinding(callee.name);
+      if (binding && binding.kind !== "module") return;
+
+      const loc = path.node.loc ? ` (line ${path.node.loc.start.line})` : "";
+      errors.push(
+        `"${callee.name}" is a Remotion component and must be used as JSX (<${callee.name}>...</${callee.name}>), never called directly like "${callee.name}(...)" — this throws "${callee.name} is not a function" at render time${loc}`
+      );
+    },
+  });
+  return errors;
+}
+
 function checkCalledNonFunctionConst(ast) {
   const errors = [];
   traverse(ast, {
@@ -524,6 +655,71 @@ function checkHooksCalledOutsideFunction(ast) {
   return errors;
 }
 
+// A real reported failure: a scene renders <Arrow to={someAnchor} .../> where
+// someAnchor never positions anything else — the arrow points at a spot
+// nothing was ever drawn at, because whatever the model meant to place there
+// got dropped somewhere between planning and JSX. A real anchor that
+// positions an actual on-screen element is, by construction, referenced at
+// LEAST twice: once by the Arrow's own to/from, and once by whatever
+// <div>/<circle>/etc. it points at (see CRAFT §C: "every dependent element
+// READS that same const"). An anchor identifier referenced EXACTLY once
+// (only inside the Arrow call itself) can only mean nothing else in the
+// scene reads that position — i.e. nothing is actually drawn there. This is
+// provable from reference counts alone, not a style heuristic, so it stays
+// zero-false-positive like the other checks in this file. Deliberately
+// narrow: only fires on a named identifier/member-expression target with a
+// resolvable binding — a bare inline literal (to={{x: 700, y: 540}}) is left
+// alone, since there's no named binding to prove is unused elsewhere (and
+// the existing anchor-reuse convention is itself only a style preference for
+// that shape, not a provable bug).
+function rootBindingName(expr) {
+  let node = expr;
+  while (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
+    node = node.object;
+  }
+  return node.type === "Identifier" ? node.name : null;
+}
+
+function checkArrowTargetsAreReferenced(ast) {
+  const errors = [];
+  traverse(ast, {
+    JSXOpeningElement(path) {
+      const { name, attributes } = path.node;
+      if (name.type !== "JSXIdentifier" || name.name !== "Arrow") return;
+
+      for (const attrName of ["to", "from"]) {
+        const attr = attributes.find(
+          (a) => a.type === "JSXAttribute" && a.name.name === attrName
+        );
+        if (!attr || attr.value?.type !== "JSXExpressionContainer") continue;
+        const expr = attr.value.expression;
+
+        const rootName = rootBindingName(expr);
+        if (!rootName) continue; // inline literal or other shape — not checkable here
+
+        const binding = path.scope.getBinding(rootName);
+        if (!binding) continue; // not a locally-resolvable binding — stay silent
+
+        // Count references OUTSIDE this specific attribute's own expression.
+        const attrStart = attr.value.start;
+        const attrEnd = attr.value.end;
+        const otherRefs = binding.referencePaths.filter((refPath) => {
+          const n = refPath.node;
+          return !(n.start >= attrStart && n.end <= attrEnd);
+        });
+
+        if (otherRefs.length === 0) {
+          const loc = attr.loc ? ` (line ${attr.loc.start.line})` : "";
+          errors.push(
+            `Arrow's "${attrName}" target "${rootName}" is referenced nowhere else in the scene${loc} — nothing is actually drawn at that position, so this arrow points at nothing. Either render a real element there using "${rootName}", or remove the arrow.`
+          );
+        }
+      }
+    },
+  });
+  return errors;
+}
+
 // Sum every <Series.Sequence durationInFrames={N}> and compare to the real
 // audio-measured total. Small drift gets auto-corrected on the LAST sequence
 // (absorbing rounding slop there is harmless); large drift means something
@@ -606,6 +802,11 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
     throw new Error(`Invalid interpolate() usage:\n${interpolateErrors.join("\n")}`);
   }
 
+  const springErrors = checkSpringFpsCalls(ast);
+  if (springErrors.length > 0) {
+    throw new Error(`Invalid spring() usage:\n${springErrors.join("\n")}`);
+  }
+
   const importErrors = checkImportRestriction(ast, ["react", "remotion"]);
   if (importErrors.length > 0) {
     throw new Error(importErrors.join("\n"));
@@ -619,6 +820,11 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
   const nonFunctionCalls = checkCalledNonFunctionConst(ast);
   if (nonFunctionCalls.length > 0) {
     throw new Error(`Generated code calls a non-function value:\n${nonFunctionCalls.join("\n")}`);
+  }
+
+  const calledComponents = checkCalledRemotionComponent(ast);
+  if (calledComponents.length > 0) {
+    throw new Error(`Generated code calls a Remotion component as a function:\n${calledComponents.join("\n")}`);
   }
 
   const usedBeforeDeclared = checkUsedBeforeDeclared(ast);
@@ -705,6 +911,11 @@ function validateHeaderFragment(code, { reservedNames = [] } = {}) {
     throw new Error(`Invalid interpolate() usage in header:\n${interpolateErrors.join("\n")}`);
   }
 
+  const springErrors = checkSpringFpsCalls(ast);
+  if (springErrors.length > 0) {
+    throw new Error(`Invalid spring() usage in header:\n${springErrors.join("\n")}`);
+  }
+
   const declared = checkTopLevelDeclarationNames(ast);
   const collision = declared.find(
     (d) => /^Scene\d+$/.test(d.name) || reservedNames.includes(d.name)
@@ -723,6 +934,11 @@ function validateHeaderFragment(code, { reservedNames = [] } = {}) {
   const nonFunctionCalls = checkCalledNonFunctionConst(ast);
   if (nonFunctionCalls.length > 0) {
     throw new Error(`Header calls a non-function value:\n${nonFunctionCalls.join("\n")}`);
+  }
+
+  const calledComponents = checkCalledRemotionComponent(ast);
+  if (calledComponents.length > 0) {
+    throw new Error(`Header calls a Remotion component as a function:\n${calledComponents.join("\n")}`);
   }
 
   const usedBeforeDeclared = checkUsedBeforeDeclared(ast);
@@ -758,6 +974,62 @@ function getHeaderExposedNames(headerCode) {
   return new Set([...collectImportedNames(ast), ...declared]);
 }
 
+// Builds a compact version of the header for embedding in EVERY one of a
+// lesson's 8-14 per-scene prompts, instead of resending the header's full
+// implementation on each call. A scene never needs to know HOW a shared
+// component like Backdrop/Arrow animates internally — only that it exists
+// and what to pass it — so every top-level function/component's BODY is
+// collapsed to a one-line placeholder while its exact name + parameters
+// (the part a scene actually needs to call it correctly) are kept verbatim.
+// Plain value declarations (PALETTE, SAFE, ZONES, CLAMP, clampPos, etc.) are
+// left completely untouched: they're already small, and a scene needs their
+// EXACT values (a hex color, a bound number), not just their existence.
+//
+// Pure string-slicing off @babel/parser's own node start/end offsets — no
+// @babel/generator involved (not a declared project dependency, and slicing
+// the original source text is both simpler and can't introduce a
+// re-serialization bug). Only ever used to build what gets SENT to the
+// model for scene generation; the real, full header is still what gets
+// stitched into the final video and what getHeaderExposedNames validates
+// against — this function must never be used for either of those.
+function compactHeaderForPrompt(headerCode) {
+  const ast = parseTsx(headerCode, "Header code");
+  const PLACEHOLDER = "{ /* implementation already declared above in this header — do not redeclare, just call it */ }";
+
+  // (start, end) of the body to blank out, collected then applied
+  // back-to-front so earlier replacements don't shift later offsets.
+  const edits = [];
+
+  function collapseIfFunctionBody(node) {
+    if (!node || node.body?.type !== "BlockStatement") return;
+    edits.push({ start: node.body.start, end: node.body.end, text: PLACEHOLDER });
+  }
+
+  for (const stmt of ast.program.body) {
+    if (stmt.type === "FunctionDeclaration") {
+      collapseIfFunctionBody(stmt);
+    } else if (stmt.type === "VariableDeclaration") {
+      for (const decl of stmt.declarations) {
+        const init = decl.init;
+        if (init && (init.type === "ArrowFunctionExpression" || init.type === "FunctionExpression")) {
+          collapseIfFunctionBody(init);
+          // Expression-bodied arrows (e.g. `const clampPos = (v,lo,hi) =>
+          // Math.min(hi, Math.max(lo, v));`) are deliberately left alone —
+          // no braces to collapse, already one line, and exactly the kind
+          // of small pure-math helper a scene benefits from seeing in full.
+        }
+      }
+    }
+  }
+
+  edits.sort((a, b) => b.start - a.start);
+  let result = headerCode;
+  for (const e of edits) {
+    result = result.slice(0, e.start) + e.text + result.slice(e.end);
+  }
+  return result;
+}
+
 // Validates ONE scene fragment: exactly one top-level declaration named
 // sceneName, no imports/export/<Series>/<Series.Sequence>/<Audio>, valid
 // interpolate() shape, and no reference to an identifier that isn't either a
@@ -791,6 +1063,11 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
     throw new Error(`Invalid interpolate() usage in ${sceneName}:\n${interpolateErrors.join("\n")}`);
   }
 
+  const springErrors = checkSpringFpsCalls(ast);
+  if (springErrors.length > 0) {
+    throw new Error(`Invalid spring() usage in ${sceneName}:\n${springErrors.join("\n")}`);
+  }
+
   const declared = checkTopLevelDeclarationNames(ast);
   if (declared.length !== 1 || declared[0].name !== sceneName) {
     throw new Error(
@@ -809,6 +1086,11 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
     throw new Error(`${sceneName} calls a non-function value:\n${nonFunctionCalls.join("\n")}`);
   }
 
+  const calledComponents = checkCalledRemotionComponent(ast);
+  if (calledComponents.length > 0) {
+    throw new Error(`${sceneName} calls a Remotion component as a function:\n${calledComponents.join("\n")}`);
+  }
+
   const usedBeforeDeclared = checkUsedBeforeDeclared(ast);
   if (usedBeforeDeclared.length > 0) {
     throw new Error(`${sceneName} has a temporal-dead-zone violation:\n${usedBeforeDeclared.join("\n")}`);
@@ -819,6 +1101,11 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
     throw new Error(`${sceneName} calls a hook outside a function:\n${badHookCalls.join("\n")}`);
   }
 
+  const arrowTargetErrors = checkArrowTargetsAreReferenced(ast);
+  if (arrowTargetErrors.length > 0) {
+    throw new Error(`${sceneName} has arrow(s) pointing at nothing:\n${arrowTargetErrors.join("\n")}`);
+  }
+
   return code;
 }
 
@@ -827,4 +1114,5 @@ module.exports = {
   validateHeaderFragment,
   validateSceneFragment,
   getHeaderExposedNames,
+  compactHeaderForPrompt,
 };

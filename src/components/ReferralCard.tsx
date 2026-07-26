@@ -9,12 +9,11 @@ interface ReferralData {
   code: string;
   link: string;
   totalReferrals: number;
-  progressInCycle: number;
   creditsEarned: number;
-  nextCreditAt: number;
+  creditsPerReferral: number;
 }
 
-function ReferralModal({ link, onClose }: { link: string; onClose: () => void }) {
+function ReferralModal({ link, creditsPerReferral, onClose }: { link: string; creditsPerReferral: number; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -34,7 +33,7 @@ function ReferralModal({ link, onClose }: { link: string; onClose: () => void })
     { number: "01", title: "Share your link", description: "Send your invite link to a friend via WhatsApp, text, or email." },
     { number: "02", title: "Friend signs up", description: "They create a free Level Up account using your link." },
     { number: "03", title: "Friend verifies their email", description: "They click the confirmation link in their inbox — the same step everyone does to log in." },
-    { number: "04", title: "You earn a credit", description: "After 3 friends do this, 1 free course credit lands in your account. Then it resets — 3 more friends, another credit." },
+    { number: "04", title: "You earn credits", description: `You get ${creditsPerReferral} credits the moment they verify — no limit, no waiting for a cycle to complete.` },
   ];
 
   return (
@@ -63,7 +62,7 @@ function ReferralModal({ link, onClose }: { link: string; onClose: () => void })
             <Gift className="h-6 w-6 text-white" />
           </div>
           <h2 className="text-lg sm:text-xl font-bold text-white mb-1 pr-9">Invite friends, earn credits</h2>
-          <p className="text-purple-200 text-sm">Every 3 friends who sign up = 1 free course credit. No limit.</p>
+          <p className="text-purple-200 text-sm">Every verified friend who signs up = {creditsPerReferral} credits for you. No limit.</p>
         </div>
 
         {/* Scrollable middle: steps + warning */}
@@ -91,7 +90,7 @@ function ReferralModal({ link, onClose }: { link: string; onClose: () => void })
           <div className="mx-5 mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-2">
             <span className="text-amber-500 shrink-0 mt-0.5">⚠️</span>
             <p className="text-xs text-amber-700 leading-relaxed">
-              <span className="font-semibold">Remember:</span> your friend needs to verify their email (the confirmation link we send them) for your credit to count. Just entering their details without confirming won't trigger it.
+              <span className="font-semibold">Remember:</span> your friend needs to verify their email (the confirmation link we send them) for your credits to land. Just entering their details without confirming won't trigger it.
             </p>
           </div>
         </div>
@@ -130,11 +129,9 @@ export function ReferralCard() {
 
   if (loading || !data) return null;
 
-  const progress = data.progressInCycle;
-
   return (
     <>
-      {showModal && <ReferralModal link={data.link} onClose={() => setShowModal(false)} />}
+      {showModal && <ReferralModal link={data.link} creditsPerReferral={data.creditsPerReferral} onClose={() => setShowModal(false)} />}
 
       <div className="mx-3 mb-3 rounded-2xl overflow-hidden border border-purple-200 shadow-sm"
         style={{ background: "linear-gradient(135deg, #f5f3ff, #ede9fe)" }}>
@@ -151,21 +148,14 @@ export function ReferralCard() {
             </div>
             <div className="min-w-0">
               <p className="text-xs font-bold text-slate-800">Invite friends, earn credits</p>
-              <p className="text-xs text-purple-600 font-medium">3 friends = 1 free course</p>
+              <p className="text-xs text-purple-600 font-medium">{data.creditsPerReferral} credits per friend</p>
             </div>
           </div>
 
-          {/* Progress */}
-          <div className="flex items-center gap-1.5 mb-2">
-            {Array.from({ length: 3 }, (_, i) => (
-              <div key={i} className="flex-1 h-2 rounded-full transition-all duration-500"
-                style={{ background: i < progress ? "linear-gradient(90deg, #6366f1, #8b5cf6)" : "rgba(99,102,241,0.15)" }} />
-            ))}
-          </div>
           <p className="text-xs text-slate-500 mb-3">
-            {progress === 0 && data.totalReferrals === 0 ? "Invite 3 friends to earn a free credit" :
-             progress === 0 ? `🎉 ${data.creditsEarned} credit${data.creditsEarned !== 1 ? "s" : ""} earned — keep going!` :
-             `${progress}/3 friends joined · ${data.nextCreditAt} more to go`}
+            {data.totalReferrals === 0
+              ? `Invite a friend — you both win once they verify their email.`
+              : `${data.totalReferrals} friend${data.totalReferrals !== 1 ? "s" : ""} joined · ${data.creditsEarned} credit${data.creditsEarned !== 1 ? "s" : ""} earned so far`}
           </p>
 
           {/* CTA */}
@@ -173,7 +163,7 @@ export function ReferralCard() {
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold text-white transition-all hover:opacity-90"
             style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 2px 8px rgba(99,102,241,0.4)" }}>
             <Sparkles className="h-3.5 w-3.5" />
-            Invite a friend & earn a credit
+            Invite a friend & earn {data.creditsPerReferral} credits
           </button>
 
           {/* Stats */}

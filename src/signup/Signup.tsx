@@ -5,6 +5,8 @@ import axios from "axios";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { analytics, identifyUser } from "../lib/analytics";
+import { isPasswordAcceptable } from "../lib/passwordStrength";
+import { PasswordStrengthMeter } from "../components/PasswordStrengthMeter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -62,6 +64,12 @@ export default function SignupPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
+    if (!isPasswordAcceptable(password)) {
+      setError("Please choose a stronger password before continuing.");
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await axios.post(`${BASE_URL}/api/auth/register`, {
@@ -305,7 +313,7 @@ export default function SignupPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-10 pr-10 h-12 border-2 border-gray-200 focus:border-blue-500 transition-colors"
                     required
-                    minLength={6}
+                    minLength={8}
                   />
                   <button
                     type="button"
@@ -315,7 +323,7 @@ export default function SignupPage() {
                     {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                   </button>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">Must be at least 6 characters long</p>
+                <PasswordStrengthMeter password={password} />
               </motion.div>
             </CardContent>
 

@@ -37,6 +37,119 @@ const BufferedAudio: React.FC<any> = (props) => {
   });
 };
 
+// ── Runtime crash shields ─────────────────────────────────────────────────────
+// Server-side AST validation catches what's statically knowable, but two crash
+// classes are only visible at runtime with real frame values flowing through:
+//
+//   1. interpolate() receiving an inputRange that EVALUATES to NaN/non-finite
+//     or non-increasing numbers (a variable that was undefined at runtime,
+//     a division that hit 0/0). Remotion throws, React unmounts the scene,
+//     and the user gets a black error screen — a real production crash:
+//     "inputRange must contain only finite numbers, but got [NaN,NaN]".
+//   2. spring() called without fps — throws immediately.
+//
+// Instead of letting one bad frame value kill the whole lesson, these wrappers
+// degrade gracefully: sanitize the input, warn once per unique failure, and
+// keep rendering. A slightly-wrong animation curve on one element is strictly
+// better than a dead video. These apply to EVERY lesson ever generated — no
+// regeneration needed — because the sandbox scope is the single source of
+// these bindings for all compiled lesson code.
+const warnedRuntimeIssues = new Set<string>();
+function warnOnce(key: string, message: string) {
+  if (warnedRuntimeIssues.has(key)) return;
+  warnedRuntimeIssues.add(key);
+  console.warn(`[lesson-runtime-shield] ${message}`);
+}
+
+function safeInterpolate(
+  input: number,
+  inputRange: number[],
+  outputRange: number[],
+  options?: any,
+): number {
+  let inR = inputRange;
+  let outR = outputRange;
+
+  // Missing/short outputRange (rule violation the model occasionally ships
+  // despite validation of the LITERAL arg count — e.g. a variable that's
+  // undefined at runtime).
+  if (!Array.isArray(inR) || !Array.isArray(outR) || inR.length < 2 || outR.length < 2) {
+    warnOnce("shape", `interpolate() called with malformed ranges (in=${JSON.stringify(inR)}, out=${JSON.stringify(outR)}) — returning first output or 0.`);
+    return Array.isArray(outR) && Number.isFinite(outR[0]) ? outR[0] : 0;
+  }
+
+  // Length mismatch: truncate to the shorter, keeping a valid pairing.
+  if (inR.length !== outR.length) {
+    const n = Math.min(inR.length, outR.length);
+    warnOnce("length", `interpolate() ranges have different lengths (${inR.length} vs ${outR.length}) — truncating to ${n}.`);
+    inR = inR.slice(0, n);
+    outR = outR.slice(0, n);
+  }
+
+  // Non-finite values anywhere: the exact "[NaN,NaN]" production crash.
+  if (!inR.every(Number.isFinite) || !outR.every(Number.isFinite)) {
+    warnOnce(
+      `nan:${JSON.stringify(inputRange)}`,
+      `interpolate() received non-finite range values (in=${JSON.stringify(inR)}, out=${JSON.stringify(outR)}) — holding at nearest finite output instead of crashing.`,
+    );
+    const firstFiniteOut = outR.find(Number.isFinite);
+    return firstFiniteOut ?? 0;
+  }
+
+  // Non-increasing inputRange: bump duplicates/regressions minimally so
+  // Remotion's strict-monotonic requirement passes. [0,30,60,60] → [0,30,60,60.001].
+  let needsFix = false;
+  for (let i = 1; i < inR.length; i++) {
+    if (inR[i] <= inR[i - 1]) { needsFix = true; break; }
+  }
+  if (needsFix) {
+    warnOnce(`mono:${JSON.stringify(inputRange)}`, `interpolate() inputRange not strictly increasing (${JSON.stringify(inR)}) — auto-bumping.`);
+    const fixed = inR.slice();
+    for (let i = 1; i < fixed.length; i++) {
+      if (fixed[i] <= fixed[i - 1]) fixed[i] = fixed[i - 1] + 0.001;
+    }
+    inR = fixed;
+  }
+
+  const safeInput = Number.isFinite(input) ? input : inR[0];
+  if (safeInput !== input) {
+    warnOnce("input", `interpolate() received a non-finite input value — clamping to range start.`);
+  }
+
+  return RemotionNS.interpolate(safeInput, inR, outR, options);
+}
+
+function safeSpring(config: any): number {
+  if (config && typeof config === "object" && !Number.isFinite(config.fps)) {
+    warnOnce("spring-fps", `spring() called without a finite fps — defaulting to 30 instead of crashing.`);
+    return RemotionNS.spring({ ...config, fps: 30 });
+  }
+  return RemotionNS.spring(config);
+}
+
+// Remotion's AbsoluteFill/Sequence/Loop are wrapped/memoized component objects,
+// NOT plain callable functions — generated code that mistakenly calls one
+// directly (AbsoluteFill({ style, children }) instead of JSX) throws
+// "AbsoluteFill is not a function". Re-exposing them as plain function
+// components makes both usages work: JSX renders normally, and a direct call
+// returns a valid React element (calling a plain function component directly
+// is legal React). Series needs its .Sequence static preserved.
+function makeCallable(Component: any): React.FC<any> {
+  const Wrapped: React.FC<any> = (props) => React.createElement(Component, props);
+  return Wrapped;
+}
+const CallableSeries: any = makeCallable(RemotionNS.Series);
+// IMPORTANT: Series.Sequence must stay the REAL Remotion component, not a
+// makeCallable wrapper. Remotion's <Series> validates its children with a
+// strict reference check (child.type !== the internal Series.Sequence),
+// throwing "only accepts a list of <Series.Sequence /> components ... but
+// got [object Object] instead" for anything else. A wrapped copy has a
+// different identity, so it fails that check even when used correctly via
+// JSX — breaking every lesson that uses <Series>. Direct-call misuse of
+// Series.Sequence is comparatively rare; correctness of normal JSX usage
+// takes priority here.
+CallableSeries.Sequence = RemotionNS.Series.Sequence;
+
 // ── Sandbox scope ─────────────────────────────────────────────────────────────
 // Expose the ENTIRE Remotion module so any current or future Remotion export
 // (interpolateColors, Easing, Loop, random, etc.) is automatically available
@@ -56,7 +169,13 @@ for (const [key, value] of Object.entries(RemotionNS)) {
   if (!EXCLUDED_REMOTION_KEYS.has(key)) SCOPE[key] = value;
 }
 Object.assign(SCOPE, { useMemo, useCallback, useRef });
-SCOPE.Audio = BufferedAudio; // buffered wrapper wins over raw Audio
+SCOPE.Audio = BufferedAudio;            // buffered wrapper wins over raw Audio
+SCOPE.interpolate = safeInterpolate;    // NaN/monotonicity shield (see above)
+SCOPE.spring = safeSpring;              // missing-fps shield
+SCOPE.AbsoluteFill = makeCallable(RemotionNS.AbsoluteFill); // survives direct-call misuse
+SCOPE.Sequence = makeCallable(RemotionNS.Sequence);
+SCOPE.Loop = makeCallable(RemotionNS.Loop);
+SCOPE.Series = CallableSeries;
 
 const SCOPE_KEYS = Object.keys(SCOPE);
 

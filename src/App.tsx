@@ -5,6 +5,8 @@ import { BrowserRouter } from "react-router-dom"
 import {Routes, Route} from "react-router-dom"
 import {AuthProvider} from "@/lib/auth-context"
 import LoginPage from './login/Login'
+import ForgotPasswordPage from './login/ForgotPassword'
+import ResetPasswordPage from './login/ResetPassword'
 import ProfilePage from './Profile/Profile'
 import SignupPage from './signup/Signup'
 import TutorsPage from './tutors/Tutors'
@@ -30,7 +32,9 @@ import AILearningPage from './ai/AiTutor'
 import ShowcasePage from './showcase/ShowCase'
 import VerifyEmailPage from './signup/Verifyemailpage'
 import AdminDashboard from './ai/AdminDashboard'
+import AdminPricingConfigPage from './ai/AdminPricingConfig'
 import PricingPage from './price/PricePage'
+import CreditsDashboardPage from './dashboard/CreditsDashboard'
 import SharedCoursePage from './share/SharePage'
 import PublicGallery from './gallery/PublicGallery'
 import CollabHome from './collab/CollabHome'
@@ -51,6 +55,8 @@ function App() {
       <Route path="/" element={<Landing/>}/>
       <Route path="/dashboard" element={<DashboardPage/>}/>
       <Route path="/login" element={<LoginPage/>}/>
+      <Route path="/forgot-password" element={<ForgotPasswordPage/>}/>
+      <Route path="/reset-password" element={<ResetPasswordPage/>}/>
       <Route path="/profile" element={<ProfilePage/>}/>
       <Route path="/signup" element={<SignupPage/>}/>
       <Route path="/verify-email" element={<VerifyEmailPage/>}/>
@@ -66,11 +72,13 @@ function App() {
       <Route path="/ai_tutor/:courseId" element={<AILearningPage/>}/>
       <Route path="/ai_showcase" element={<ShowcasePage/>}/>
       <Route path="/ai_admin" element={<AdminDashboard/>}/>
+      <Route path="/ai_admin/pricing" element={<AdminPricingConfigPage/>}/>
       <Route path="/bookings" element={<BookingsPage/>}/>
       <Route path="/tutor/dashboard" element={<TutorDashboardPage/>}/>
       <Route path="/tutor/earnings" element={<TutorEarningsPage/>}/>
       <Route path="/tutor/availability" element={<TutorAvailabilityPage/>}/>
-      <Route path="/price" element={<PricingPage/>}/> 
+      <Route path="/price" element={<PricingPage/>}/>
+      <Route path="/credits" element={<CreditsDashboardPage/>}/>
       <Route path="/tutor/profile" element={<TutorProfileEditPage/>}/>
       <Route path="/tutor/sessions" element={<TutorSessionsPage/>}/>
       <Route path="/admin/dashboard" element={<AdminDashboardPage/>}/>

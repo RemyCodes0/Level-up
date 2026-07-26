@@ -1,14 +1,14 @@
-// Runs scene-plan generation on SCENE_PLAN_PROVIDER (DeepSeek V4 Flash,
-// native API, see claudeService.js) — a deliberate, separate model choice
-// from whichever model LESSON_CODE_MODEL selects for the actual animation
-// CODE, since this is lighter structured JSON generation (scene timing,
-// narration text, visual descriptions), not code. No circular require risk:
-// claudeService.js never requires this file (only courseController.js
-// does), so a top-level require here is safe.
+// Runs scene-plan generation on SCENE_PLAN_PROVIDER (GLM 5.2, reasoning
+// off, via Z.ai's own API directly — see claudeService.js) — a deliberate,
+// separate model choice from whichever model LESSON_CODE_MODEL selects for
+// the actual animation CODE, since this is lighter structured JSON
+// generation (scene timing, narration text, visual descriptions), not code.
+// No circular require risk: claudeService.js never requires this file (only
+// courseController.js does), so a top-level require here is safe.
 const {
   SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
-  limitLessonHeaderCall,
+  limitZaiCall,
   describeError,
   isNonRetryable,
   backoffDelay,
@@ -52,7 +52,12 @@ Return ONLY valid JSON, no markdown, exactly this structure:
       "id": 1,
       "narration": "string — the exact words spoken during this scene. One or two sentences. Natural spoken language for text-to-speech, no markdown, no lists.",
       "visualType": "one of: intro | concept | diagram | steps | comparison | example | summary",
-      "visualDescription": "string — precisely what should be on screen DURING this narration. Describe specific shapes, text, labels, colors, and motion. Be concrete.",
+      "mechanism": {
+        "before": "string — the exact visual state at the START of this scene, stated as something concretely drawable (e.g. 'twelve unsorted bars of visibly different heights in a row')",
+        "after": "string — the exact visual state at the END of this scene (e.g. 'the same twelve bars in ascending height order, each snapping into place')",
+        "driver": "string — the single visible action/process that transforms before into after, the thing the viewer literally watches happen (e.g. 'adjacent bars compare (both flash) and swap positions one pair at a time, largest bubbling right')"
+      },
+      "visualDescription": "string — the full staging of the mechanism above: the cast of specific elements (shapes, values, labels), their rough spatial arrangement, the color/emphasis logic, and how the driver plays out across the scene's timeline. Every specific thing you name must be something that actually moves or changes during the scene — a list of static shapes/labels with no transformation is NOT acceptable, even if it's detailed.",
       "onScreenText": "string — the short headline to display for this scene (max 8 words)"
     }
   ]
@@ -61,7 +66,10 @@ Return ONLY valid JSON, no markdown, exactly this structure:
 Rules:
 - Create between 8 and 14 scenes for a roughly 5-minute lesson.
 - Each scene's narration should take 15-35 seconds to speak naturally — roughly 40-90 words at this project's TTS voice's real speaking pace (~150-165 words/minute). EVERY scene needs this, including the intro and the summary — a narration that's just a restated headline (a handful of words) is too short and gets cut off mid-thought when the scene switches, regardless of how it feels while writing it.
-- The visualDescription MUST match what the narration is talking about at that exact moment.
+- THE MECHANISM FIELD IS THE CONTRACT: before/after must describe two visibly DIFFERENT states (if they're the same picture, the scene is a slide, not an animation — rewrite it), and the driver must be an action a viewer can watch, not a conclusion ("the sorted order emerges" is a conclusion; "pairs compare and swap one at a time" is a watchable action). The code generator builds EXACTLY what this field says, so vagueness here becomes a boring scene downstream.
+- The visualDescription MUST match what the narration is talking about at that exact moment, and MUST stage the mechanism — never contradict or ignore it.
+- AVOID "THE STATIC LEGEND" — a diagram that just names/labels things with a checkmark or caption next to each, where nothing ever actually moves or transforms, is a slide, not an animation, no matter how many shapes/colors/labels it lists. If the concept is a process (an algorithm, a comparison, a growth, a flow), the visualDescription must describe that process actually happening on screen — not its conclusion stated in text.
+- Even intro/summary scenes get a real mechanism: an intro can build the lesson's central object piece by piece; a summary can replay the key transformation compressed — never "title floats over background".
 - Cover the lesson's title, description, and all key points across the scenes.
 - The first scene is an intro, the last scene is a summary.
 - All content specific to the topic, never generic.
@@ -113,18 +121,19 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
       const userContent =
         buildScenePlanUserContent(lesson) +
         (contentFeedback
-          ? `\n\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:\n"${contentFeedback}"\nRegenerate the full scene list from scratch and make absolutely sure every single scene has at least 40 words of narration this time.`
+          ? `\n\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:\n"${contentFeedback}"\nRegenerate the full scene list from scratch and make absolutely sure this specific problem does not occur again — every scene needs at least 40 words of narration AND a real mechanism whose before/after states visibly differ.`
           : "");
 
       const { text, stopReason } = await streamCodeCompletion({
-        limiter: limitLessonHeaderCall,
-        // DeepSeek V4 Flash, native API, reasoning effort "low" — see
+        // Z.ai's own 10-concurrent-request account cap, not the OpenRouter
+        // header-call pool — this call goes straight to Z.ai.
+        limiter: limitZaiCall,
+        // GLM 5.2, reasoning off, via Z.ai directly — see
         // SCENE_PLAN_PROVIDER's definition in claudeService.js.
         provider: SCENE_PLAN_PROVIDER,
         systemPrompt: SCENE_PLAN_SYSTEM_PROMPT,
         userContent,
-        // 40000 is generous headroom for a plain JSON scenes array — even
-        // with "low" reasoning eating into this same budget, still plenty
+        // 40000 is generous headroom for a plain JSON scenes array — plenty
         // of margin over what 8-14 scenes of narration/visualDescription
         // actually need.
         maxOutputTokens: 40000,
@@ -151,6 +160,33 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
           .join("; ");
         throw new Error(
           `${shortScenes.length}/${parsed.scenes.length} scene(s) have under-length narration — need at least 40 words each: ${detail}`
+        );
+      }
+
+      // Mechanism sanity: a degenerate mechanism (missing, or before === after,
+      // meaning nothing visibly changes) is the plan-level root of every
+      // static-slide scene downstream — reject the whole plan so the retry's
+      // corrective feedback names exactly which scenes were degenerate.
+      // Tolerant of formatting (whitespace/case) but not of absence.
+      const degenerate = parsed.scenes
+        .map((s, i) => {
+          const m = s.mechanism;
+          if (!m || typeof m !== "object" || !m.before || !m.after || !m.driver) {
+            return { index: i, reason: "missing mechanism.before/after/driver" };
+          }
+          const norm = (str) => String(str).trim().toLowerCase();
+          if (norm(m.before) === norm(m.after)) {
+            return { index: i, reason: "mechanism.before and mechanism.after describe the same state — nothing visibly changes" };
+          }
+          return null;
+        })
+        .filter(Boolean);
+      if (degenerate.length > 0) {
+        const detail = degenerate
+          .map((d) => `scene ${d.index + 1} ("${parsed.scenes[d.index].onScreenText}"): ${d.reason}`)
+          .join("; ");
+        throw new Error(
+          `${degenerate.length}/${parsed.scenes.length} scene(s) have a degenerate mechanism: ${detail}`
         );
       }
 

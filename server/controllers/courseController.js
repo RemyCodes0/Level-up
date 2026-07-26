@@ -13,6 +13,7 @@ const Course = require("../models/Course");
 const GenerationLog = require("../models/GenerationLog");
 const User = require("../models/User");
 const QuizAttempt = require("../models/QuizAttempt");
+const { grantCredits } = require("../services/creditService");
 
 // Audio dir — for cleanup when a course is deleted
 const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
@@ -32,24 +33,47 @@ async function generateCourseHandler(req, res) {
       return;
     }
 
+    // Set by checkCredits middleware — the free trial's fixed shape, the
+    // selected tier's shape (already atomically paid for), or (for callers
+    // that don't send a tier, e.g. collab room creation) the legacy flat
+    // shape, which still needs its own deduction below exactly as before.
+    const tierSnapshot = req.courseTierSnapshot;
+
     const course = await Course.create({
       userId: req.user._id,
       topic: topic || req.file?.originalname,
       status: "generating",
       isFreeTrialCourse: !!req.usingFreeTrial,
+      tier: tierSnapshot.tier,
+      tierName: tierSnapshot.tierName,
+      lessonCount: tierSnapshot.lessonCount,
+      mcqCount: tierSnapshot.mcqCount,
+      timeAllocationMinutes: tierSnapshot.timeAllocationMinutes,
+      creditCost: tierSnapshot.creditCost,
       lessons: [],
       questions: [],
     });
 
-    // Deduct credit or mark free trial as used
     if (req.usingFreeTrial) {
       await User.findByIdAndUpdate(req.user._id, { freeTrialUsed: true });
-    } else {
+    } else if (!tierSnapshot.tier) {
+      // Legacy no-tier caller — checkCredits didn't spend anything for this
+      // path, so deduct the flat 1 credit here exactly as this always did.
       await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
     }
+    // Tier path: checkCredits already atomically spent tierSnapshot.creditCost.
 
     res.json({ courseId: course._id, status: "generating" });
-    processCourse(course._id.toString(), topic, pdfBuffer, !!req.usingFreeTrial, level, sourceFileName);
+    processCourse(
+      course._id.toString(),
+      topic,
+      pdfBuffer,
+      !!req.usingFreeTrial,
+      level,
+      sourceFileName,
+      tierSnapshot.lessonCount,
+      tierSnapshot.mcqCount
+    );
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to start course generation" });
@@ -290,8 +314,8 @@ async function buildLesson(courseId, lesson) {
 // in one place.
 //
 // Was 2 lessons at once (Promise.allSettled over pairs). Changed because
-// GLM_SCENE_MAX_CONCURRENT (limitLessonSceneCall in claudeService.js) is a
-// single process-wide semaphore, not one per lesson — building 2 lessons
+// limitZaiCall (claudeService.js) is a single process-wide semaphore, not
+// one per lesson — building 2 lessons
 // concurrently meant their scene-generation calls competed for the SAME
 // slot pool, so each lesson's OWN scenes queued behind a sibling lesson's
 // scenes instead of running fully in parallel. One lesson at a time gives
@@ -322,11 +346,29 @@ async function buildLessonsSequentially(courseId, lessons) {
 // isFreeTrialCourse is still recorded on the course document for analytics
 // and the frontend's "this was a free trial" UI/feedback-prompt logic, but
 // it NO LONGER affects generation — every course builds all 6 lessons.
-async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = false, level = null, sourceFileName = null) {
+async function processCourse(
+  courseId,
+  topic,
+  pdfBuffer,
+  isFreeTrialCourse = false,
+  level = null,
+  sourceFileName = null,
+  lessonCount = 6,
+  mcqCount = 20
+) {
   const courseStart = Date.now();
   try {
     console.log(`[${courseId}] Generating course plan...`);
-    const { lessons, questions } = await generateCoursePlan(topic, null, pdfBuffer, sourceFileName, level);
+    const { lessons, questions } = await generateCoursePlan(
+      topic,
+      null,
+      pdfBuffer,
+      sourceFileName,
+      level,
+      3,
+      lessonCount,
+      mcqCount
+    );
 
     await Course.findByIdAndUpdate(courseId, {
       lessons: lessons.map((l) => ({
@@ -339,7 +381,9 @@ async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = fal
       questions,
     });
 
-    // Build all 6 lessons one at a time, regardless of trial status.
+    // Build all of this course's lessons one at a time, regardless of trial
+    // status — how many that is now depends on the selected tier (or the
+    // free trial's fixed 6), not a hardcoded count.
     await buildLessonsSequentially(courseId, lessons);
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
@@ -348,7 +392,20 @@ async function processCourse(courseId, topic, pdfBuffer, isFreeTrialCourse = fal
   } catch (err) {
     const totalMin = ((Date.now() - courseStart) / 60000).toFixed(1);
     console.error(`[${courseId}] Course processing failed after ${totalMin} min:`, err);
-    await Course.findByIdAndUpdate(courseId, { status: "failed" });
+    // findByIdAndUpdate without {new: true} returns the PRE-update doc, which
+    // still has the credit-cost snapshot needed to refund it.
+    const course = await Course.findByIdAndUpdate(courseId, { status: "failed" });
+    if (course && !course.isFreeTrialCourse && course.creditCost > 0) {
+      try {
+        await grantCredits(course.userId, course.creditCost, "refund", {
+          courseId,
+          reason: "generation_failed",
+        });
+        console.log(`[${courseId}] Refunded ${course.creditCost} credits to ${course.userId} after generation failure.`);
+      } catch (refundErr) {
+        console.error(`[${courseId}] Failed to refund credits after generation failure:`, refundErr.message);
+      }
+    }
   }
 }
 

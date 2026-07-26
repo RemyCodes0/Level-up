@@ -78,18 +78,28 @@ export interface CourseFromAPI {
   isShared?: boolean;
   isPublished?: boolean;
   publishedAt?: string | null;
+  // Tier snapshot at generation time (null tier = free trial or a legacy
+  // no-tier request) — see server/models/Course.js.
+  tier?: string | null;
+  tierName?: string;
+  lessonCount?: number;
+  mcqCount?: number;
+  timeAllocationMinutes?: number;
+  creditCost?: number;
 }
 
 // ── Start course generation — returns courseId immediately ───────────────────
 export async function startCourseGeneration(
   topic: string,
   file?: File | null,
-  level?: "beginner" | "intermediate" | "advanced" | null
+  level?: "beginner" | "intermediate" | "advanced" | null,
+  tier?: string | null
 ): Promise<{ courseId: string; status: string }> {
   const formData = new FormData();
   if (topic) formData.append("topic", topic);
   if (file) formData.append("file", file);
   if (level) formData.append("level", level);
+  if (tier) formData.append("tier", tier);
 
   const res = await fetch(`${BASE_URL}/api/course/generate`, {
     method: "POST",
@@ -97,7 +107,107 @@ export async function startCourseGeneration(
     body: formData,
   });
   handleUnauthorized(res);
-  if (!res.ok) throw new Error("Failed to start course generation");
+  if (!res.ok) {
+    // Attach status/code so callers (e.g. AiTutor.tsx's runGeneration) can
+    // tell a 402 "no_credits"/"invalid_tier" apart from a generic failure
+    // instead of showing the same alert for both.
+    const data = await res.json().catch(() => ({} as any));
+    const err = new Error(data.message || data.error || "Failed to start course generation") as Error & {
+      status?: number;
+      code?: string;
+    };
+    err.status = res.status;
+    err.code = data.error;
+    throw err;
+  }
+  return res.json();
+}
+
+// ── Course tiers + credit packs (admin-adjustable, not hardcoded) ────────────
+export interface CourseTier {
+  key: string;
+  name: string;
+  description: string;
+  lessonCount: number;
+  mcqCount: number;
+  timeAllocationMinutes: number;
+  creditCost: number;
+}
+
+export interface CreditPack {
+  key: string;
+  credits: number;
+  priceCents: number;
+  badge: string | null;
+}
+
+export async function getPricingConfig(): Promise<{ courseTiers: CourseTier[]; creditPacks: CreditPack[] }> {
+  const res = await fetch(`${BASE_URL}/api/payment/pricing-config`);
+  if (!res.ok) throw new Error("Failed to load pricing config");
+  return res.json();
+}
+
+// ── Admin — course tiers + credit packs (requireAdmin-gated server-side) ─────
+export async function getAdminPricingConfig(): Promise<{ courseTiers: CourseTier[]; creditPacks: CreditPack[] }> {
+  const res = await fetch(`${BASE_URL}/api/admin/pricing-config`, { headers: { ...authHeaders() } });
+  handleUnauthorized(res);
+  if (!res.ok) throw new Error("Failed to load pricing config");
+  return res.json();
+}
+
+export async function updateAdminPricingConfig(
+  courseTiers: CourseTier[],
+  creditPacks: CreditPack[]
+): Promise<{ courseTiers: CourseTier[]; creditPacks: CreditPack[] }> {
+  const res = await fetch(`${BASE_URL}/api/admin/pricing-config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ courseTiers, creditPacks }),
+  });
+  handleUnauthorized(res);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to save pricing config");
+  }
+  return res.json();
+}
+
+// ── Credits dashboard ─────────────────────────────────────────────────────────
+export interface CreditsBalance {
+  courseCredits: number;
+  freeTrialUsed: boolean;
+  canGenerate: boolean;
+  spendableBalance: number;
+  signupBonusCredits: number;
+  signupBonusExpiresAt: string | null;
+}
+
+export async function getCreditsBalance(): Promise<CreditsBalance> {
+  const res = await fetch(`${BASE_URL}/api/payment/credits`, { headers: { ...authHeaders() } });
+  handleUnauthorized(res);
+  if (!res.ok) throw new Error("Failed to fetch credits");
+  return res.json();
+}
+
+export interface CreditTransactionEntry {
+  _id: string;
+  amount: number;
+  balanceAfter: number;
+  source: "signup_bonus" | "referral" | "purchase" | "course_generation" | "refund";
+  meta?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export async function getTransactions(before?: string | null): Promise<{
+  transactions: CreditTransactionEntry[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}> {
+  const url = new URL(`${BASE_URL}/api/payment/transactions`);
+  if (before) url.searchParams.set("before", before);
+  const res = await fetch(url.toString(), { headers: { ...authHeaders() } });
+  handleUnauthorized(res);
+  if (!res.ok) throw new Error("Failed to load transaction history");
   return res.json();
 }
 

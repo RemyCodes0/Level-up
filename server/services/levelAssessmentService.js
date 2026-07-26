@@ -17,21 +17,28 @@
 // 3-4 exchange check, not a full exam.
 
 const OpenAI = require("openai");
+// Z.ai's own account-wide concurrency cap for GLM (limitZaiCall) — shared with
+// every other direct-to-Z.ai call in the app (lesson code, scene-plan,
+// course-plan, etc., see claudeService.js). Importing this rather than
+// running a separate limiter here is required, not just tidy: Z.ai enforces
+// the cap per ACCOUNT, not per call site, so a separate pool here could
+// still push the account over 10 combined with claudeService.js's traffic.
+const { limitZaiCall } = require("./claudeService");
 
-// GPT-5.6 Luna via OpenRouter's OpenAI-compatible endpoint — same
-// account/key as the rest of the app's AI calls (see claudeService.js,
-// ttsService.js). maxRetries: the SDK auto-retries failed requests
-// (including network timeouts like ETIMEDOUT) this many times with backoff
-// before giving up — important for unstable connections. timeout: how long
-// to wait per attempt.
+// GLM 5.2 via Z.ai's own official API directly — own client instance,
+// but same account/key/concurrency cap as claudeService.js's zaiClient (see
+// limitZaiCall above). Not OpenRouter: that account has no credits.
+// maxRetries: the SDK auto-retries failed requests (including network
+// timeouts like ETIMEDOUT) this many times with backoff before giving up —
+// important for unstable connections. timeout: how long to wait per attempt.
 const client = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.ZAI_API_KEY,
+  baseURL: "https://api.z.ai/api/paas/v4",
   maxRetries: 3,
   timeout: 60 * 1000,
 });
 
-const MODEL = "openai/gpt-5.6-luna"; // fast, fine for short MCQs (was DeepSeek V4 Flash)
+const MODEL = "glm-5.2"; // fast, fine for short MCQs (was GPT-5.6 Luna, DeepSeek V4 Flash before that)
 const MAX_QUESTIONS = 3;
 
 // Builds the system prompt that defines how the assessor behaves.
@@ -100,35 +107,36 @@ async function streamNextQuestion(topic, turns, onToken, maxAttempts = 3) {
     let fullText = "";
     let emittedAny = false;
     try {
-      const stream = await client.chat.completions.create({
-        model: MODEL,
-        max_tokens: 400,
-        // Off: this is a live "typing" question generator — reasoning would
-        // add latency to what should feel instant, and writing one simple
-        // self-report MCQ doesn't need it.
-        reasoning: { enabled: false },
-        // Pin to OpenAI's own backend — mostly a formality for a closed
-        // model (unlike GLM/DeepSeek's open weights, OpenRouter has nowhere
-        // else to route this), kept for consistency with every other
-        // provider in this codebase (see claudeService.js's
-        // CODE_PROVIDERS.glm for why this matters much more for open-weight
-        // models).
-        provider: { only: ["openai"] },
-        stream: true,
-        messages: [
-          { role: "system", content: buildSystemPrompt(topic) },
-          ...buildMessages(turns),
-        ],
-      });
+      // Held for the WHOLE stream lifetime (create + consume every chunk),
+      // not just until create() resolves — same contract as
+      // claudeService.js's streamCodeCompletion, required so the limiter
+      // actually caps concurrent open connections against Z.ai's account.
+      await limitZaiCall(async () => {
+        const stream = await client.chat.completions.create({
+          model: MODEL,
+          max_tokens: 400,
+          // Off: this is a live "typing" question generator — reasoning
+          // would add latency to what should feel instant, and writing one
+          // simple self-report MCQ doesn't need it. GLM's own native
+          // `thinking` field, not OpenRouter's unified `reasoning` shape —
+          // this talks to Z.ai directly now, not OpenRouter.
+          thinking: { type: "disabled" },
+          stream: true,
+          messages: [
+            { role: "system", content: buildSystemPrompt(topic) },
+            ...buildMessages(turns),
+          ],
+        });
 
-      for await (const chunk of stream) {
-        const textChunk = chunk.choices?.[0]?.delta?.content;
-        if (textChunk) {
-          fullText += textChunk;
-          emittedAny = true;
-          onToken(textChunk);
+        for await (const chunk of stream) {
+          const textChunk = chunk.choices?.[0]?.delta?.content;
+          if (textChunk) {
+            fullText += textChunk;
+            emittedAny = true;
+            onToken(textChunk);
+          }
         }
-      }
+      });
 
       return fullText;
     } catch (err) {
@@ -153,22 +161,23 @@ async function determineLevel(topic, turns) {
     .map((t, i) => `Q${i + 1}: ${t.question}\nThey answered: "${t.answer}"`)
     .join("\n\n");
 
-  const response = await client.chat.completions.create({
-    model: MODEL,
-    max_tokens: 50,
-    reasoning: { enabled: false }, // a one-word verdict needs no reasoning
-    provider: { only: ["openai"] }, // pin to OpenAI's own backend — see streamNextQuestion's call above for why
-    messages: [
-      {
-        role: "system",
-        content: `You determine what level to pitch a course on "${topic}" at, based on a learner's SELF-REPORTED background (their education, prior familiarity with the topic, and goal). Weigh familiarity with the specific topic most heavily, then education/background, then goal. Respond with ONLY one lowercase word: "beginner", "intermediate", or "advanced". No punctuation, no explanation.`,
-      },
-      {
-        role: "user",
-        content: `Here's what they told me about themselves:\n\n${transcript}\n\nWhat level should their course be pitched at?`,
-      },
-    ],
-  });
+  const response = await limitZaiCall(() =>
+    client.chat.completions.create({
+      model: MODEL,
+      max_tokens: 50,
+      thinking: { type: "disabled" }, // a one-word verdict needs no reasoning — see streamNextQuestion's call above for why native `thinking`, not OpenRouter's `reasoning`
+      messages: [
+        {
+          role: "system",
+          content: `You determine what level to pitch a course on "${topic}" at, based on a learner's SELF-REPORTED background (their education, prior familiarity with the topic, and goal). Weigh familiarity with the specific topic most heavily, then education/background, then goal. Respond with ONLY one lowercase word: "beginner", "intermediate", or "advanced". No punctuation, no explanation.`,
+        },
+        {
+          role: "user",
+          content: `Here's what they told me about themselves:\n\n${transcript}\n\nWhat level should their course be pitched at?`,
+        },
+      ],
+    })
+  );
 
   const raw = (response.choices?.[0]?.message?.content || "").toLowerCase().trim();
   if (raw.includes("advanced")) return "advanced";

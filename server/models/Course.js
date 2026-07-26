@@ -130,6 +130,17 @@ const courseSchema = new mongoose.Schema(
       enum: ["generating", "ready", "failed"],
       default: "generating",
     },
+    // Snapshot of the course-tier config AT GENERATION TIME (null tier for
+    // the free trial) — deliberately copied onto the course itself rather
+    // than re-read from PricingConfig later, so an admin tuning prices/counts
+    // post-launch never retroactively changes what an EXISTING course cost
+    // or how many lessons/questions it was supposed to have.
+    tier: { type: String, default: null },
+    tierName: { type: String, default: "Free Trial" },
+    lessonCount: { type: Number, default: 6 },
+    mcqCount: { type: Number, default: 20 },
+    timeAllocationMinutes: { type: Number, default: 30 },
+    creditCost: { type: Number, default: 0 },
     lessons: [lessonSchema],
     questions: [questionSchema],
   },

@@ -7,7 +7,7 @@
 // being syntactically and structurally correct.
 //
 // Runs on whichever model is configured for lesson code
-// (LESSON_CODE_MODEL=glm|deepseek|fable, see claudeService.js) instead of a
+// (LESSON_CODE_MODEL=glm|fable, see claudeService.js) instead of a
 // separately hardcoded Claude Haiku call. NOTE: claudeService.js requires
 // THIS file (for reviewGeneratedCode), so requiring claudeService.js back at
 // our own top level would be circular — Node would hand us claudeService's
@@ -64,11 +64,11 @@ async function reviewGeneratedCode(code, lesson) {
     return { ok: true, skipped: true };
   }
 
-  const { LESSON_CODE_PROVIDER, streamCodeCompletion, limitLessonHeaderCall } = require("./claudeService");
+  const { LESSON_CODE_PROVIDER, streamCodeCompletion, limitZaiCall } = require("./claudeService");
 
   try {
     const { text, stopReason } = await streamCodeCompletion({
-      limiter: limitLessonHeaderCall,
+      limiter: limitZaiCall,
       provider: LESSON_CODE_PROVIDER,
       systemPrompt: CRITIC_SYSTEM_PROMPT,
       userContent: buildCriticUserContent(code, lesson),

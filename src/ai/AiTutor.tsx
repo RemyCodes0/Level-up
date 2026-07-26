@@ -23,8 +23,9 @@ import {
   unlockCourse,
   getCourseStatus,
   getNextSuggestions,
+  getPricingConfig,
 } from "../api/CourseApi";
-import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem } from "../api/CourseApi";
+import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, CourseTier, CreditPack } from "../api/CourseApi";
 import { getProgress, markLessonWatched } from "../api/ProgressApi";
 import { submitQuiz as submitQuizApi, getLatestAttempt } from "../api/QuizApi";
 import type { QuizResult } from "../api/QuizApi";
@@ -91,6 +92,9 @@ interface HistoryEntry {
   // prior attempt is restored on load. ResultsSection prefers this over
   // recomputing from quizAnswers when present.
   serverQuizResult?: QuizResult | null;
+  // Tier snapshot's quiz time allocation (minutes) — drives QuizSection's
+  // countdown timer. Defaults to 30 (the pre-tiers behavior) if absent.
+  timeAllocationMinutes?: number;
 }
 
 interface Lesson {
@@ -127,19 +131,32 @@ interface Credits {
   courseCredits: number;
   freeTrialUsed: boolean;
   canGenerate: boolean;
+  // Combined spendable balance (unexpired signup bonus + non-expiring
+  // courseCredits) — what actually determines whether a given course tier
+  // is affordable. courseCredits alone understates this for anyone still
+  // holding signup-bonus credits.
+  spendableBalance?: number;
+  signupBonusCredits?: number;
+  signupBonusExpiresAt?: string | null;
 }
 
-const MOCK_LESSONS: Lesson[] = Array.from({ length: 6 }, (_, i) => ({
-  id: i + 1,
-  title: `Lesson ${i + 1}`,
-  duration: "~2:00",
-  completed: false,
-  description: i === 0 ? "Generating your first lesson…" : "Generating…",
-  keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"],
-  videoUrl: null,
-  code: null,
-  totalFrames: null,
-}));
+// Loading-skeleton lessons shown while a course generates, before real data
+// arrives. Length varies by tier (1/3/6 lessons) — the free trial and any
+// legacy no-tier generation still get the original fixed 6.
+function buildMockLessons(count: number = 6): Lesson[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: i + 1,
+    title: `Lesson ${i + 1}`,
+    duration: "~2:00",
+    completed: false,
+    description: i === 0 ? "Generating your first lesson…" : "Generating…",
+    keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"],
+    videoUrl: null,
+    code: null,
+    totalFrames: null,
+  }));
+}
+const MOCK_LESSONS: Lesson[] = buildMockLessons(6);
 
 const MOCK_QUESTIONS: MCQQuestion[] = [];
 
@@ -189,44 +206,40 @@ function useLessonProgress(statuses: LessonStatus[]): number[] {
   return progresses;
 }
 
-function PaywallModal({ onClose, courseId, courseName }: { onClose: () => void; courseId?: string | null; courseName?: string }) {
-  const [email, setEmail] = useState("");
-  const [feedback, setFeedback] = useState("");
-  const [submitted, setSubmitted] = useState(false);
-  const [loading, setLoading] = useState(false);
+function PaywallModal({ onClose }: { onClose: () => void; courseId?: string | null; courseName?: string }) {
+  const [packs, setPacks] = useState<CreditPack[] | null>(null);
+  const [loadingPackKey, setLoadingPackKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const storedUser = localStorage.getItem("user");
-  const user = storedUser ? JSON.parse(storedUser) : null;
-  const prefillEmail = user?.email || "";
+  useEffect(() => {
+    getPricingConfig()
+      .then((cfg) => setPacks(cfg.creditPacks))
+      .catch((err) => { console.error("Failed to load credit packs:", err); setError("Failed to load credit packs."); });
+  }, []);
 
-  const handleSubmit = async () => {
-    if (!email.trim()) { setError("Please enter your email so we can notify you."); return; }
-    setLoading(true);
+  const handleBuy = async (packKey: string) => {
+    setLoadingPackKey(packKey);
     setError(null);
     try {
       const token = localStorage.getItem("token");
-      // Send as feedback so it lands in your admin email + Feedback collection.
-      // The waitlist flag is embedded in the message so you can filter later.
-      await fetch(`${BASE_URL}/api/feedback`, {
+      const res = await fetch(`${BASE_URL}/api/payment/stripe/checkout`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          rating: 5,
-          message: `[WAITLIST] ${email}\n\n${feedback.trim() || "(no feedback provided)"}`,
-          courseId: courseId || undefined,
-          courseName: courseName || undefined,
-        }),
+        body: JSON.stringify({ packKey }),
       });
-      setSubmitted(true);
-    } catch (err) {
+      const data = await res.json();
+      if (!res.ok || !data.checkoutUrl) throw new Error(data.message || "Failed to start checkout");
+      // Full-page redirect to Stripe's hosted Checkout — on success it
+      // returns to /ai_tutor?payment=success, which the existing effect in
+      // this component already picks up to re-fetch credits.
+      window.location.href = data.checkoutUrl;
+    } catch (err: any) {
       console.error(err);
-      setError("Something went wrong. Please try again.");
-    } finally {
-      setLoading(false);
+      setError(err?.message || "Something went wrong. Please try again.");
+      setLoadingPackKey(null);
     }
   };
 
@@ -237,73 +250,53 @@ function PaywallModal({ onClose, courseId, courseName }: { onClose: () => void; 
           <X className="h-5 w-5" />
         </button>
 
-        {submitted ? (
-          <div className="text-center py-4">
-            <div className="w-14 h-14 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
-              <CheckCircle className="h-7 w-7 text-emerald-500" />
-            </div>
-            <h2 className="text-xl font-bold text-slate-900 mb-2">You're on the list!</h2>
-            <p className="text-sm text-slate-500 mb-6">
-              We'll email you at <span className="font-semibold text-slate-700">{email}</span> the moment payments go live. Thank you for your patience.
+        <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
+          <Zap className="h-7 w-7 text-amber-500" />
+        </div>
+
+        <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center mb-2">Top up your credits</h2>
+        <p className="text-slate-500 text-center text-sm mb-6">
+          Credits never expire, and MCQs are always included free — no hidden fees.
+        </p>
+
+        {error && <p className="text-xs text-red-500 mb-3 text-center">{error}</p>}
+
+        <div className="space-y-3">
+          {packs === null && !error && (
+            <p className="text-sm text-muted-foreground text-center py-6 flex items-center justify-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading credit packs…
             </p>
-            <button onClick={onClose} className="w-full py-2.5 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-700 transition-colors">
-              Keep watching
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
-              <Zap className="h-7 w-7 text-amber-500" />
-            </div>
-
-            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center mb-2">
-              Payments coming soon
-            </h2>
-            <p className="text-slate-500 text-center text-sm mb-1">
-              We're working on setting up our payment system. Leave your email and we'll let you know the moment you can unlock more courses.
-            </p>
-            <p className="text-slate-400 text-center text-xs mb-6">
-              Each course will be <span className="font-semibold text-slate-600">$4.99</span> — 6 animated lessons, narration, and a quiz.
-            </p>
-
-            <div className="space-y-3 mb-4">
-              <div>
-                <label className="text-xs font-semibold text-slate-600 mb-1 block">Your email <span className="text-red-400">*</span></label>
-                <input
-                  type="email"
-                  value={email || prefillEmail}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-600 mb-1 block">Feedback <span className="text-slate-400 font-normal">(optional)</span></label>
-                <textarea
-                  value={feedback}
-                  onChange={(e) => setFeedback(e.target.value)}
-                  placeholder="How's the app so far? Anything you'd love to see?"
-                  rows={3}
-                  className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-                />
-              </div>
-            </div>
-
-            {error && <p className="text-xs text-red-500 mb-3">{error}</p>}
-
+          )}
+          {(packs ?? []).map((p) => (
             <button
-              onClick={handleSubmit}
-              disabled={loading}
-              className="w-full h-11 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+              key={p.key}
+              onClick={() => handleBuy(p.key)}
+              disabled={loadingPackKey !== null}
+              className="w-full flex items-center justify-between border border-slate-200 rounded-xl px-4 py-3.5 hover:border-blue-400 hover:bg-blue-50/40 transition-all disabled:opacity-60"
             >
-              {loading ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</> : <><MessageSquare className="h-4 w-4" /> Notify me when payments go live</>}
+              <div className="text-left">
+                <p className="font-semibold text-slate-900 text-sm flex items-center gap-2 flex-wrap">
+                  {p.credits} credits
+                  {p.badge && (
+                    <span className="text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700 rounded-full px-2 py-0.5">
+                      {p.badge}
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  ${(p.priceCents / 100).toFixed(2)} · ${(p.priceCents / 100 / p.credits).toFixed(3)}/credit
+                </p>
+              </div>
+              {loadingPackKey === p.key ? (
+                <Loader2 className="h-4 w-4 animate-spin text-blue-600 shrink-0" />
+              ) : (
+                <span className="text-sm font-semibold text-blue-600 shrink-0">Buy →</span>
+              )}
             </button>
+          ))}
+        </div>
 
-            <p className="text-xs text-slate-400 text-center mt-3">
-              No spam — only one email when payments launch.
-            </p>
-          </>
-        )}
+        <p className="text-xs text-slate-400 text-center mt-5">Secure checkout via Stripe.</p>
       </div>
     </div>
   );
@@ -316,9 +309,11 @@ import { ShareModal } from "../components/ShareModal";
 import { PublishModal } from "../components/PublishModal";
 import { PDFDocument } from "pdf-lib";
 
-function UploadPhase({ onGenerate, credits }: {
-  onGenerate: (fileName: string, file?: File | null) => void;
+function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
+  onGenerate: (fileName: string, file?: File | null, tier?: string | null) => void;
   credits: Credits | null;
+  courseTiers: CourseTier[] | null;
+  onRequestTopUp: () => void;
 }) {
   const [inputValue, setInputValue] = useState("");
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -331,6 +326,17 @@ function UploadPhase({ onGenerate, credits }: {
   const MAX_PAGES = 100;
 
   const locked = (credits && !credits.canGenerate);
+
+  // Once the free trial is used up, generating a course requires picking one
+  // of the 3 paid tiers first — pendingSubmission holds the validated
+  // topic/file while that picker is shown, and onGenerate isn't called until
+  // a tier is chosen and confirmed. Before the trial is used, submitting
+  // still generates immediately (unchanged).
+  const tiersApply = !!credits?.freeTrialUsed;
+  const [pendingSubmission, setPendingSubmission] = useState<{ name: string; file: File | null } | null>(null);
+  const [selectedTierKey, setSelectedTierKey] = useState<string | null>(null);
+  const spendableBalance = credits?.spendableBalance ?? credits?.courseCredits ?? 0;
+  const selectedTier = courseTiers?.find((t) => t.key === selectedTierKey) ?? null;
 
   const handleFile = async (file: File) => {
     if (locked) return;
@@ -361,7 +367,21 @@ function UploadPhase({ onGenerate, credits }: {
     if (locked) return;
     if (exceedsPageLimit) return;
     if (!uploadedFile && !inputValue.trim()) return;
-    onGenerate(uploadedFile ? uploadedFile.name : inputValue.trim(), uploadedFile);
+    const name = uploadedFile ? uploadedFile.name : inputValue.trim();
+    if (tiersApply) {
+      // Show the tier picker instead of generating immediately — onGenerate
+      // fires from handleConfirmTier once a tier is chosen.
+      setSelectedTierKey(null);
+      setPendingSubmission({ name, file: uploadedFile });
+      return;
+    }
+    onGenerate(name, uploadedFile, null);
+  };
+  const handleConfirmTier = () => {
+    if (!pendingSubmission || !selectedTier) return;
+    onGenerate(pendingSubmission.name, pendingSubmission.file, selectedTier.key);
+    setPendingSubmission(null);
+    setSelectedTierKey(null);
   };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (locked) return;
@@ -391,6 +411,70 @@ function UploadPhase({ onGenerate, credits }: {
             <p className="text-muted-foreground text-sm sm:text-base px-2">Describe your topic or upload your course materials — AI generates your full course.</p>
           </div>
           <div className="w-full max-w-2xl">
+          {pendingSubmission ? (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-lg p-5 sm:p-6">
+              <div className="flex items-center justify-between mb-1">
+                <h2 className="text-base sm:text-lg font-bold text-slate-900">Choose a course size</h2>
+                <span className="text-xs font-semibold text-slate-500 bg-slate-100 rounded-full px-3 py-1">
+                  {spendableBalance} credit{spendableBalance !== 1 ? "s" : ""} available
+                </span>
+              </div>
+              <p className="text-sm text-muted-foreground mb-4 truncate">For "{pendingSubmission.name}"</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {(courseTiers ?? []).map((t) => {
+                  const affordable = spendableBalance >= t.creditCost;
+                  const selected = selectedTierKey === t.key;
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      disabled={!affordable}
+                      onClick={() => setSelectedTierKey(t.key)}
+                      className={`text-left rounded-xl border p-4 transition-all ${
+                        !affordable
+                          ? "border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed"
+                          : selected
+                          ? "border-blue-500 bg-blue-50 shadow-sm"
+                          : "border-slate-200 hover:border-blue-300 hover:bg-blue-50/40"
+                      }`}
+                    >
+                      <p className="font-semibold text-slate-900 text-sm">{t.name}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 mb-2">{t.description}</p>
+                      <p className="text-xs text-slate-600">{t.lessonCount} lesson{t.lessonCount !== 1 ? "s" : ""}</p>
+                      <p className="text-xs text-slate-600">{t.mcqCount} MCQ ({t.timeAllocationMinutes} min)</p>
+                      <p className="text-sm font-bold text-slate-900 mt-2">{t.creditCost} credits</p>
+                      {!affordable && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); onRequestTopUp(); }}
+                          className="mt-2 text-xs font-semibold text-blue-600 hover:text-blue-800 underline underline-offset-2"
+                        >
+                          Top up to unlock
+                        </button>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedTier && (
+                <div className="mt-4 flex flex-col sm:flex-row sm:items-center gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                  <p className="text-sm text-slate-700 flex-1">
+                    <span className="font-semibold">{selectedTier.name}</span>: {selectedTier.lessonCount} lesson{selectedTier.lessonCount !== 1 ? "s" : ""} + {selectedTier.mcqCount} MCQ ({selectedTier.timeAllocationMinutes} min) — {selectedTier.creditCost} credits
+                  </p>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button onClick={() => { setPendingSubmission(null); setSelectedTierKey(null); }} className="text-xs font-semibold text-slate-500 hover:text-slate-700 px-3 py-2">Cancel</button>
+                    <button onClick={handleConfirmTier} className="text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 py-2 transition-colors">Confirm & Generate</button>
+                  </div>
+                </div>
+              )}
+              {!selectedTier && (
+                <button onClick={() => { setPendingSubmission(null); setSelectedTierKey(null); }} className="mt-4 text-xs font-semibold text-slate-500 hover:text-slate-700">
+                  ← Back
+                </button>
+              )}
+            </div>
+          ) : (
+          <>
             <div className={`bg-white rounded-2xl border shadow-lg overflow-hidden relative ${locked ? "border-slate-300 opacity-60" : "border-slate-200"}`}>
               {locked && (
                 <div className="absolute inset-0 z-10 bg-slate-100/50 backdrop-blur-[1px] rounded-2xl flex items-center justify-center cursor-not-allowed">
@@ -463,6 +547,8 @@ function UploadPhase({ onGenerate, credits }: {
               ))}
             </div>
             <p className="text-center text-xs text-slate-400 mt-5 px-2">Lesson 1 ready in ~5 minutes · remaining lessons load while you watch</p>
+          </>
+          )}
           </div>
         </div>
       </div>
@@ -823,10 +909,10 @@ function VideoPlayer({
   );
 }
 
-function QuizSection({ questions, onSubmit }: { questions: MCQQuestion[]; onSubmit: (answers: QuizAnswer[]) => void }) {
+function QuizSection({ questions, onSubmit, timeAllocationMinutes = 30 }: { questions: MCQQuestion[]; onSubmit: (answers: QuizAnswer[]) => void; timeAllocationMinutes?: number }) {
   const [answers, setAnswers] = useState<QuizAnswer[]>([]);
   const [currentQ, setCurrentQ] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(30 * 60);
+  const [timeLeft, setTimeLeft] = useState(timeAllocationMinutes * 60);
   const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
@@ -1201,16 +1287,15 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
               {Math.max(credits.courseCredits, 0)} remaining
             </span>
           </div>
-          {!credits.canGenerate && (
+          {!credits.canGenerate ? (
             <button onClick={onBuy}
               className="w-full mt-1 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-sm font-bold transition-all shadow-md flex items-center justify-center gap-1.5">
               <CreditCard className="h-4 w-4" /> Buy more courses
             </button>
-          )}
-          {credits.canGenerate && credits.courseCredits <= 2 && credits.freeTrialUsed && (
+          ) : (
             <button onClick={onBuy}
               className="w-full mt-1 py-2.5 rounded-xl border-2 border-blue-300 bg-white text-blue-700 hover:bg-blue-50 text-sm font-bold transition-all flex items-center justify-center gap-1.5">
-              <CreditCard className="h-4 w-4" /> Top up courses
+              <CreditCard className="h-4 w-4" /> {credits.freeTrialUsed ? "Top up courses" : "Buy more courses"}
             </button>
           )}
         </div>
@@ -1346,7 +1431,7 @@ export default function AILearningPage() {
   const [fileName, setFileName] = useState("");
   // Holds the topic + file the user submitted, while the optional level-check
   // chat runs, before we actually kick off generation.
-  const [pendingGeneration, setPendingGeneration] = useState<{ name: string; file?: File | null } | null>(null);
+  const [pendingGeneration, setPendingGeneration] = useState<{ name: string; file?: File | null; tier?: string | null } | null>(null);
   const [lessons, setLessons] = useState<Lesson[]>(MOCK_LESSONS);
   const [lessonStatuses, setLessonStatuses] = useState<LessonStatus[]>(MOCK_LESSONS.map(() => "generating"));
   const [activeSection, setActiveSection] = useState<CourseSection>("video");
@@ -1396,6 +1481,7 @@ export default function AILearningPage() {
   // trial — used to decide whether to auto-prompt for feedback after the
   // quiz results are shown (see the quiz onSubmit handler below).
   const [activeCourseIsFreeTrial, setActiveCourseIsFreeTrial] = useState(false);
+  const [activeCourseQuizMinutes, setActiveCourseQuizMinutes] = useState(30);
   const [historySidebarCollapsed, setHistorySidebarCollapsed] = useState(false);
   const [credits, setCredits] = useState<Credits | null>(null);
   const [retryingLesson, setRetryingLesson] = useState<number | null>(null);
@@ -1461,6 +1547,17 @@ export default function AILearningPage() {
   };
 
   useEffect(() => { fetchCredits(); }, []);
+
+  // Course tiers (Quick Explainer/Deeper Dive/Full Mastery) — fetched once
+  // and used both by the input chat's tier picker and to size the loading
+  // skeleton (buildMockLessons) for whichever tier the user selects.
+  const [courseTiers, setCourseTiers] = useState<CourseTier[] | null>(null);
+  useEffect(() => {
+    getPricingConfig()
+      .then((cfg) => setCourseTiers(cfg.courseTiers))
+      .catch((err) => console.error("Failed to fetch pricing config:", err));
+  }, []);
+
   useEffect(() => { return () => { if (pollCancelRef.current) pollCancelRef.current(); }; }, []);
 
   const mapCourseToEntry = (c: CourseFromAPI): HistoryEntry => {
@@ -1481,6 +1578,7 @@ export default function AILearningPage() {
       lessonStatuses: mappedStatuses.length ? mappedStatuses : MOCK_LESSONS.map(() => "generating" as LessonStatus),
       quizAnswers: [], quizDone: false, questions: c.questions || [],
       isFreeTrialCourse: !!c.isFreeTrialCourse,
+      timeAllocationMinutes: c.timeAllocationMinutes ?? 30,
     };
   };
 
@@ -1591,7 +1689,7 @@ export default function AILearningPage() {
       if (pollCancelRef.current) pollCancelRef.current();
       pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
         setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
+        if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
     } catch (err) {
@@ -1626,7 +1724,7 @@ export default function AILearningPage() {
       try {
         const course = await getCourseStatus(activeHistoryId);
         setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
+        if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       } catch (statusErr) {
         console.error("Failed to fetch course status right after unlock:", statusErr);
@@ -1636,7 +1734,7 @@ export default function AILearningPage() {
       // Keep polling as a backup / to track ongoing lesson generation.
       pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
         setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
+        if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
     } catch (err: any) {
@@ -1668,19 +1766,21 @@ export default function AILearningPage() {
   // Instead of generating immediately, it now routes into the optional
   // level-check chat first. The actual generation happens in runGeneration,
   // called by the assessment's onComplete/onSkip.
-  const startNewCourse = async (name: string, file?: File | null) => {
-    setPendingGeneration({ name, file });
+  const startNewCourse = async (name: string, file?: File | null, tier?: string | null) => {
+    setPendingGeneration({ name, file, tier });
     setFileName(name);
     setPhase("assessment");
   };
 
   // Does the real generation work. `level` is the result of the level check
   // (or null if skipped/failed) and gets passed through to the backend so
-  // the course can be pitched appropriately.
+  // the course can be pitched appropriately. `tier` is the selected course
+  // tier's key (null for the free trial / a legacy no-tier request).
   const runGeneration = async (
     name: string,
     file: File | null | undefined,
-    level: "beginner" | "intermediate" | "advanced" | null
+    level: "beginner" | "intermediate" | "advanced" | null,
+    tier: string | null
   ) => {
     analytics.courseStarted({ topic: name, source: file ? (file.name.toLowerCase().endsWith(".pptx") ? "pptx" : "pdf") : "topic" });
     bgTimersRef.current.forEach(clearTimeout); bgTimersRef.current = [];
@@ -1689,20 +1789,26 @@ export default function AILearningPage() {
     // the per-lesson progress bars in the course sidebar already show each
     // lesson generating live, so a full-screen generating phase is redundant.
     setFileName(name); setPhase("course");
-    // Show lessons in their loading state immediately while the request fires.
-    setLessons(MOCK_LESSONS.map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null })));
-    setLessonStatuses(MOCK_LESSONS.map(() => "generating"));
-    setActiveSection("video"); setActiveLesson(0);
     // Determine free-trial status from credits BEFORE this call — this is
     // the exact same condition the backend's checkCredits middleware uses
     // (freeTrialUsed === false means this generation will consume the trial).
     const willUseFreeTrial = !!(credits && !credits.freeTrialUsed);
     setActiveCourseIsFreeTrial(willUseFreeTrial);
+    // The free trial (and any legacy no-tier request) is always 6 lessons/
+    // 30-minute quiz; a selected tier sizes the loading skeleton and quiz
+    // timer to match what's actually about to be generated.
+    const selectedTier = tier ? courseTiers?.find((t) => t.key === tier) : null;
+    const lessonCount = willUseFreeTrial || !selectedTier ? 6 : selectedTier.lessonCount;
+    setActiveCourseQuizMinutes(willUseFreeTrial || !selectedTier ? 30 : selectedTier.timeAllocationMinutes);
+    // Show lessons in their loading state immediately while the request fires.
+    setLessons(buildMockLessons(lessonCount).map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null })));
+    setLessonStatuses(buildMockLessons(lessonCount).map(() => "generating"));
+    setActiveSection("video"); setActiveLesson(0);
     try {
-      const { courseId } = await startCourseGeneration(name, file, level);
+      const { courseId } = await startCourseGeneration(name, file, level, tier);
       startedCoursesRef.current.add(courseId);
       fetchCredits();
-      const freshLessons = MOCK_LESSONS.map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null }));
+      const freshLessons = buildMockLessons(lessonCount).map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null }));
       const freshStatuses: LessonStatus[] = freshLessons.map(() => "generating");
       setHistory((prev) => [{ id: courseId, fileName: name, createdAt: new Date(), completedLessons: 0, quizScore: null, lessons: freshLessons, lessonStatuses: freshStatuses, quizAnswers: [], quizDone: false, questions: [] }, ...prev]);
       setActiveHistoryId(courseId); router(`/ai_tutor/${courseId}`, { replace: true });
@@ -1711,13 +1817,20 @@ export default function AILearningPage() {
       seenFailuresRef.current.clear(); setFailureBanner(null);
       pollCancelRef.current = pollCourse(courseId, (course: CourseFromAPI) => {
         setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        if (course.lessons.length > 0) setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
+        if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
     } catch (err: any) {
       console.error(err);
       setPhase("upload");
-      if (!err?.status || err.status !== 402) alert("Failed to generate course. Please try again.");
+      if (err?.status === 402) {
+        // Insufficient credits (a race against the tier picker's own
+        // affordability check, e.g. balance changed in another tab) — send
+        // the user straight to the top-up flow instead of a dead-end alert.
+        setShowPaywall(true);
+      } else {
+        alert(err?.message || "Failed to generate course. Please try again.");
+      }
     }
   };
 
@@ -1725,9 +1838,9 @@ export default function AILearningPage() {
   // (level determined) and onSkip (level = null).
   const handleAssessmentDone = (level: "beginner" | "intermediate" | "advanced" | null) => {
     if (!pendingGeneration) { setPhase("upload"); return; }
-    const { name, file } = pendingGeneration;
+    const { name, file, tier } = pendingGeneration;
     setPendingGeneration(null);
-    runGeneration(name, file, level);
+    runGeneration(name, file, level, tier ?? null);
   };
 
   const restoreEntry = (entry: HistoryEntry) => {
@@ -1748,6 +1861,7 @@ export default function AILearningPage() {
     if (urlCourseId !== entry.id) router(`/ai_tutor/${entry.id}`);
     setFileName(entry.fileName); setLessons(entry.lessons);
     setActiveCourseIsFreeTrial(!!entry.isFreeTrialCourse);
+    setActiveCourseQuizMinutes(entry.timeAllocationMinutes ?? 30);
     setLessonStatuses(entry.lessonStatuses ?? entry.lessons.map(() => "ready"));
     setQuizAnswers(entry.quizAnswers); setQuizDone(entry.quizDone); setQuizQuestions(entry.questions ?? []);
     setServerQuizResult(entry.serverQuizResult ?? null);
@@ -1755,7 +1869,7 @@ export default function AILearningPage() {
     if (entry.lessonStatuses?.some((s) => s === "generating")) {
       pollCancelRef.current = pollCourse(entry.id, (course: CourseFromAPI) => {
         setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        setLessonStatuses(MOCK_LESSONS.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
+        setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
         if (course.questions?.length) setQuizQuestions(course.questions);
       });
     } else if (entry.lessons.some((l) => l.code == null)) {
@@ -1867,7 +1981,7 @@ export default function AILearningPage() {
         <div className="flex flex-1 overflow-hidden relative">
           <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
           {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
-          <div className="flex-1 overflow-y-auto"><UploadPhase onGenerate={startNewCourse} credits={credits} /></div>
+          <div className="flex-1 overflow-y-auto"><UploadPhase onGenerate={startNewCourse} credits={credits} courseTiers={courseTiers} onRequestTopUp={() => setShowPaywall(true)} /></div>
         </div>
       </div>
     );
@@ -2136,7 +2250,7 @@ export default function AILearningPage() {
                 </div>
               </div>
             )}
-            {!courseDetailsLoading && activeSection === "quiz" && <QuizSection questions={quizQuestions} onSubmit={(answers) => {
+            {!courseDetailsLoading && activeSection === "quiz" && <QuizSection questions={quizQuestions} timeAllocationMinutes={activeCourseQuizMinutes} onSubmit={(answers) => {
               setQuizAnswers(answers); setQuizDone(true); setActiveSection("results");
               // Score is recomputed and stored server-side — the client-sent
               // answers are never trusted as-is for the score itself. This is

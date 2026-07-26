@@ -21,6 +21,8 @@ const UserSchema = new mongoose.Schema({
   verified: { type: Boolean, default: false },
   verificationToken: { type: String, default: null },
   verificationTokenExpires: { type: Date, default: null },
+  resetPasswordToken: { type: String, default: null },
+  resetPasswordExpires: { type: Date, default: null },
   referralCode:          { type: String, unique: true, sparse: true },
   referredBy:            { type: String, default: null },
   referralRewardGranted: { type: Boolean, default: false },
@@ -28,8 +30,16 @@ const UserSchema = new mongoose.Schema({
   referralCreditsEarned: { type: Number, default: 0 },
 
   // ── AI Course Credits ──────────────────────────────────────────────────────
-  courseCredits: { type: Number, default: 0 },      // paid credits
+  courseCredits: { type: Number, default: 0 },      // non-expiring credits (referral, purchase)
   freeTrialUsed: { type: Boolean, default: false },  // has used the 1 free course
+  // The one-time 100-credit signup bonus — expiring, tracked separately from
+  // courseCredits so it can be spent first and lapse independently. See
+  // creditService.js for the combined-balance/spend-order logic.
+  signupBonusCredits: { type: Number, default: 0 },
+  signupBonusExpiresAt: { type: Date, default: null },
+  // Stripe webhook idempotency — a redelivered checkout.session.completed
+  // event must never grant credits twice.
+  processedStripeEvents: { type: [String], default: [] },
 
   // ── Email preferences ──────────────────────────────────────────────────────
   // When true, this user is excluded from broadcast/marketing emails. Set via

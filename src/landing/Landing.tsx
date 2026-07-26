@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import ShowcaseVideoGrid from "../components/ShowcaseVideoGrid";
 import VideoShowcaseSection from "./VideoShowcaseSection";
+import { getPricingConfig } from "../api/CourseApi";
+import type { CourseTier, CreditPack } from "../api/CourseApi";
 
 const STAGE = "#15131F";
 const STAGE_2 = "#1F1B2E";
@@ -153,6 +155,14 @@ export default function LandingPage() {
   const navigate = useNavigate();
   const hero = useInView<HTMLDivElement>();
   const demo = useInView<HTMLDivElement>();
+
+  const [courseTiers, setCourseTiers] = useState<CourseTier[]>([]);
+  const [creditPacks, setCreditPacks] = useState<CreditPack[]>([]);
+  useEffect(() => {
+    getPricingConfig()
+      .then((cfg) => { setCourseTiers(cfg.courseTiers); setCreditPacks(cfg.creditPacks); })
+      .catch((err) => console.error("Failed to load pricing config:", err));
+  }, []);
 
   const testimonials = [
     { quote: "I uploaded my organic chem slides the night before an exam and had six lessons that actually made the reactions move. The quiz caught two topics I'd have walked in blind on.", name: "Amara O.", role: "Pre-med undergrad" },
@@ -578,23 +588,60 @@ export default function LandingPage() {
 
       {/* Pricing */}
       <section id="pricing" className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
-        <div className="max-w-md mx-auto rounded-2xl p-6 sm:p-8 text-center border" style={{ backgroundColor: STAGE_2, borderColor: "rgba(255,92,73,0.3)" }}>
-          <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>Simple pricing</p>
-          <div className="flex items-end justify-center gap-1 mb-1">
-            <span className="font-bold" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif", fontSize: "clamp(2.5rem, 8vw, 3.75rem)" }}>$4.99</span>
+        <p className="text-xs font-semibold uppercase tracking-widest mb-4 text-center" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>Simple pricing</p>
+        <h2 className="text-2xl sm:text-3xl font-bold mb-10 text-center" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+          Credits that never expire.
+        </h2>
+
+        {/* Free Trial + 3 credit packs */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 items-stretch mb-6">
+          <div className="rounded-2xl p-6 text-center border flex flex-col" style={{ backgroundColor: STAGE_2, borderColor: HAIR }}>
+            <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: PHOSPHOR, fontFamily: "'JetBrains Mono', monospace" }}>Free Trial</p>
+            <span className="text-4xl font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>$0</span>
+            <p className="text-xs mb-6" style={{ color: MUTE }}>Your first course, on us</p>
+            <p className="text-sm mb-6 flex-1" style={{ color: BEAM }}>1 full 6-lesson course + quiz — no card required.</p>
+            <button onClick={() => navigate("/signup")} className="w-full text-sm font-semibold py-3 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: PHOSPHOR, color: "#0a1f16" }}>
+              Start free
+            </button>
           </div>
-          <p className="text-sm mb-7" style={{ color: MUTE }}>per course — six lessons, narration, and a full quiz</p>
-          <div className="space-y-3 text-left mb-8">
-            {["First lesson of every course, free", "No subscription — pay per course, when you want one", "Upload a PDF or type any topic", "Keep every course you make"].map((t) => (
-              <div key={t} className="flex items-start gap-2.5 text-sm" style={{ color: BEAM }}>
-                <Check className="h-4 w-4 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t}
+
+          {creditPacks.map((p) => (
+            <div key={p.key} className="rounded-2xl p-6 text-center border flex flex-col relative" style={{ backgroundColor: STAGE_2, borderColor: p.badge ? CORAL : "rgba(255,92,73,0.3)" }}>
+              {p.badge && (
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide px-3 py-1 rounded-full" style={{ backgroundColor: CORAL, color: "#fff" }}>
+                  {p.badge}
+                </span>
+              )}
+              <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>{p.credits} Credits</p>
+              <span className="text-4xl font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>${(p.priceCents / 100).toFixed(2)}</span>
+              <p className="text-xs mb-6" style={{ color: MUTE }}>${(p.priceCents / 100 / p.credits).toFixed(3)} per credit</p>
+              <div className="flex-1" />
+              <button onClick={() => navigate("/signup")} className="w-full text-sm font-semibold py-3 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
+                Get started
+              </button>
+            </div>
+          ))}
+        </div>
+        <p className="text-center text-xs mb-14" style={{ color: MUTE }}>
+          Credits never expire, except the 100 free signup credits, which expire 30 days after signup. MCQs are always included free — no hidden fees.
+        </p>
+
+        {/* Course tiers */}
+        <h3 className="text-lg sm:text-xl font-bold mb-6 text-center" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+          What your credits buy
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 max-w-4xl mx-auto">
+          {courseTiers.map((t) => (
+            <div key={t.key} className="rounded-2xl p-5 border" style={{ backgroundColor: STAGE_2, borderColor: HAIR }}>
+              <h4 className="text-base font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{t.name}</h4>
+              <p className="text-xs mb-3" style={{ color: MUTE }}>{t.description}</p>
+              <div className="space-y-1.5 text-xs mb-4" style={{ color: BEAM }}>
+                <div className="flex items-start gap-2"><Check className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t.lessonCount} lesson{t.lessonCount !== 1 ? "s" : ""}</div>
+                <div className="flex items-start gap-2"><Check className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t.mcqCount} MCQ ({t.timeAllocationMinutes} min), free</div>
               </div>
-            ))}
-          </div>
-          <button onClick={() => navigate("/signup")} className="w-full text-sm font-semibold py-3.5 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
-            Start your free lesson
-          </button>
-          <p className="text-xs mt-4" style={{ color: MUTE }}>No card required to begin.</p>
+              <p className="text-xl font-bold" style={{ color: AMBER, fontFamily: "'Space Grotesk', sans-serif" }}>{t.creditCost} credits</p>
+            </div>
+          ))}
         </div>
       </section>
 

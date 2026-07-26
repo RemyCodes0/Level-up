@@ -3,6 +3,8 @@ const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const sendEmail = require("../services/emailService");
 const { completeReferral } = require("./referralController");
+const { validatePasswordStrength } = require("../utils/passwordStrength");
+const { grantCredits } = require("../services/creditService");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
@@ -54,6 +56,12 @@ exports.registerUser = async (req, res) => {
     const userExists = await User.findOne({ email });
     if (userExists) return res.status(400).json({ message: "User already exists" });
 
+    // Server-side enforcement — the signup form's strength meter guides the
+    // user, but the API itself must not accept a weak password if hit
+    // directly (curl, a modified client, etc).
+    const passwordError = validatePasswordStrength(password);
+    if (passwordError) return res.status(400).json({ message: passwordError });
+
     // Generate a verification token (64-char hex string, expires in 24h)
     const verificationToken = crypto.randomBytes(32).toString("hex");
     const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -102,6 +110,14 @@ exports.registerUser = async (req, res) => {
         </div>
       `,
     });
+
+    // 100 free credits, expiring in 30 days — see creditService.js. Not
+    // blocking: a failure here shouldn't fail the signup itself, but IS
+    // logged loudly since a user silently missing their signup bonus is a
+    // real support issue, not a cosmetic one.
+    grantCredits(user._id, 100, "signup_bonus", { reason: "new_account" }).catch((err) =>
+      console.error("[signup] Failed to grant signup bonus credits for", user.email, "-", err.message)
+    );
 
     // Fire-and-forget — doesn't block the response or affect signup if it fails.
     notifyAdminOfAuthEvent("Signup", user);
@@ -195,6 +211,91 @@ exports.resendVerification = async (req, res) => {
     });
 
     res.json({ message: "If that email exists and isn't verified, a new link has been sent." });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ── Forgot password — sends a reset link if the email exists ────────────────
+exports.forgotPassword = async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: "Email is required" });
+
+  // Same shape as the response below whether or not the email exists — do
+  // not leak account existence through response differences.
+  const GENERIC_MESSAGE = "If that email has an account, a reset link has been sent.";
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.json({ message: GENERIC_MESSAGE });
+
+    // 1-hour expiry — shorter than the 24h email-verification link since a
+    // leaked password-reset link is a direct account-takeover risk, not
+    // just an inconvenience.
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000);
+
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpires = resetPasswordExpires;
+    await user.save();
+
+    const resetUrl = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`;
+
+    await sendEmail({
+      to: email,
+      subject: "Reset your Level Up password",
+      text: `Hi ${user.name},\n\nWe received a request to reset your Level Up password. Click the link below to choose a new one:\n\n${resetUrl}\n\nThis link expires in 1 hour. If you didn't request this, you can safely ignore this email — your password will stay unchanged.`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
+          <h2 style="color: #1e293b; margin-bottom: 8px;">Reset your password</h2>
+          <p style="color: #475569; font-size: 15px; line-height: 1.6;">
+            Hi ${user.name}, we received a request to reset your Level Up password.
+          </p>
+          <a href="${resetUrl}"
+             style="display: inline-block; margin: 24px 0; padding: 12px 28px; background: linear-gradient(135deg, #3b82f6, #6366f1); color: #fff; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 15px;">
+            Reset my password
+          </a>
+          <p style="color: #94a3b8; font-size: 13px;">
+            This link expires in 1 hour. If you didn't request this, you can safely ignore this email — your password will stay unchanged.
+          </p>
+        </div>
+      `,
+    });
+
+    res.json({ message: GENERIC_MESSAGE });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ── Reset password — called from the link in the email ──────────────────────
+exports.resetPassword = async (req, res) => {
+  const { token, password } = req.body;
+  if (!token) return res.status(400).json({ message: "Missing reset token" });
+
+  const passwordError = validatePasswordStrength(password);
+  if (passwordError) return res.status(400).json({ message: passwordError });
+
+  try {
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: new Date() },
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        message: "Invalid or expired reset link. Please request a new one.",
+      });
+    }
+
+    // Assignment only — the pre-save hook on User re-hashes it since
+    // isModified("password") is true.
+    user.password = password;
+    user.resetPasswordToken = null;
+    user.resetPasswordExpires = null;
+    await user.save();
+
+    res.json({ message: "Password reset successfully! You can now log in." });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

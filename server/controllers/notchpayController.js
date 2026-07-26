@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const User = require("../models/User");
+const { getSpendableBalance } = require("../services/creditService");
 
 // ── Config ────────────────────────────────────────────────────────────────────
 // NOTCHPAY_PUBLIC_KEY  — from your NotchPay dashboard (Settings → Developer)
@@ -174,16 +175,27 @@ async function webhookHandler(req, res) {
 // payment redirect (?payment=success) to refresh the sidebar credit display.
 async function creditsHandler(req, res) {
   try {
-    const user = await User.findById(req.user._id).select("courseCredits freeTrialUsed");
+    const user = await User.findById(req.user._id).select(
+      "courseCredits freeTrialUsed signupBonusCredits signupBonusExpiresAt"
+    );
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const credits = Math.max(user.courseCredits || 0, 0);
     const freeTrialUsed = !!user.freeTrialUsed;
-    // canGenerate: true if they have paid credits OR haven't used the free trial yet
-    const canGenerate = credits > 0 || !freeTrialUsed;
+    const spendableBalance = getSpendableBalance(user);
+    // canGenerate: true if they have ANY spendable balance (course credits OR
+    // an unexpired signup bonus) OR haven't used the free trial yet.
+    const canGenerate = spendableBalance > 0 || !freeTrialUsed;
 
-    console.log(`[credits] Returning: ${JSON.stringify({ courseCredits: credits, freeTrialUsed, canGenerate })}`);
-    res.json({ courseCredits: credits, freeTrialUsed, canGenerate });
+    console.log(`[credits] Returning: ${JSON.stringify({ courseCredits: credits, freeTrialUsed, canGenerate, spendableBalance })}`);
+    res.json({
+      courseCredits: credits,
+      freeTrialUsed,
+      canGenerate,
+      spendableBalance,
+      signupBonusCredits: Math.max(user.signupBonusCredits || 0, 0),
+      signupBonusExpiresAt: user.signupBonusExpiresAt,
+    });
   } catch (err) {
     console.error("[credits] Error:", err);
     res.status(500).json({ error: "Failed to fetch credits" });

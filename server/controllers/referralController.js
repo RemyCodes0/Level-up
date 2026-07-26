@@ -1,19 +1,22 @@
 // controllers/referralController.js
 //
-// Referral system — every 3 verified referrals earns the referrer 1 free credit.
-// "Verified" means: the referred user signed up via the referral link AND
-// verified their email. Email verification is the anti-abuse gate — it proves
-// the referred user owns a real inbox — without forcing them to generate a
-// lesson first (that extra step added friction and hurt signup conversion).
+// Referral system — every VERIFIED referral earns the referrer (only) 50
+// credits. "Verified" means: the referred user signed up via the referral
+// link AND verified their email. Email verification is the anti-abuse gate —
+// it proves the referred user owns a real inbox — without forcing them to
+// generate a lesson first (that extra step added friction and hurt signup
+// conversion). The referred user themselves gets no bonus from the referral
+// itself (they still get the normal 100-credit signup bonus everyone gets).
 //
-// The cycle repeats indefinitely — 3 friends = 1 credit, then the counter
-// resets. 6 friends = 2 credits, 9 = 3, and so on.
+// Previously this was a "3 referrals = 1 credit" cycle — replaced with a
+// flat per-referral reward, no cap, no cycle to reset.
 
 const crypto = require("crypto");
 const User = require("../models/User");
 const sendEmail = require("../services/emailService");
+const { grantCredits } = require("../services/creditService");
 
-const REFERRALS_PER_CREDIT = 3;
+const REFERRAL_CREDIT_REWARD = 50;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "tuyishimechristophe84@gmail.com";
 const CLIENT_URL = process.env.CLIENT_URL || "https://leveluppedu.app";
 
@@ -35,17 +38,14 @@ async function getReferralLink(req, res) {
 
     const link = `${CLIENT_URL}/signup?ref=${user.referralCode}`;
     const totalReferrals = user.referralCount || 0;
-    // How many verified referrals into the current cycle (resets every 3)
-    const progressInCycle = totalReferrals % REFERRALS_PER_CREDIT;
     const creditsEarned = user.referralCreditsEarned || 0;
 
     res.json({
       code: user.referralCode,
       link,
       totalReferrals,
-      progressInCycle,          // 0, 1, or 2 — shown as "X/3 friends joined"
       creditsEarned,
-      nextCreditAt: REFERRALS_PER_CREDIT - progressInCycle,
+      creditsPerReferral: REFERRAL_CREDIT_REWARD,
     });
   } catch (err) {
     console.error("[referral] getReferralLink error:", err);
@@ -74,70 +74,68 @@ async function completeReferral(referredUserId) {
     await User.findByIdAndUpdate(referredUserId, { referralRewardGranted: true });
 
     const referrer = await User.findOne({ referralCode: referredUser.referredBy }).select(
-      "referralCount referralCreditsEarned courseCredits name email"
+      "referralCount referralCreditsEarned name email"
     );
     if (!referrer) return;
 
     const newCount = (referrer.referralCount || 0) + 1;
-    const newCreditsEarned = referrer.referralCreditsEarned || 0;
-    const updatePayload = { referralCount: newCount };
+    const newCreditsEarned = (referrer.referralCreditsEarned || 0) + REFERRAL_CREDIT_REWARD;
 
-    // Award a credit every time the count hits a multiple of REFERRALS_PER_CREDIT
-    const shouldAwardCredit = newCount % REFERRALS_PER_CREDIT === 0;
-    if (shouldAwardCredit) {
-      updatePayload.$inc = { courseCredits: 1 };
-      updatePayload.referralCreditsEarned = newCreditsEarned + 1;
-    }
-
-    await User.findByIdAndUpdate(referrer._id, updatePayload);
+    // grantCredits both applies the $inc and writes the CreditTransaction
+    // ledger row — referralCount/referralCreditsEarned below are just this
+    // controller's own display counters, not the balance itself.
+    await grantCredits(referrer._id, REFERRAL_CREDIT_REWARD, "referral", {
+      referredUserId,
+      referredEmail: referredUser.email,
+    });
+    await User.findByIdAndUpdate(referrer._id, {
+      referralCount: newCount,
+      referralCreditsEarned: newCreditsEarned,
+    });
 
     console.log(
       `[referral] ${referredUser.email} completed referral for ${referrer.email}. ` +
-      `New count: ${newCount}. Credit awarded: ${shouldAwardCredit}`
+      `New count: ${newCount}. Awarded ${REFERRAL_CREDIT_REWARD} credits.`
     );
 
-    // Notify referrer by email if they just earned a credit
-    if (shouldAwardCredit) {
-      sendEmail({
-        to: referrer.email,
-        subject: "You earned a free course credit on Level Up!",
-        text: [
-          `Hi ${referrer.name || "there"},`,
-          ``,
-          `One of your referrals just signed up and verified their email — and that was your 3rd!`,
-          `We've added 1 free course credit to your account.`,
-          ``,
-          `Keep sharing your link to earn more:`,
-          `${CLIENT_URL}/signup?ref=${referredUser.referredBy}`,
-          ``,
-          `— Level Up`,
-        ].join("\n"),
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; background: #15131F; color: #F6F1E7; border-radius: 12px;">
-            <img src="${CLIENT_URL}/logo.png" alt="Level Up" style="width: 40px; height: 40px; border-radius: 8px; margin-bottom: 16px;" />
-            <h2 style="color: #FF5C49; margin: 0 0 12px;">You earned a free credit! 🎉</h2>
-            <p style="color: #9A95AC; margin: 0 0 16px;">
-              One of your referrals just signed up — that's 3 friends joined!
-              We've added <strong style="color: #F6F1E7;">1 free course credit</strong> to your account.
-            </p>
-            <p style="color: #9A95AC; margin: 0 0 20px;">
-              Keep sharing to earn more — every 3 friends = 1 free credit, with no limit.
-            </p>
-            <a href="${CLIENT_URL}/signup?ref=${referredUser.referredBy}"
-              style="display: inline-block; background: #FF5C49; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;">
-              Share your link
-            </a>
-          </div>
-        `,
-      }).catch((err) => console.error("[referral] Failed to send credit email:", err.message));
+    sendEmail({
+      to: referrer.email,
+      subject: `You earned ${REFERRAL_CREDIT_REWARD} credits on Level Up!`,
+      text: [
+        `Hi ${referrer.name || "there"},`,
+        ``,
+        `One of your referrals just signed up and verified their email!`,
+        `We've added ${REFERRAL_CREDIT_REWARD} credits to your account.`,
+        ``,
+        `Keep sharing your link to earn more — every verified referral earns another ${REFERRAL_CREDIT_REWARD} credits, no limit:`,
+        `${CLIENT_URL}/signup?ref=${referredUser.referredBy}`,
+        ``,
+        `— Level Up`,
+      ].join("\n"),
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; background: #15131F; color: #F6F1E7; border-radius: 12px;">
+          <img src="${CLIENT_URL}/logo.png" alt="Level Up" style="width: 40px; height: 40px; border-radius: 8px; margin-bottom: 16px;" />
+          <h2 style="color: #FF5C49; margin: 0 0 12px;">You earned ${REFERRAL_CREDIT_REWARD} credits! 🎉</h2>
+          <p style="color: #9A95AC; margin: 0 0 16px;">
+            One of your referrals just signed up and verified their email.
+            We've added <strong style="color: #F6F1E7;">${REFERRAL_CREDIT_REWARD} credits</strong> to your account.
+          </p>
+          <p style="color: #9A95AC; margin: 0 0 20px;">
+            Keep sharing to earn more — every verified referral earns ${REFERRAL_CREDIT_REWARD} credits, with no limit.
+          </p>
+          <a href="${CLIENT_URL}/signup?ref=${referredUser.referredBy}"
+            style="display: inline-block; background: #FF5C49; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px;">
+            Share your link
+          </a>
+        </div>
+      `,
+    }).catch((err) => console.error("[referral] Failed to send credit email:", err.message));
 
-      // Also notify admin
-      sendEmail({
-        to: ADMIN_EMAIL,
-        subject: `Referral credit awarded — ${referrer.email}`,
-        text: `${referrer.email} earned a referral credit. Total referrals: ${newCount}. Total credits from referrals: ${newCreditsEarned + 1}.`,
-      }).catch(() => {});
-    }
+    sendEmail({
+      to: ADMIN_EMAIL,
+      subject: `Referral credit awarded — ${referrer.email}`,
+      text: `${referrer.email} earned ${REFERRAL_CREDIT_REWARD} referral credits. Total referrals: ${newCount}. Total credits from referrals: ${newCreditsEarned}.`,
+    }).catch(() => {});
   } catch (err) {
     console.error("[referral] completeReferral error:", err);
   }

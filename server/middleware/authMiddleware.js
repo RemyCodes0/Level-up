@@ -30,23 +30,39 @@ async function fetchUser(id) {
 exports.protect = async (req, res, next) => {
     let token;
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+        token = req.headers.authorization.split(' ')[1];
+
+        // Split from the fetchUser() try/catch below on purpose: only a
+        // jwt.verify() failure means the TOKEN itself is bad (expired,
+        // tampered, malformed) — that's a real 401. A DB error while
+        // fetching the user (a Mongo reconnect blip, a transient network
+        // hiccup) is not an auth failure at all, but the frontend treats
+        // ANY 401 here as "wipe the session and force a re-login" (see
+        // CourseApi.ts's handleUnauthorized) — misreporting a DB hiccup as
+        // 401 was logging users out for a reason that had nothing to do
+        // with their actual credentials.
+        let decoded;
         try {
-            token = req.headers.authorization.split(' ')[1];
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            req.user = await fetchUser(decoded.id);
-
-            // The token was valid, but the user it points to no longer exists
-            // (e.g. the account was deleted). Without this check, req.user is
-            // null and every downstream handler crashes reading req.user._id.
-            // Stop here with a clean 401 instead.
-            if (!req.user) {
-                return res.status(401).json({ message: 'Not authorized, user no longer exists' });
-            }
-
-            next();
+            decoded = jwt.verify(token, process.env.JWT_SECRET);
         } catch (error) {
             return res.status(401).json({ message: 'Not authorized, token failed' });
         }
+
+        try {
+            req.user = await fetchUser(decoded.id);
+        } catch (error) {
+            return next(error); // real server error — 500, not a fake 401
+        }
+
+        // The token was valid, but the user it points to no longer exists
+        // (e.g. the account was deleted). Without this check, req.user is
+        // null and every downstream handler crashes reading req.user._id.
+        // Stop here with a clean 401 instead.
+        if (!req.user) {
+            return res.status(401).json({ message: 'Not authorized, user no longer exists' });
+        }
+
+        next();
     } else {
         res.status(401).json({ message: 'Not authorized, no token' });
     }

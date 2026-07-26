@@ -64,8 +64,11 @@ function handleCourseFileUpload(req, res, next) {
   });
 }
 
-// All other course routes require a logged-in user (so req.user exists)
-router.post("/generate", protect, checkCredits, handleCourseFileUpload, generateCourseHandler);
+// All other course routes require a logged-in user (so req.user exists).
+// handleCourseFileUpload MUST run before checkCredits — it's the multer
+// middleware that parses the multipart body, and checkCredits now needs
+// req.body.tier (multipart fields aren't populated until multer runs).
+router.post("/generate", protect, handleCourseFileUpload, checkCredits, generateCourseHandler);
 router.post("/:courseId/share", protect, generateShareLinkHandler);
 router.delete("/:courseId/share", protect, unshareCourseHandler);
 router.post("/:courseId/publish", protect, publishCourseHandler);

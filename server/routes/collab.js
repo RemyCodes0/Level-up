@@ -43,7 +43,10 @@ router.get("/join/link/:shareToken", previewRoomByLink);
 router.post("/join/link/:shareToken", protect, joinRoomByLink);
 router.post("/join/:inviteCode", protect, joinRoomByCode);
 
-router.post("/rooms", protect, checkCredits, handleCourseFileUpload, createRoom);
+// handleCourseFileUpload MUST run before checkCredits — see routes/course.js
+// for why (checkCredits reads req.body.tier, which multer hasn't populated
+// yet on a multipart request until it runs).
+router.post("/rooms", protect, handleCourseFileUpload, checkCredits, createRoom);
 router.get("/rooms/mine", protect, listMyRooms);
 router.get("/rooms/:roomId", protect, getRoom);
 router.post("/rooms/:roomId/join", protect, joinRoomById);

@@ -2,10 +2,14 @@
 
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Check, ArrowRight, Sparkles, Plus, Minus } from "lucide-react";
+import { Check, ArrowRight, Sparkles, Plus, Minus, Loader2 } from "lucide-react";
 import { Helmet } from "react-helmet-async";
 import { analytics } from "../lib/analytics";
 import { PageMeta } from "../components/PageMeta";
+import { getPricingConfig } from "../api/CourseApi";
+import type { CourseTier, CreditPack } from "../api/CourseApi";
+
+const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
 // Same "Cutting Room" tokens used across the rest of the site, for
 // consistency when a visitor lands here directly (e.g. from an ad or a
@@ -34,22 +38,49 @@ function FaqItem({ q, a }: { q: string; a: string }) {
 
 export default function PricingPage() {
   const navigate = useNavigate();
+  const [courseTiers, setCourseTiers] = useState<CourseTier[]>([]);
+  const [creditPacks, setCreditPacks] = useState<CreditPack[]>([]);
+  const [buyingPackKey, setBuyingPackKey] = useState<string | null>(null);
 
-  useEffect(() => { analytics.pricingViewed(); }, []);
+  useEffect(() => {
+    analytics.pricingViewed();
+    getPricingConfig()
+      .then((cfg) => { setCourseTiers(cfg.courseTiers); setCreditPacks(cfg.creditPacks); })
+      .catch((err) => console.error("Failed to load pricing config:", err));
+  }, []);
+
+  const handleBuy = async (packKey: string) => {
+    const token = localStorage.getItem("token");
+    if (!token) { navigate("/signup"); return; }
+    setBuyingPackKey(packKey);
+    try {
+      const res = await fetch(`${BASE_URL}/api/payment/stripe/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ packKey }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.checkoutUrl) throw new Error(data.message || "Failed to start checkout");
+      window.location.href = data.checkoutUrl;
+    } catch (err) {
+      console.error("Failed to start checkout:", err);
+      setBuyingPackKey(null);
+    }
+  };
 
   const faqs = [
-    { q: "Is the first lesson really free?", a: "Yes. Every course's first lesson generates free, with no card required, so you can see exactly what you'd get before paying for the rest." },
-    { q: "Do I need a subscription?", a: "No. There's no recurring charge. You buy a course credit only when you want one, and it never expires." },
-    { q: "What exactly does $4.99 get me?", a: "One full course: six animated video lessons with synced narration, plus a 20-question quiz that scores your readiness and breaks down what to review." },
+    { q: "Is the first lesson really free?", a: "Yes. Every new account gets one full 6-lesson course free, with no card required, so you can see exactly what you'd get before spending any credits." },
+    { q: "Do I need a subscription?", a: "No. There's no recurring charge. You buy a credit pack only when you want one, and (with one exception below) credits never expire." },
+    { q: "Do credits expire?", a: "Credits you buy or earn from referrals never expire. The only exception is the 100 free credits every new account gets on signup — those expire 30 days after signup if unused." },
+    { q: "Are quizzes extra?", a: "No — every course tier includes its MCQ quiz for free, bundled into the credit cost. There's never a separate charge for the quiz." },
     { q: "Can I get a refund?", a: "Yes, within our refund policy window if a course didn't generate properly or doesn't match what was promised. See our refund policy for details." },
-    { q: "Can I buy more than one course at a time?", a: "Yes. You can purchase credits whenever you like and use them on any topic, anytime — there's no limit on how many courses you make." },
   ];
 
   return (
     <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif" }} className="min-h-screen flex flex-col">
       <PageMeta
-        title="Pricing — $4.99 per Course, No Subscription | Level Up AI"
-        description="One flat price per course: six animated video lessons with narration plus a 20-question quiz. First lesson always free, no subscription, no expiring credits."
+        title="Pricing — Credits for AI-Generated Courses | Level Up AI"
+        description="Buy credit packs for AI-generated courses: Quick Explainer, Deeper Dive, or Full Mastery. First course always free, no subscription, credits never expire."
         canonical="/price"
       />
       <Helmet>
@@ -92,39 +123,72 @@ export default function PricingPage() {
             <Sparkles className="h-3 w-3" /> No subscription, ever
           </div>
           <h1 className="text-4xl sm:text-5xl font-bold leading-[1.08] mb-4" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
-            One simple price.
+            Credits that never expire.
           </h1>
           <p className="text-base sm:text-lg leading-relaxed" style={{ color: MUTE }}>
-            Pay only for the courses you make. No tiers, no recurring charge, no surprises.
+            Buy credits once, spend them on any course tier, whenever you like. No recurring charge, no surprises.
           </p>
         </div>
 
-        {/* Pricing card */}
-        <div className="max-w-md mx-auto px-4 sm:px-6 pb-16">
-          <div className="rounded-2xl p-8 text-center border" style={{ backgroundColor: STAGE_2, borderColor: "rgba(255,92,73,0.3)" }}>
-            <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>Per course</p>
-            <div className="flex items-end justify-center gap-1 mb-1">
-              <span className="text-6xl font-bold" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>$4.99</span>
+        {/* Free Trial + 3 credit packs, 4 columns */}
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-16">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 items-stretch">
+            {/* Free Trial — leftmost, entry point for new users */}
+            <div className="rounded-2xl p-6 text-center border flex flex-col" style={{ backgroundColor: STAGE_2, borderColor: HAIR }}>
+              <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: PHOSPHOR, fontFamily: "'JetBrains Mono', monospace" }}>Free Trial</p>
+              <span className="text-4xl font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>$0</span>
+              <p className="text-xs mb-6" style={{ color: MUTE }}>Your first course, on us</p>
+              <p className="text-sm mb-6 flex-1" style={{ color: BEAM }}>1 full 6-lesson course + 20-question quiz — no card required.</p>
+              <button onClick={() => navigate("/signup")} className="w-full text-sm font-semibold py-3 rounded-xl transition-transform hover:scale-[1.02] flex items-center justify-center gap-2" style={{ backgroundColor: PHOSPHOR, color: "#0a1f16" }}>
+                Start free <ArrowRight className="h-4 w-4" />
+              </button>
             </div>
-            <p className="text-sm mb-7" style={{ color: MUTE }}>six lessons, narration, and a full quiz</p>
-            <div className="space-y-3 text-left mb-8">
-              {[
-                "First lesson of every course, free",
-                "No subscription — pay per course, when you want one",
-                "Upload a PDF or type any topic",
-                "6 animated, narrated video lessons",
-                "A 20-question readiness quiz",
-                "Keep every course you make, forever",
-              ].map((t) => (
-                <div key={t} className="flex items-start gap-2.5 text-sm" style={{ color: BEAM }}>
-                  <Check className="h-4 w-4 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t}
+
+            {creditPacks.map((p) => (
+              <div key={p.key} className="rounded-2xl p-6 text-center border flex flex-col relative" style={{ backgroundColor: STAGE_2, borderColor: p.badge ? CORAL : "rgba(255,92,73,0.3)" }}>
+                {p.badge && (
+                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide px-3 py-1 rounded-full" style={{ backgroundColor: CORAL, color: "#fff" }}>
+                    {p.badge}
+                  </span>
+                )}
+                <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>{p.credits} Credits</p>
+                <span className="text-4xl font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>${(p.priceCents / 100).toFixed(2)}</span>
+                <p className="text-xs mb-6" style={{ color: MUTE }}>${(p.priceCents / 100 / p.credits).toFixed(3)} per credit</p>
+                <div className="flex-1" />
+                <button
+                  onClick={() => handleBuy(p.key)}
+                  disabled={buyingPackKey !== null}
+                  className="w-full text-sm font-semibold py-3 rounded-xl transition-transform hover:scale-[1.02] flex items-center justify-center gap-2 disabled:opacity-60"
+                  style={{ backgroundColor: CORAL, color: "#fff" }}
+                >
+                  {buyingPackKey === p.key ? <><Loader2 className="h-4 w-4 animate-spin" /> Redirecting…</> : <>Buy <ArrowRight className="h-4 w-4" /></>}
+                </button>
+              </div>
+            ))}
+          </div>
+          <p className="text-center text-xs mt-6" style={{ color: MUTE }}>
+            Credits never expire, except the 100 free signup credits, which expire 30 days after signup. MCQs are always included free — no hidden fees.
+          </p>
+        </div>
+
+        {/* Course tiers explainer */}
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-16">
+          <h2 className="text-xl sm:text-2xl font-bold mb-2 text-center" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
+            What your credits buy
+          </h2>
+          <p className="text-sm text-center mb-8" style={{ color: MUTE }}>Pick a course size right in the app when you generate — here's what each one costs.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+            {courseTiers.map((t) => (
+              <div key={t.key} className="rounded-2xl p-6 border" style={{ backgroundColor: STAGE_2, borderColor: HAIR }}>
+                <h3 className="text-lg font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{t.name}</h3>
+                <p className="text-sm mb-4" style={{ color: MUTE }}>{t.description}</p>
+                <div className="space-y-2 text-sm mb-5" style={{ color: BEAM }}>
+                  <div className="flex items-start gap-2.5"><Check className="h-4 w-4 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t.lessonCount} animated, narrated lesson{t.lessonCount !== 1 ? "s" : ""}</div>
+                  <div className="flex items-start gap-2.5"><Check className="h-4 w-4 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t.mcqCount}-question quiz ({t.timeAllocationMinutes} min), included free</div>
                 </div>
-              ))}
-            </div>
-            <button onClick={() => navigate("/signup")} className="w-full text-sm font-semibold py-3.5 rounded-xl transition-transform hover:scale-[1.02] flex items-center justify-center gap-2" style={{ backgroundColor: CORAL, color: "#fff" }}>
-              Start your free lesson <ArrowRight className="h-4 w-4" />
-            </button>
-            <p className="text-xs mt-4" style={{ color: MUTE }}>No card required to begin.</p>
+                <p className="text-2xl font-bold" style={{ color: AMBER, fontFamily: "'Space Grotesk', sans-serif" }}>{t.creditCost} credits</p>
+              </div>
+            ))}
           </div>
         </div>
 
