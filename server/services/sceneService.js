@@ -1,14 +1,15 @@
-// Runs scene-plan generation on SCENE_PLAN_PROVIDER (GLM 5.2, reasoning
-// off, via Z.ai's own API directly — see claudeService.js) — a deliberate,
-// separate model choice from whichever model LESSON_CODE_MODEL selects for
-// the actual animation CODE, since this is lighter structured JSON
-// generation (scene timing, narration text, visual descriptions), not code.
+// Runs scene-plan generation on DEEPSEEK_SCENE_PLAN_PROVIDER (DeepSeek V4
+// Flash, reasoning off, hit directly at api.deepseek.com — see
+// claudeService.js) — a deliberate, separate model choice from whichever
+// model LESSON_CODE_MODEL selects for the actual animation CODE, since this
+// is lighter structured JSON generation (scene timing, narration text,
+// visual descriptions), not code.
 // No circular require risk: claudeService.js never requires this file (only
 // courseController.js does), so a top-level require here is safe.
 const {
-  SCENE_PLAN_PROVIDER,
+  DEEPSEEK_SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
-  limitZaiCall,
+  limitDeepSeekCall,
   describeError,
   isNonRetryable,
   backoffDelay,
@@ -127,12 +128,12 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
           : "");
 
       const { text, stopReason } = await streamCodeCompletion({
-        // Z.ai's own 10-concurrent-request account cap, not the OpenRouter
-        // header-call pool — this call goes straight to Z.ai.
-        limiter: limitZaiCall,
-        // GLM 5.2, reasoning off, via Z.ai directly — see
-        // SCENE_PLAN_PROVIDER's definition in claudeService.js.
-        provider: SCENE_PLAN_PROVIDER,
+        // DeepSeek's own shared account-wide concurrency pool — see
+        // limitDeepSeekCall's definition in claudeService.js.
+        limiter: limitDeepSeekCall,
+        // DeepSeek V4 Flash, reasoning off, hit directly at api.deepseek.com —
+        // see DEEPSEEK_SCENE_PLAN_PROVIDER's definition in claudeService.js.
+        provider: DEEPSEEK_SCENE_PLAN_PROVIDER,
         systemPrompt: SCENE_PLAN_SYSTEM_PROMPT,
         userContent,
         // 40000 is generous headroom for a plain JSON scenes array — plenty
@@ -200,7 +201,7 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
     } catch (err) {
       lastError = err;
       if (isNonRetryable(err)) {
-        throw new Error(`Scene plan generation failed with a non-retryable error (check ${SCENE_PLAN_PROVIDER.keyEnv}): ${describeError(err)}`);
+        throw new Error(`Scene plan generation failed with a non-retryable error (check ${DEEPSEEK_SCENE_PLAN_PROVIDER.keyEnv}): ${describeError(err)}`);
       }
       contentFeedback = err.message;
       console.warn(

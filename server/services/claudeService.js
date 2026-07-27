@@ -44,6 +44,23 @@ const anthropicClient = new Anthropic({
   maxRetries: 0,
 });
 
+// DeepSeek direct — course plan + per-lesson scene plan (see
+// DEEPSEEK_COURSE_PLAN_PROVIDER / DEEPSEEK_SCENE_PLAN_PROVIDER below). Own
+// account/balance, hit directly at api.deepseek.com — not OpenRouter. Same
+// OpenAI-compatible chat-completions wire shape as zaiClient/openRouterClient,
+// and DeepSeek's native reasoning toggle mirrors Z.ai/Anthropic's own
+// `thinking: { type: "disabled" | "enabled" }` field (plus its own
+// `reasoning_effort` knob — see DEEPSEEK_COURSE_PLAN_PROVIDER).
+const deepseekClient = new OpenAI({
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: "https://api.deepseek.com/v1",
+  timeout: 300 * 1000,
+  maxRetries: 0,
+});
+if (!process.env.DEEPSEEK_API_KEY) {
+  console.warn("[codegen] WARNING: DEEPSEEK_API_KEY is not set — course-plan and scene-plan generation will fail with an auth error.");
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PROVIDER TABLE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -122,15 +139,42 @@ function withReasoningOff(provider) {
 const HEADER_PROVIDER = withReasoningOff(LESSON_CODE_PROVIDER);
 const SCENE_CODE_PROVIDER = withReasoningOff(LESSON_CODE_PROVIDER);
 
-// Scene-plan / course-plan / remedial / next-course: bounded, fixed-shape JSON
-// (not code) on GLM 5.2 via Z.ai directly. Its own provider object so this
-// call category can diverge later without re-wiring call sites.
+// Remedial plan / next-course suggestions: bounded, fixed-shape JSON (not
+// code) on GLM 5.2 via Z.ai directly. Course plan and per-lesson scene plan
+// used to share this same provider — both now run on DeepSeek instead (see
+// DEEPSEEK_COURSE_PLAN_PROVIDER / DEEPSEEK_SCENE_PLAN_PROVIDER below); this
+// stays GLM for the two remaining lower-volume JSON calls.
 const SCENE_PLAN_PROVIDER = {
   client: zaiClient,
   model: "glm-5.2",
   extraParams: { thinking: { type: "disabled" } },
   maxTokens: 40000,
   keyEnv: "ZAI_API_KEY",
+};
+
+// Course plan (thinking ON, high effort — the plan sets the whole course's
+// structure, worth the extra latency) and per-lesson scene plan (thinking
+// OFF — one lesson's scene breakdown is a lighter, faster call) both run on
+// DeepSeek V4 Flash directly, not through Z.ai/OpenRouter. DeepSeek's
+// `reasoning_effort` only accepts "high"/"max" (low/medium are silently
+// remapped up to "high" for compatibility), so "high" here is the true
+// minimum, not a soft preference.
+const DEEPSEEK_COURSE_PLAN_PROVIDER = {
+  client: deepseekClient,
+  model: "deepseek-v4-flash",
+  extraParams: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+  // Reasoning tokens are drawn from this SAME budget, on top of the actual
+  // JSON — the old reasoning-off course-plan budget (a few thousand tokens)
+  // has no headroom left once high-effort reasoning is turned on.
+  maxTokens: 40000,
+  keyEnv: "DEEPSEEK_API_KEY",
+};
+const DEEPSEEK_SCENE_PLAN_PROVIDER = {
+  client: deepseekClient,
+  model: "deepseek-v4-flash",
+  extraParams: { thinking: { type: "disabled" } },
+  maxTokens: 40000,
+  keyEnv: "DEEPSEEK_API_KEY",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -155,6 +199,14 @@ const ZAI_SCENE_MAX_CONCURRENT = Number(process.env.ZAI_SCENE_MAX_CONCURRENT) ||
 const limitZaiSceneCall = createLimiter(ZAI_SCENE_MAX_CONCURRENT);
 const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;
 const limitAdCodeCall = createLimiter(AD_CODE_MAX_CONCURRENT);
+// DeepSeek's own account-wide concurrency cap isn't documented anywhere as
+// precisely as Z.ai's — 5 is a conservative starting guess shared by every
+// direct-to-DeepSeek call (course plan, scene plan, and the pre-course level
+// assessment in levelAssessmentService.js, which imports this same limiter).
+// Tune DEEPSEEK_MAX_CONCURRENT down if connection-drop errors show up under
+// multi-user load, same as the ZAI_SCENE_MAX_CONCURRENT tuning note above.
+const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 5;
+const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 
 console.log(
   `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude to switch) | ` +
@@ -341,16 +393,18 @@ function safeParseJson(text) {
 }
 
 // ONE JSON-generation path for course plans, remedial plans, and next-course
-// suggestions: Z.ai direct, shared limiter, truncation detection, safe parse,
-// caller-supplied shape validation, and — new — corrective feedback on retry
-// (previously JSON retries were blind rerolls; now a shape-validation failure
+// suggestions: shared truncation detection, safe parse, caller-supplied shape
+// validation, and corrective feedback on retry (a shape-validation failure
 // message rides into the next attempt's prompt exactly like code-gen does).
-async function generateJson({ label, maxAttempts, maxTokens, buildMessages, validate }) {
+// `provider`/`limiter` default to the GLM/Z.ai path (remedial, next-course);
+// generateCoursePlan below passes DEEPSEEK_COURSE_PLAN_PROVIDER/
+// limitDeepSeekCall instead — this function no longer assumes Z.ai.
+async function generateJson({ label, maxAttempts, maxTokens, buildMessages, validate, provider = SCENE_PLAN_PROVIDER, limiter = limitZaiCall }) {
   return withRetries(label, maxAttempts, async ({ feedback }) => {
-    const response = await limitZaiCall(() =>
-      SCENE_PLAN_PROVIDER.client.chat.completions.create({
-        model: SCENE_PLAN_PROVIDER.model,
-        ...SCENE_PLAN_PROVIDER.extraParams,
+    const response = await limiter(() =>
+      provider.client.chat.completions.create({
+        model: provider.model,
+        ...provider.extraParams,
         max_tokens: maxTokens,
         messages: buildMessages(feedback),
       })
@@ -361,10 +415,13 @@ async function generateJson({ label, maxAttempts, maxTokens, buildMessages, vali
       throw contentError(`${label} response hit max_tokens and was truncated — the JSON is incomplete`);
     }
 
+    // Thinking-mode providers (DeepSeek, same convention as Z.ai/Anthropic)
+    // return reasoning in a separate `message.reasoning_content` field, never
+    // mixed into `message.content` — no extra stripping needed here.
     const text = choice?.message?.content || "";
     const parsed = safeParseJson(text);
     return validate(parsed, text);
-  }, { keyEnv: SCENE_PLAN_PROVIDER.keyEnv }); // FIX: this used to report LESSON_CODE_PROVIDER.keyEnv, which is WRONG whenever LESSON_CODE_MODEL=fable — plan calls always run on Z.ai.
+  }, { keyEnv: provider.keyEnv });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -511,8 +568,8 @@ Rules:
 - Pure JSON only, no backticks${levelGuidance}
 - CRITICAL: Respond with ONLY the JSON object. No commentary, no acknowledgment, no clarifying questions — even if the input is unusually long, looks like a document rather than a short topic, or seems ambiguous. If the input is long or document-like, identify its single most central subject and build the course plan around that. Never refuse and never ask a follow-up question — always produce the JSON.`;
 
-  // GLM is a text endpoint — it can't ingest raw document bytes. Extract text
-  // first (PDF via pdf-parse, PPTX via extractPptxText), capped at
+  // DeepSeek is a text endpoint — it can't ingest raw document bytes. Extract
+  // text first (PDF via pdf-parse, PPTX via extractPptxText), capped at
   // MAX_PDF_TEXT_CHARS, and feed the same plain-text path as pasted text.
   let effectivePdfText = pdfText;
   if (pdfBuffer) {
@@ -550,10 +607,15 @@ ${rules}
   const plan = await generateJson({
     label: `plan`,
     maxAttempts,
+    provider: DEEPSEEK_COURSE_PLAN_PROVIDER,
+    limiter: limitDeepSeekCall,
     // FIX: was a flat 8000, which a large tier (e.g. 10 lessons / 40 MCQs from
     // courseController's tier-priced path) could genuinely exceed — scale the
-    // budget with the requested shape instead.
-    maxTokens: Math.min(16000, 3000 + lessonCount * 500 + mcqCount * 200),
+    // budget with the requested shape instead. Floor raised from 3000 to
+    // 12000: with high-effort thinking ON, reasoning tokens draw from this
+    // SAME max_tokens budget before the actual JSON is written, so the old
+    // reasoning-off floor left no room once thinking was turned on.
+    maxTokens: Math.min(40000, 12000 + lessonCount * 500 + mcqCount * 200),
     buildMessages: (feedback) => [{ role: "user", content: basePrompt + feedbackSuffix(feedback) }],
     validate: (parsed, raw) => {
       const { ok, errors } = validateCoursePlan(parsed, lessonCount, mcqCount);
@@ -2061,12 +2123,20 @@ module.exports = {
   LESSON_CODE_PROVIDER,
   HEADER_PROVIDER,
   SCENE_PLAN_PROVIDER,
+  // sceneService.js's generateScenePlan runs on DeepSeek now (thinking off),
+  // not GLM — see the "DEEPSEEK" comment block above SCENE_PLAN_PROVIDER.
+  DEEPSEEK_SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
   // Z.ai concurrency limiter for non-scene direct calls (serialized to 1) —
-  // sceneService.js's generateScenePlan uses this for its Z.ai-direct call.
-  // Per-scene code generation uses its own separate limitZaiSceneCall,
+  // remedial/next-course generation (still GLM) uses this for its Z.ai-direct
+  // calls. Per-scene code generation uses its own separate limitZaiSceneCall,
   // internal to this file only.
   limitZaiCall,
+  // DeepSeek's own shared account-wide concurrency pool — sceneService.js's
+  // generateScenePlan AND levelAssessmentService.js's pre-course level check
+  // both hit DeepSeek directly and import this same limiter so their traffic
+  // is coordinated against one account cap, exactly like limitZaiCall above.
+  limitDeepSeekCall,
   describeError,
   isNonRetryable,
   backoffDelay,

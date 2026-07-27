@@ -17,28 +17,30 @@
 // 3-4 exchange check, not a full exam.
 
 const OpenAI = require("openai");
-// Z.ai's own account-wide concurrency cap for GLM (limitZaiCall) — shared with
-// every other direct-to-Z.ai call in the app (lesson code, scene-plan,
-// course-plan, etc., see claudeService.js). Importing this rather than
-// running a separate limiter here is required, not just tidy: Z.ai enforces
-// the cap per ACCOUNT, not per call site, so a separate pool here could
-// still push the account over 10 combined with claudeService.js's traffic.
-const { limitZaiCall } = require("./claudeService");
+// DeepSeek's own account-wide concurrency cap (limitDeepSeekCall) — shared
+// with every other direct-to-DeepSeek call in the app (course plan,
+// per-lesson scene plan, see claudeService.js). Importing this rather than
+// running a separate limiter here is required, not just tidy: DeepSeek
+// enforces the cap per ACCOUNT, not per call site, so a separate pool here
+// could still push the account over its real limit combined with
+// claudeService.js's traffic.
+const { limitDeepSeekCall } = require("./claudeService");
 
-// GLM 5.2 via Z.ai's own official API directly — own client instance,
-// but same account/key/concurrency cap as claudeService.js's zaiClient (see
-// limitZaiCall above). Not OpenRouter: that account has no credits.
-// maxRetries: the SDK auto-retries failed requests (including network
-// timeouts like ETIMEDOUT) this many times with backoff before giving up —
-// important for unstable connections. timeout: how long to wait per attempt.
+// DeepSeek V4 Flash via its own official API directly — own client instance,
+// but same account/key/concurrency cap as claudeService.js's deepseekClient
+// (see limitDeepSeekCall above). Not OpenRouter: hits api.deepseek.com
+// directly. maxRetries: the SDK auto-retries failed requests (including
+// network timeouts like ETIMEDOUT) this many times with backoff before
+// giving up — important for unstable connections. timeout: how long to wait
+// per attempt.
 const client = new OpenAI({
-  apiKey: process.env.ZAI_API_KEY,
-  baseURL: "https://api.z.ai/api/paas/v4",
+  apiKey: process.env.DEEPSEEK_API_KEY,
+  baseURL: "https://api.deepseek.com/v1",
   maxRetries: 3,
   timeout: 60 * 1000,
 });
 
-const MODEL = "glm-5.2"; // fast, fine for short MCQs (was GPT-5.6 Luna, DeepSeek V4 Flash before that)
+const MODEL = "deepseek-v4-flash"; // fast, fine for short MCQs (was GPT-5.6 Luna, then GLM 5.2)
 const MAX_QUESTIONS = 3;
 
 // Builds the system prompt that defines how the assessor behaves.
@@ -110,16 +112,15 @@ async function streamNextQuestion(topic, turns, onToken, maxAttempts = 3) {
       // Held for the WHOLE stream lifetime (create + consume every chunk),
       // not just until create() resolves — same contract as
       // claudeService.js's streamCodeCompletion, required so the limiter
-      // actually caps concurrent open connections against Z.ai's account.
-      await limitZaiCall(async () => {
+      // actually caps concurrent open connections against DeepSeek's account.
+      await limitDeepSeekCall(async () => {
         const stream = await client.chat.completions.create({
           model: MODEL,
           max_tokens: 400,
           // Off: this is a live "typing" question generator — reasoning
           // would add latency to what should feel instant, and writing one
-          // simple self-report MCQ doesn't need it. GLM's own native
-          // `thinking` field, not OpenRouter's unified `reasoning` shape —
-          // this talks to Z.ai directly now, not OpenRouter.
+          // simple self-report MCQ doesn't need it. DeepSeek's native
+          // `thinking` field, same shape as Z.ai/Anthropic's.
           thinking: { type: "disabled" },
           stream: true,
           messages: [
@@ -161,11 +162,11 @@ async function determineLevel(topic, turns) {
     .map((t, i) => `Q${i + 1}: ${t.question}\nThey answered: "${t.answer}"`)
     .join("\n\n");
 
-  const response = await limitZaiCall(() =>
+  const response = await limitDeepSeekCall(() =>
     client.chat.completions.create({
       model: MODEL,
       max_tokens: 50,
-      thinking: { type: "disabled" }, // a one-word verdict needs no reasoning — see streamNextQuestion's call above for why native `thinking`, not OpenRouter's `reasoning`
+      thinking: { type: "disabled" }, // a one-word verdict needs no reasoning
       messages: [
         {
           role: "system",
