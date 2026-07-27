@@ -892,6 +892,164 @@ function canonicalizeHeaderImports(headerCode) {
 // helper components. No export, no <Series>/<Series.Sequence>/<Audio>, imports
 // limited to react/remotion, valid interpolate() shape, and no top-level
 // declaration reserved for the stitcher (Scene1..N, the lesson's componentName).
+// ── SVG-fragment containment ─────────────────────────────────────────────────
+// Root cause of a whole class of "half the scene is invisible" lessons: the
+// header defines shared components that RETURN bare SVG fragments (<g>,
+// <circle>, <rect>...), and scenes then render them inside plain <div>s /
+// <AbsoluteFill>. SVG elements outside an <svg> ancestor are created as
+// HTMLUnknownElements and render NOTHING — no crash, no warning, the shapes
+// just silently don't exist. Observed live in a Dijkstra lesson where every
+// GraphNode/Panel/NodeTile was invisible in most scenes. Two checks:
+//   1. checkNoSvgFragmentComponents — a component whose return ROOT is an SVG
+//      fragment tag is a landmine: it only works if every future call site
+//      remembers to wrap it in <svg>, which the scene model reliably forgets.
+//      Self-contained components (own <svg> root, or plain divs) work anywhere.
+//   2. checkSvgPrimitivesInHtmlContext — a literal SVG primitive nested under
+//      a literal HTML container (div/span/...) or AbsoluteFill (always a div)
+//      with no <svg> in between, in the same JSX tree. A definite render-miss.
+const SVG_FRAGMENT_TAGS = new Set([
+  "g", "circle", "rect", "line", "path", "text", "polygon", "polyline",
+  "ellipse", "defs", "pattern", "mask", "tspan", "linearGradient",
+  "radialGradient", "stop", "use", "marker", "clipPath",
+]);
+const HTML_CONTAINER_TAGS = new Set([
+  "div", "span", "p", "section", "main", "article", "aside", "header",
+  "footer", "nav", "ul", "ol", "li", "button", "a", "table", "tbody", "tr",
+  "td", "th", "figure", "h1", "h2", "h3", "h4", "h5", "h6",
+  // Not an HTML tag, but Remotion's AbsoluteFill always renders a <div>, so
+  // as an ancestor it's just as fatal for a bare SVG fragment.
+  "AbsoluteFill",
+]);
+
+function jsxTagName(node) {
+  const nameNode = node.openingElement && node.openingElement.name;
+  if (nameNode && nameNode.type === "JSXIdentifier") return nameNode.name;
+  return null; // JSXMemberExpression (Series.Sequence etc.) — not relevant here
+}
+
+// Returns the root JSX element tag names a function can return (follows
+// fragments and conditional expressions one level deep — enough for how
+// generated components are actually written).
+function collectReturnRootTags(fnNode) {
+  const tags = [];
+  const visit = (expr) => {
+    if (!expr) return;
+    if (expr.type === "JSXElement") {
+      const t = jsxTagName(expr);
+      if (t) tags.push(t);
+    } else if (expr.type === "JSXFragment") {
+      expr.children.forEach((c) => { if (c.type === "JSXElement") visit(c); });
+    } else if (expr.type === "ConditionalExpression") {
+      visit(expr.consequent);
+      visit(expr.alternate);
+    } else if (expr.type === "LogicalExpression") {
+      visit(expr.right);
+    }
+  };
+  if (fnNode.body && fnNode.body.type === "JSXElement") {
+    visit(fnNode.body); // arrow with implicit return
+  } else if (fnNode.body && fnNode.body.type === "BlockStatement") {
+    for (const stmt of fnNode.body.body) {
+      if (stmt.type === "ReturnStatement") visit(stmt.argument);
+    }
+  }
+  return tags;
+}
+
+// Check 1 — components that return bare SVG fragments at their root.
+function checkNoSvgFragmentComponents(ast) {
+  const errors = [];
+  const report = (name, tag) => {
+    errors.push(
+      `Component "${name}" returns a bare <${tag}> SVG fragment as its root. SVG elements only render inside an <svg> tag — a component like this becomes INVISIBLE the moment a scene renders it inside a <div> or <AbsoluteFill> (which scenes constantly do). Make it SELF-CONTAINED instead: return its own absolutely-positioned <svg> root (e.g. <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}>...your <${tag}>...</svg>), or build it from plain <div>s.`
+    );
+  };
+  traverse(ast, {
+    FunctionDeclaration(path) {
+      const name = path.node.id && path.node.id.name;
+      if (!name || !/^[A-Z]/.test(name)) return;
+      for (const tag of collectReturnRootTags(path.node)) {
+        if (SVG_FRAGMENT_TAGS.has(tag)) { report(name, tag); break; }
+      }
+    },
+    VariableDeclarator(path) {
+      const name = path.node.id && path.node.id.name;
+      const init = path.node.init;
+      if (!name || !/^[A-Z]/.test(name)) return;
+      if (!init || (init.type !== "ArrowFunctionExpression" && init.type !== "FunctionExpression")) return;
+      for (const tag of collectReturnRootTags(init)) {
+        if (SVG_FRAGMENT_TAGS.has(tag)) { report(name, tag); break; }
+      }
+    },
+  });
+  return errors;
+}
+
+// Check 2 — SVG primitives nested under an HTML container with no <svg>
+// between them, within one JSX tree. Also treats locally-declared
+// fragment-root components (found by the same root-tag scan) as primitives
+// at their usage sites, so `<MyG/>` under a <div> is caught too.
+function checkSvgPrimitivesInHtmlContext(ast) {
+  const errors = [];
+  const seen = new Set();
+
+  // Names of local components whose return root is an SVG fragment.
+  const fragmentComponents = new Set();
+  traverse(ast, {
+    FunctionDeclaration(path) {
+      const name = path.node.id && path.node.id.name;
+      if (name && /^[A-Z]/.test(name) && collectReturnRootTags(path.node).some((t) => SVG_FRAGMENT_TAGS.has(t))) {
+        fragmentComponents.add(name);
+      }
+    },
+    VariableDeclarator(path) {
+      const name = path.node.id && path.node.id.name;
+      const init = path.node.init;
+      if (name && /^[A-Z]/.test(name) && init && (init.type === "ArrowFunctionExpression" || init.type === "FunctionExpression") && collectReturnRootTags(init).some((t) => SVG_FRAGMENT_TAGS.has(t))) {
+        fragmentComponents.add(name);
+      }
+    },
+  });
+
+  traverse(ast, {
+    JSXElement(path) {
+      const tag = jsxTagName(path.node);
+      if (!tag) return;
+      const isPrimitive = SVG_FRAGMENT_TAGS.has(tag);
+      const isFragmentComponent = fragmentComponents.has(tag);
+      if (!isPrimitive && !isFragmentComponent) return;
+
+      let p = path.parentPath;
+      while (p) {
+        const n = p.node;
+        if (n.type === "JSXElement") {
+          const ancestorTag = jsxTagName(n);
+          if (ancestorTag === "svg") return; // properly contained
+          if (ancestorTag && HTML_CONTAINER_TAGS.has(ancestorTag)) {
+            const key = `${tag}@${path.node.loc ? path.node.loc.start.line : "?"}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              errors.push(
+                `<${tag}> is rendered inside <${ancestorTag}> with no <svg> wrapper between them (line ${path.node.loc ? path.node.loc.start.line : "?"}). SVG elements outside an <svg> tag silently render NOTHING — wrap this subtree in <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}>...</svg>, or rebuild it with plain <div>s.`
+              );
+            }
+            return;
+          }
+          // Other component / other svg-fragment ancestor: keep walking up.
+        } else if (
+          n.type === "FunctionDeclaration" ||
+          n.type === "ArrowFunctionExpression" ||
+          n.type === "FunctionExpression"
+        ) {
+          return; // reached the component root — fragment-root case, handled by check 1
+        }
+        p = p.parentPath;
+      }
+    },
+  });
+  return errors.slice(0, 6); // enough to correct on retry without flooding the prompt
+}
+
 function validateHeaderFragment(code, { reservedNames = [] } = {}) {
   checkBalancedBraces(code);
   checkBalancedParens(code);
@@ -949,6 +1107,20 @@ function validateHeaderFragment(code, { reservedNames = [] } = {}) {
   const badHookCalls = checkHooksCalledOutsideFunction(ast);
   if (badHookCalls.length > 0) {
     throw new Error(`Header calls a hook outside a function:\n${badHookCalls.join("\n")}`);
+  }
+
+  // Shared components MUST be self-contained (own <svg> root or plain divs) —
+  // a bare-<g>-returning component silently renders nothing whenever a scene
+  // uses it outside an <svg>, which scenes do constantly. See the comment on
+  // checkNoSvgFragmentComponents for the observed production failure.
+  const svgFragmentErrors = checkNoSvgFragmentComponents(ast);
+  if (svgFragmentErrors.length > 0) {
+    throw new Error(`Header defines SVG-fragment component(s) that will be invisible outside <svg>:\n${svgFragmentErrors.join("\n")}`);
+  }
+
+  const svgContextErrors = checkSvgPrimitivesInHtmlContext(ast);
+  if (svgContextErrors.length > 0) {
+    throw new Error(`Header renders SVG element(s) where they cannot display:\n${svgContextErrors.join("\n")}`);
   }
 
   // Everything above validated the header AS WRITTEN (its own imports were
@@ -1104,6 +1276,16 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
   const arrowTargetErrors = checkArrowTargetsAreReferenced(ast);
   if (arrowTargetErrors.length > 0) {
     throw new Error(`${sceneName} has arrow(s) pointing at nothing:\n${arrowTargetErrors.join("\n")}`);
+  }
+
+  // Same invisible-SVG guard as the header: raw <circle>/<g>/... under a
+  // <div>/<AbsoluteFill> with no <svg> between them renders nothing, and a
+  // scene-local helper returning a bare fragment is caught at its call sites.
+  // (Header components are already guaranteed self-contained by
+  // validateHeaderFragment, so scenes can place them anywhere.)
+  const svgContextErrors = checkSvgPrimitivesInHtmlContext(ast);
+  if (svgContextErrors.length > 0) {
+    throw new Error(`${sceneName} renders SVG element(s) where they cannot display:\n${svgContextErrors.join("\n")}`);
   }
 
   return code;

@@ -746,6 +746,7 @@ Your job is the FOUNDATION, not a scene. Concretely produce:
   • The palette + motif consts/components described above, named clearly (e.g. PALETTE with a .text key, Backdrop, Motif) so scenes can reference them without guessing.
   • The ZONES const from S5 — every scene relies on these exact numbers to avoid stacking text on text or letting a diagram creep into the text bands.
   • Any other TRULY shared utility worth extracting once (e.g. a Label component, a Panel/frame component) — only if more than one scene would plausibly need it. Do not invent scene-specific content; you have not been told what any individual scene shows.
+  • EVERY visual component you declare MUST be SELF-CONTAINED — HARD RULE, mechanically rejected: its return root is either plain HTML (<div>/<AbsoluteFill>) or its OWN <svg> element (position:"absolute", left:0, top:0, width:1920, height:1080, pointerEvents:"none", overflow:"visible") with the shapes inside. NEVER return a bare <g>/<circle>/<rect>/<line>/<path>/<text> fragment: scenes will drop your components straight into <div> trees, and an SVG fragment outside <svg> renders NOTHING — no crash, no warning, the shape just silently doesn't exist, and the whole lesson ships with invisible graphics. A full-frame absolutely-positioned <svg> root costs nothing and works wherever the scene puts it.
   • If this lesson's subject involves direction, vectors, forces, or angles (physics, math, engineering, navigation) — build shared Arrow({from,to,...}) and AngleArc({vertex,...}) helpers here using the exact atan2-based math described in the scene rules' §C2, so every scene reuses the SAME correct direction/angle geometry instead of each one re-deriving it independently.
   • Never leave a "TODO" or placeholder — every const/component you declare must be complete, working code a scene could use immediately.
 
@@ -829,6 +830,7 @@ You are running with thinking/reasoning OFF for this call — there is no hidden
     // CAST: <element> [<its own animated property>], <element> [<its own animated property>], ... — every element listed here must reappear below wired to an interpolate/spring that reads frame
     // PACING: frame <a>: <what appears/changes>; frame <b>: ...; frame <c>: ...; frame <d>: ... (4 literal frame numbers spread across THIS scene's FULL duration; the LAST one must be ≥ 70% of durationInFrames — e.g. for 450 frames, ≥ 315)
     // LAYOUT: <anchor> = {x, y} computed once; <dependents> read the same anchor
+    // CONTAINMENT: <child> INSIDE <parent>: parent center (x,y) r=<R> (or w×h) → child bound: |child - center| ≤ <R - childHalf - margin>; ... — one clause per pair given in the scene's spatial field, WITH the derived numeric bound the child's position formula actually uses (including any sin/cos amplitude: base ± amp must stay inside the bound). "none" only if the spatial field says none. A child positioned from hand-guessed coordinates instead of the parent's own geometry consts is how DNA ends up floating outside the cell — the #1 factual-wrongness failure.
     // COLLISION @ start/mid/end: <elemA>(x,y,±halfW,±halfH) vs <elemB>(...): gap OK; ... — list EVERY pair of major elements that are simultaneously visible at each of the 3 checkpoints, with real numbers. If any pair's boxes touch, fix the anchors or stagger the entrances NOW, in this comment, before any JSX exists.
     const frame = useCurrentFrame();
     ...
@@ -840,15 +842,8 @@ Then work out the four things that comment answers, and build straight to them:
   (3) THE PACING: 3-5 staged reveals spread across the FULL duration, tracking the narration (see CRAFT §B).
   (4) THE LAYOUT: shared position anchors so connectors/labels/contents line up, every final position clamped to SAFE (see CRAFT §C, and SAFETY §5), and every element placed in its correct ZONES band so nothing overlaps (see CRAFT §D). The COLLISION line is where this gets verified with numbers — a collision check that exists only as an intention is a check that never ran.
 
-════════ VISUALTYPE STAGING RECIPES (structure, not content — your CAST is still subject-specific) ════════
-Each scene declares a visualType; use its recipe as the scene's SKELETON. The recipe fixes the staging pattern that makes each type legible; the mechanism + fingerprint supply everything topic-specific. Never let the recipe override the given mechanism — if they conflict, the mechanism wins.
-  • intro — BUILD, don't announce: the lesson's central object assembles piece by piece as the title settles, ending fully formed. Never a title floating over ambience.
-  • concept — ONE core object transforming center-stage; the transformation IS the explanation. Supporting labels arrive only after the transformation is underway.
-  • diagram — structure assembles in dependency order (nodes before the connectors that join them; container before contents); each connector draws itself only after BOTH its endpoints exist on screen.
-  • steps — a visible spine (timeline/track/path) with step k activating while step k-1 visibly recedes (dims/shrinks); exactly one step is dominant at any frame; the spine shows progress position at all times.
-  • comparison — split layout, the SAME input enters both sides simultaneously, both sides animate in lockstep until the exact moment the difference matters, then visibly diverge; end holding the contrast side by side.
-  • example — real concrete values flow through the mechanism: show actual numbers/items changing state as they pass through, not an abstract re-run. The values on screen must be consistent with each other at every frame (if 3 moved out, 3 arrived).
-  • summary — a compressed replay: the lesson's key transformation re-runs fast (2-4x the original pacing) with the motif returning center stage; end on the AFTER state, held stable, as the lesson's final image.
+════════ VISUALTYPE STAGING RECIPE (structure, not content — your CAST is still subject-specific) ════════
+{{VISUALTYPE_RECIPE}}
 
 ════════ SANDBOX API (violate → build fails) ════════
 1. NO props, NO export. Write EXACTLY one top-level declaration: function SceneN() { ... } (using the exact name given to you), with no parameters. Any local helper you need must be a function NESTED inside this one — never a second top-level declaration.
@@ -887,8 +882,7 @@ Y2. JSX attribute names differ from HTML: class → className, for → htmlFor.
 Y3. Prefer string concatenation ("a" + b + "c") over template literals for dynamic colors/transforms/paths — zero risk of an unbalanced backtick. If you do use a template literal, every backtick must be paired (total count even); one stray backtick corrupts the whole rest of the file.
 Y4. Never put comma-separated expressions bare in JSX braces ({a, b} is invalid). Never write a literal { or } as JSX text ("f(x) = {x}" breaks parsing) — write braces as string expressions {"{"} or reword to avoid them.
 Y5. Any wrapper component you nest content inside MUST accept and render {children} ({ children } — NO type annotation; "React" is NOT imported/available here, so "React.ReactNode" or any other "React.X" type crashes with "React is not defined" … then {children} in its body). A wrapper missing {children} silently drops everything inside it — the #1 cause of blank scenes. If unsure, put the background as a sibling <AbsoluteFill> BEHIND the content instead of wrapping it.
-
-════════ ANIMATION CRAFT — this is where the product lives ════════
+Y6. SVG elements ONLY render inside an <svg> tag — mechanically rejected otherwise. A <circle>/<rect>/<line>/<path>/<text>/<g>/<polygon> placed directly under a <div> or <AbsoluteFill> renders NOTHING (no crash, no warning — the shape silently doesn't exist). Every SVG primitive you write must sit inside an <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}> block, and any local helper that returns SVG shapes must either include that <svg> root itself or only ever be used inside one. The header's shared components are already self-contained — you can place THOSE anywhere.
 
 §A — ILLUSTRATE THE MECHANISM, NOT A LABELED PICTURE. The single most common failure is a static shape with a name on it instead of the actual process happening. Show the BEFORE state becoming the AFTER state across the scene:
    • DNA replication → base pairs actually SEPARATING one by one, new bases animating in to pair with each exposed strand — not two lines labeled 5'/3'.
@@ -924,7 +918,12 @@ Y5. Any wrapper component you nest content inside MUST accept and render {childr
      const enzyme = { x: 700, y: 540 };
      <line x1={enzyme.x} y1={enzyme.y} ... />   // reuse — do not re-type 720/560
    • Moving target: compute the live animated position once; the element AND its arrow/label both read it, so they track together every frame.
-   • Containment: derive a container's inner region from the SAME geometry you drew the container with, and clamp contents into it — never guess "inside" coordinates independently.
+   • Containment: derive a container's inner region from the SAME geometry you drew the container with, and clamp contents into it — never guess "inside" coordinates independently. The pattern is always: parent geometry as consts FIRST, children derived from them:
+       const cell = { x: 960, y: 540, r: 320 };            // parent drawn from these exact consts
+       const nucleus = { x: cell.x, y: cell.y, r: cell.r * 0.45 };   // child radius/position DERIVED, never retyped
+       // any element inside nucleus: distance from nucleus center ≤ nucleus.r - elemHalf - 10
+       const dnaX = nucleus.x + Math.cos(frame / 20) * (nucleus.r - 40);  // amplitude bounded by parent, so it CANNOT exit
+     An animated child's FULL range must stay inside (base ± sin/cos amplitude, spring overshoot included) — clamp the amplitude to the parent's inner radius, don't just clamp the resting position. Every pair in your CONTAINMENT plan line must be built this way.
    • Proportion: the main diagram dominates (~40-60% of frame width) in ZONES.diagram; labels are subordinate to what they label; contained items are a small fraction of their container; clamp any animated size to a sane range (a radius formula that can hit 0 or 900 is a bug).
    • NO SHAPE-ON-SHAPE OVERLAP IS A MECHANICAL CHECK, NOT A JUDGMENT CALL — AND ITS OUTPUT IS THE COLLISION COMMENT LINE: for each pair of elements simultaneously visible (opacity > 0) at each of the 3 checkpoints (start / the mid-pacing stage from §B / end), their centers must be farther apart than the sum of their half-widths — no two bounding boxes intersect. You do this check by WRITING the numbers in the COLLISION line of your plan comment; a check with no written numbers behind it did not happen. If two elements are close, either increase the gap between their anchor coordinates or stagger their entrances (§B) so they're never both fully opaque at the same frame.
    • NO ARROW POINTS AT NOTHING IS ALSO A MECHANICAL CHECK: every Arrow's "to" (and "from") target must be a named anchor that's read a SECOND time by whatever it actually points at (e.g. the same target const also sets a rendered element's left/top/cx/cy) — never an anchor invented only for the arrow itself. This is enforced automatically: an anchor referenced nowhere except inside the Arrow call gets REJECTED and this scene is regenerated, so an omitted target isn't a style slip, it's a build failure. If you draw an Arrow, render the thing at its far end FIRST, from the same const, then point the Arrow at it.
@@ -1006,6 +1005,7 @@ function BinarySearchScene() {
   // CAST: cells [state color/glow per step], pointer [x hops with spring drop], satellite dot [orbit], title [fade in], found caption [fade in late]
   // PACING: frame 20: window full; frame 90: first halving; frame 210: second; frame 300: found state; frame 320: caption (320 ≥ 0.7*450=315 ✓)
   // LAYOUT: rowY/startX/gap computed once; cellX(i) is the ONLY x source — cells, pointer, check states all read it
+  // CONTAINMENT: none — no element of this concept lives inside another (satellite dot orbits the pointer but reads pointerX/rowY, radius 26 ≪ any neighbor gap). Scenes WITH containment (organelles in a cell, electrons in shells) list each pair here with the parent-derived bound.
   // COLLISION @ start/mid/end: cells are gap-118 apart at halfW 44 (74px clearance, OK); pointer sits 110px above rowY (outside cell boxes, OK); title y=120-220 vs rowY=520 (OK); caption y=860+ (OK)
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -1099,7 +1099,8 @@ Notice: the plan comment is written FIRST with real numbers in COLLISION and a P
 
 ════════ FINAL PASS (verify silently, fix before returning) ════════
 • EXACTLY one top-level declaration (your scene function, correctly named), no import, no export, no <Series>/<Series.Sequence>/<Audio>.
-• Your leading plan comment is present with ALL SIX lines (MECHANISM / FINGERPRINT / CAST / PACING / LAYOUT / COLLISION), and every element named under CAST has a MATCHING interpolate/spring in the JSX below that reads frame — an element that's declared, positioned and rendered but never appears in an interpolate/spring call is a static prop, not an animation, and is a FAIL by itself even if nothing else is wrong.
+• Your leading plan comment is present with ALL SEVEN lines (MECHANISM / FINGERPRINT / CAST / PACING / LAYOUT / CONTAINMENT / COLLISION), and every element named under CAST has a MATCHING interpolate/spring in the JSX below that reads frame — an element that's declared, positioned and rendered but never appears in an interpolate/spring call is a static prop, not an animation, and is a FAIL by itself even if nothing else is wrong.
+• CONTAINMENT FIDELITY: every pair in the scene's given spatial field appears in your CONTAINMENT line with a real numeric bound, AND the child's position formula in the JSX literally derives from the parent's geometry consts (reads parent.x/parent.r etc.) with its full animated range (base ± amplitude) inside that bound. A child whose coordinates are hand-typed numbers unrelated to the parent's consts is a FAIL even if it happens to look inside at frame 0 — it WILL drift out.
 • MECHANISM FIDELITY: your MECHANISM line matches the given mechanism.before/after/driver, the JSX renders the DRIVER itself in motion (not just its end result), the frame-0 state matches "before", and the final-frame state matches "after". A scene that skips the driver and cross-fades before into after is a slide transition, not the mechanism — FAIL.
 • RECIPE CHECK: the scene follows its visualType's staging recipe (intro builds, steps has a spine with one dominant step, comparison diverges from a shared input, summary replays compressed — see VISUALTYPE STAGING RECIPES).
 • FINGERPRINT CHECK: at least one CAST member is topic-unique imagery per the FINGERPRINT line — if every element in this scene could be dropped unchanged into a lesson on a different subject, the scene is generic wallpaper and FAILS.
@@ -1123,14 +1124,62 @@ Your entire response is the scene's code, first characters "function", no text o
 
 // ── GLM-specific scene prompt ────────────────────────────────────────────────
 const GLM_SCENE_COHERENCE_GATE = `<coherence_gate priority="critical">
-Use the HEADER CODE's palette/motif exactly as given — do not invent new colors. For THIS scene, decide the MECHANISM (before→after) and a cast of elements sized to that concept, not a fixed quota of decorative particles — then write the six-line plan comment (MECHANISM/FINGERPRINT/CAST/PACING/COLLISION/LAYOUT) BEFORE any JSX; skipping it is how every failure below happens. The failures to avoid are three different faces of the same laziness: a static labeled picture with no real progress, a generic particle-field indistinguishable across unrelated topics, and a frame where two elements or two captions sit on top of each other because no one wrote the collision numbers down. Aim for a scene that teaches the concept through its motion, contains at least one visual only THIS subject could produce, and clearly belongs to THIS lesson.
+Use the HEADER CODE's palette/motif exactly as given — do not invent new colors. For THIS scene, decide the MECHANISM (before→after) and a cast of elements sized to that concept, not a fixed quota of decorative particles — then write the seven-line plan comment (MECHANISM/FINGERPRINT/CAST/PACING/LAYOUT/CONTAINMENT/COLLISION) BEFORE any JSX; skipping it is how every failure below happens. The failures to avoid are three different faces of the same laziness: a static labeled picture with no real progress, a generic particle-field indistinguishable across unrelated topics, and a frame where two elements or two captions sit on top of each other because no one wrote the collision numbers down. Aim for a scene that teaches the concept through its motion, contains at least one visual only THIS subject could produce, and clearly belongs to THIS lesson.
 </coherence_gate>
 `;
 
 const GLM_SCENE_CODE_GEN_RULES = GLM_SCENE_COHERENCE_GATE + SCENE_CODE_GEN_RULES;
 
-function selectSceneSystemPrompt(provider) {
-  return provider.model.startsWith("glm") ? GLM_SCENE_CODE_GEN_RULES : SCENE_CODE_GEN_RULES;
+// Each scene's scene-plan (sceneService.js) already assigns exactly ONE of
+// these seven visualType values — so instead of showing every recipe on
+// every call (six-sevenths of which are irrelevant to THIS scene), splice in
+// only the matching one. Same content as before, just scoped to what this
+// specific call actually needs.
+const VISUALTYPE_RECIPES = {
+  intro: "BUILD, don't announce: the lesson's central object assembles piece by piece as the title settles, ending fully formed. Never a title floating over ambience.",
+  concept: "ONE core object transforming center-stage; the transformation IS the explanation. Supporting labels arrive only after the transformation is underway.",
+  diagram: "structure assembles in dependency order (nodes before the connectors that join them; container before contents); each connector draws itself only after BOTH its endpoints exist on screen.",
+  steps: "a visible spine (timeline/track/path) with step k activating while step k-1 visibly recedes (dims/shrinks); exactly one step is dominant at any frame; the spine shows progress position at all times.",
+  comparison: "split layout, the SAME input enters both sides simultaneously, both sides animate in lockstep until the exact moment the difference matters, then visibly diverge; end holding the contrast side by side.",
+  example: "real concrete values flow through the mechanism: show actual numbers/items changing state as they pass through, not an abstract re-run. The values on screen must be consistent with each other at every frame (if 3 moved out, 3 arrived).",
+  summary: "a compressed replay: the lesson's key transformation re-runs fast (2-4x the original pacing) with the motif returning center stage; end on the AFTER state, held stable, as the lesson's final image.",
+};
+
+function visualTypeRecipeLine(visualType) {
+  const recipe = VISUALTYPE_RECIPES[visualType];
+  const body = recipe
+    ? `  • ${visualType} — ${recipe}`
+    : `  • (visualType "${visualType}" has no listed recipe — build straight from the MECHANISM/CAST/PACING/LAYOUT plan above.)`;
+  return `Each scene declares a visualType; use its recipe as the scene's SKELETON. The recipe fixes the staging pattern that makes this type legible; the mechanism + fingerprint supply everything topic-specific. Never let the recipe override the given mechanism — if they conflict, the mechanism wins.
+${body}`;
+}
+
+// Domain-specific technique guidance, injected ONLY for scenes whose
+// scene-plan tagged a matching domainSkill (sceneService.js) — most scenes
+// tag "none" and get nothing extra here. Unlike the recipes above, this is
+// genuinely NEW guidance the base prompt doesn't otherwise give: the base
+// prompt's CRAFT rules are deliberately generic (any topic, any visual), so
+// technique-specific failure modes for charts/algorithms/code were
+// previously uncovered. Missing/unrecognized domainSkill values are a safe
+// no-op — the scene just gets the same prompt it always did.
+const SCENE_DOMAIN_SKILLS = {
+  "chart-data": `════════ SKILL: DATA CHARTS ════════
+Scale every bar/point from ONE shared domain-to-range mapping computed once (e.g. const barHeight = (v) => interpolate(v, [0, maxValue], [0, 260], CLAMP)) — never hardcode a pixel height per data value by hand, and never let two elements derive their size from different formulas. Animate bars/points growing FROM the shared baseline, not fading in at full size. Axis labels/ticks must read from the SAME array driving the shapes (map over the data once for both), never be retyped as separate strings that could drift out of sync with the actual values.`,
+  "algorithm-trace": `════════ SKILL: ALGORITHM TRACE ════════
+Maintain exactly ONE \`step\` (or equivalent progress) value derived from frame via interpolate — every visual signal of algorithm state (which element is active/compared/sorted, where a pointer sits, which edges are visited) must read that SAME step value, never a separately-timed interpolate. Two elements that are supposed to be in sync but derive their state from different frame ranges is the #1 way an algorithm trace looks wrong even when each piece animates fine on its own.`,
+  "code-snippet": `════════ SKILL: CODE DISPLAY ════════
+Render code as individual tokens (words/operators/strings split into separate <span>s) with per-token or per-line opacity/color interpolate for reveal and highlighting — never a single block of text that just fades in all at once. If showing execution, highlight the CURRENTLY EXECUTING line/token by reading the same step/frame value driving any accompanying state visualization (§C's shared-anchor rule applies here too), so the highlighted line and the visualized state never disagree about what's happening right now.`,
+  "equation-math": `════════ SKILL: MATH NOTATION & GRAPHS ════════
+For a plotted function, compute points from the ACTUAL formula over a fixed domain (never hand-place points to "look like" the curve). When a term or value changes, show the specific number/symbol that changes — updating it in place — rather than replacing the whole equation. Axes and gridlines are drawn ONCE from the same coordinate mapping every plotted point uses, so the curve is always correctly positioned relative to them.`,
+  "physical-system": `════════ SKILL: PHYSICAL SYSTEMS (forces/waves/circuits/molecules) ════════
+The quantity that DRIVES the physics (force, voltage, wave phase, concentration) should be ONE value computed from frame, with every dependent visual (position, amplitude, color intensity, particle motion) reading that same driving value — not independently-timed animations that happen to look physics-like. Real systems have continuous motion (oscillation, flow, vibration) even during "held" states — avoid frozen intermediate poses; something is always moving in response to the driving value.`,
+};
+
+function selectSceneSystemPrompt(provider, visualType, domainSkill) {
+  const base = provider.model.startsWith("glm") ? GLM_SCENE_CODE_GEN_RULES : SCENE_CODE_GEN_RULES;
+  const withRecipe = base.replace("{{VISUALTYPE_RECIPE}}", visualTypeRecipeLine(visualType));
+  const skill = SCENE_DOMAIN_SKILLS[domainSkill];
+  return skill ? `${withRecipe}\n\n${skill}` : withRecipe;
 }
 
 // ── Naming + user-content builders ──────────────────────────────────────────
@@ -1197,9 +1246,10 @@ durationInFrames: ${scene.durationInFrames}
 visualType: ${scene.visualType}
 onScreenText: ${scene.onScreenText}
 ${mechanismBlock}
+spatial (containment/attachment contract — every pair here MUST appear in your CONTAINMENT plan line with derived numeric bounds): ${scene.spatial || "not provided — derive any obvious parent/child pairs from the visualDescription (anything described as inside/within/on/attached to something else) and write them into your CONTAINMENT line; 'none' only if there genuinely are none."}
 visualDescription: ${scene.visualDescription}
 
-Write ONLY the function ${sceneName}, illustrating this scene's mechanism per the PLAN and CRAFT sections above — starting with the six-line plan comment (MECHANISM / FINGERPRINT / CAST / PACING / LAYOUT / COLLISION) as the first thing inside the function body. The MECHANISM line must transcribe the before/after/driver given above. The PACING line's last literal must be ≥ ${Math.floor(scene.durationInFrames * 0.7)} (70% of ${scene.durationInFrames}). No import, no export, no <Series>/<Series.Sequence>/<Audio>.
+Write ONLY the function ${sceneName}, illustrating this scene's mechanism per the PLAN and CRAFT sections above — starting with the seven-line plan comment (MECHANISM / FINGERPRINT / CAST / PACING / LAYOUT / CONTAINMENT / COLLISION) as the first thing inside the function body. The MECHANISM line must transcribe the before/after/driver given above. The PACING line's last literal must be ≥ ${Math.floor(scene.durationInFrames * 0.7)} (70% of ${scene.durationInFrames}). No import, no export, no <Series>/<Series.Sequence>/<Audio>.
 `;
 }
 
@@ -1624,7 +1674,7 @@ async function generateSceneCode(lesson, scene, index, totalScenes, headerCode, 
     const { text, stopReason, usage } = await streamCodeCompletion({
       limiter: limitZaiSceneCall,
       provider: SCENE_CODE_PROVIDER,
-      systemPrompt: selectSceneSystemPrompt(SCENE_CODE_PROVIDER),
+      systemPrompt: selectSceneSystemPrompt(SCENE_CODE_PROVIDER, scene.visualType, scene.domainSkill),
       userContent: buildSceneUserContent(lesson, scene, index, totalScenes, compactHeader, componentName) + feedbackSuffix(feedback),
       maxOutputTokens: SCENE_MAX_OUTPUT_TOKENS,
     });

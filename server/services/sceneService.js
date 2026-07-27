@@ -52,12 +52,14 @@ Return ONLY valid JSON, no markdown, exactly this structure:
       "id": 1,
       "narration": "string — the exact words spoken during this scene. One or two sentences. Natural spoken language for text-to-speech, no markdown, no lists.",
       "visualType": "one of: intro | concept | diagram | steps | comparison | example | summary",
+      "domainSkill": "one of: chart-data | algorithm-trace | code-snippet | equation-math | physical-system | none — pick the ONE whose technique this scene's mechanism most needs (chart-data for bar/line/pie charts and other data-driven visuals; algorithm-trace for a data structure/algorithm executing step by step; code-snippet for displaying/highlighting source code; equation-math for plotted functions or symbolic math; physical-system for forces/waves/circuits/molecules/chemistry). Use 'none' whenever the scene doesn't clearly need one of these — most scenes should be 'none'.",
       "mechanism": {
         "before": "string — the exact visual state at the START of this scene, stated as something concretely drawable (e.g. 'twelve unsorted bars of visibly different heights in a row')",
         "after": "string — the exact visual state at the END of this scene (e.g. 'the same twelve bars in ascending height order, each snapping into place')",
         "driver": "string — the single visible action/process that transforms before into after, the thing the viewer literally watches happen (e.g. 'adjacent bars compare (both flash) and swap positions one pair at a time, largest bubbling right')"
       },
       "visualDescription": "string — the full staging of the mechanism above: the cast of specific elements (shapes, values, labels), their rough spatial arrangement, the color/emphasis logic, and how the driver plays out across the scene's timeline. Every specific thing you name must be something that actually moves or changes during the scene — a list of static shapes/labels with no transformation is NOT acceptable, even if it's detailed.",
+      "spatial": "string — the containment/attachment relationships that must hold on EVERY frame, as short 'child INSIDE parent' / 'label ATTACHED TO target' clauses separated by semicolons (e.g. 'chromosomes INSIDE nucleus; nucleus INSIDE cell membrane; spindle fibers ATTACHED TO chromosomes'). Only relationships the concept itself demands — 'none' if nothing is contained in or attached to anything. A viewer seeing a child element drift outside its parent (DNA outside the cell, an electron outside its shell) reads it as factually wrong, so name every such pair.",
       "onScreenText": "string — the short headline to display for this scene (max 8 words)"
     }
   ]
