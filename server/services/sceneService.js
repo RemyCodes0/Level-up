@@ -1,14 +1,17 @@
-// Runs scene-plan generation on SCENE_PLAN_PROVIDER (GLM 5.2, reasoning
-// off, via Z.ai's own API directly — see claudeService.js) — a deliberate,
-// separate model choice from whichever model LESSON_CODE_MODEL selects for
-// the actual animation CODE, since this is lighter structured JSON
-// generation (scene timing, narration text, visual descriptions), not code.
+// Runs scene-plan generation on DEEPSEEK_SCENE_PLAN_PROVIDER (DeepSeek V4
+// Flash, reasoning HIGH, hit directly at api.deepseek.com — see
+// claudeService.js) — a deliberate, separate model choice from whichever
+// model handles the actual animation CODE, since this is lighter structured
+// JSON generation (scene timing, narration text, visual descriptions), not
+// code. Reasoning is on because this call decides each scene's mechanism
+// (before/after/driver) — the structural contract the code generator builds
+// exactly, worth the extra latency to get right.
 // No circular require risk: claudeService.js never requires this file (only
 // courseController.js does), so a top-level require here is safe.
 const {
-  SCENE_PLAN_PROVIDER,
+  DEEPSEEK_SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
-  limitZaiCall,
+  limitDeepSeekCall,
   describeError,
   isNonRetryable,
   backoffDelay,
@@ -50,7 +53,7 @@ Return ONLY valid JSON, no markdown, exactly this structure:
   "scenes": [
     {
       "id": 1,
-      "narration": "string — the exact words spoken during this scene. One or two sentences. Natural spoken language for text-to-speech, no markdown, no lists.",
+      "narration": "string — the exact words spoken during this scene. Several SHORT sentences (roughly 3-5), not one or two long/dense ones. Natural spoken language for text-to-speech, no markdown, no lists.",
       "visualType": "one of: intro | concept | diagram | steps | comparison | example | summary",
       "domainSkill": "one of: chart-data | algorithm-trace | code-snippet | equation-math | physical-system | none — pick the ONE whose technique this scene's mechanism most needs (chart-data for bar/line/pie charts and other data-driven visuals; algorithm-trace for a data structure/algorithm executing step by step; code-snippet for displaying/highlighting source code; equation-math for plotted functions or symbolic math; physical-system for forces/waves/circuits/molecules/chemistry). Use 'none' whenever the scene doesn't clearly need one of these — most scenes should be 'none'.",
       "mechanism": {
@@ -68,6 +71,7 @@ Return ONLY valid JSON, no markdown, exactly this structure:
 Rules:
 - Create between 8 and 14 scenes for a roughly 5-minute lesson.
 - Each scene's narration should take 15-35 seconds to speak naturally — roughly 40-90 words at this project's TTS voice's real speaking pace (~150-165 words/minute). EVERY scene needs this, including the intro and the summary — a narration that's just a restated headline (a handful of words) is too short and gets cut off mid-thought when the scene switches, regardless of how it feels while writing it.
+- HIT THAT WORD COUNT WITH MORE SHORT SENTENCES, NEVER BY CRAMMING: a scene covers ONE idea — the mechanism given below, said plainly. Do not pack multiple facts, sub-points, or asides into a scene's narration just to reach the floor; a narration with several dense clauses in one breath reads as rushed and hard to follow out loud, even if it fits the word count. If the lesson has more to say than one scene comfortably holds at a natural pace, that's what MORE scenes are for — split it, don't densify it.
 - THE MECHANISM FIELD IS THE CONTRACT: before/after must describe two visibly DIFFERENT states (if they're the same picture, the scene is a slide, not an animation — rewrite it), and the driver must be an action a viewer can watch, not a conclusion ("the sorted order emerges" is a conclusion; "pairs compare and swap one at a time" is a watchable action). The code generator builds EXACTLY what this field says, so vagueness here becomes a boring scene downstream.
 - The visualDescription MUST match what the narration is talking about at that exact moment, and MUST stage the mechanism — never contradict or ignore it.
 - AVOID "THE STATIC LEGEND" — a diagram that just names/labels things with a checkmark or caption next to each, where nothing ever actually moves or transforms, is a slide, not an animation, no matter how many shapes/colors/labels it lists. If the concept is a process (an algorithm, a comparison, a growth, a flow), the visualDescription must describe that process actually happening on screen — not its conclusion stated in text.
@@ -127,12 +131,12 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
           : "");
 
       const { text, stopReason } = await streamCodeCompletion({
-        // Z.ai's own 10-concurrent-request account cap, not the OpenRouter
-        // header-call pool — this call goes straight to Z.ai.
-        limiter: limitZaiCall,
-        // GLM 5.2, reasoning off, via Z.ai directly — see
-        // SCENE_PLAN_PROVIDER's definition in claudeService.js.
-        provider: SCENE_PLAN_PROVIDER,
+        // DeepSeek's own shared concurrency pool — see limitDeepSeekCall's
+        // definition in claudeService.js.
+        limiter: limitDeepSeekCall,
+        // DeepSeek V4 Flash, reasoning high, hit directly at api.deepseek.com —
+        // see DEEPSEEK_SCENE_PLAN_PROVIDER's definition in claudeService.js.
+        provider: DEEPSEEK_SCENE_PLAN_PROVIDER,
         systemPrompt: SCENE_PLAN_SYSTEM_PROMPT,
         userContent,
         // 40000 is generous headroom for a plain JSON scenes array — plenty
@@ -200,7 +204,7 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
     } catch (err) {
       lastError = err;
       if (isNonRetryable(err)) {
-        throw new Error(`Scene plan generation failed with a non-retryable error (check ${SCENE_PLAN_PROVIDER.keyEnv}): ${describeError(err)}`);
+        throw new Error(`Scene plan generation failed with a non-retryable error (check ${DEEPSEEK_SCENE_PLAN_PROVIDER.keyEnv}): ${describeError(err)}`);
       }
       contentFeedback = err.message;
       console.warn(

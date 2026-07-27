@@ -137,14 +137,16 @@ function withReasoningOff(provider) {
   return { ...provider, extraParams: { ...rest, ...reasoningOffParam } };
 }
 
-// Scene-plan / course-plan / remedial / next-course: bounded, fixed-shape
-// JSON (not code) on GLM 5.2 via Z.ai directly. Its own provider object so
-// this call category can diverge later without re-wiring call sites. Course
-// plan and per-lesson scene plan briefly ran on DeepSeek instead (see
-// DEEPSEEK_COURSE_PLAN_PROVIDER / DEEPSEEK_SCENE_PLAN_PROVIDER below) — both
-// moved back to GLM; the DeepSeek provider objects are kept defined, just
-// unused, so switching back is a one-line change at each call site rather
-// than reconstructing them.
+// Remedial-lesson-plan / next-course-suggestions: bounded, fixed-shape JSON
+// (not code) on GLM 5.2 via Z.ai directly — unchanged, lower-stakes calls not
+// worth reasoning tokens. Course plan and per-lesson scene plan both run on
+// DeepSeek V4 Flash instead (see DEEPSEEK_COURSE_PLAN_PROVIDER /
+// DEEPSEEK_SCENE_PLAN_PROVIDER below), reasoning at HIGH effort — both set
+// the structure everything downstream depends on (the whole course's shape;
+// one lesson's scene breakdown, including each scene's mechanism), so the
+// extra latency is worth it. DeepSeek's `reasoning_effort` only accepts
+// "high"/"max" (low/medium are silently remapped up to "high" for
+// compatibility), so "high" here is the true minimum, not a soft preference.
 const SCENE_PLAN_PROVIDER = {
   client: zaiClient,
   model: "glm-5.2",
@@ -153,28 +155,21 @@ const SCENE_PLAN_PROVIDER = {
   keyEnv: "ZAI_API_KEY",
 };
 
-// UNUSED as of the GLM revert above — kept for easy reversal. Course plan
-// (thinking ON, high effort — the plan sets the whole course's structure,
-// worth the extra latency) and per-lesson scene plan (thinking OFF — one
-// lesson's scene breakdown is a lighter, faster call) both ran on DeepSeek V4
-// Flash directly, not through Z.ai/OpenRouter. DeepSeek's `reasoning_effort`
-// only accepts "high"/"max" (low/medium are silently remapped up to "high"
-// for compatibility), so "high" here was the true minimum, not a soft
-// preference.
 const DEEPSEEK_COURSE_PLAN_PROVIDER = {
   client: deepseekClient,
   model: "deepseek-v4-flash",
   extraParams: { thinking: { type: "enabled" }, reasoning_effort: "high" },
   // Reasoning tokens are drawn from this SAME budget, on top of the actual
-  // JSON — the old reasoning-off course-plan budget (a few thousand tokens)
-  // has no headroom left once high-effort reasoning is turned on.
+  // JSON — the reasoning-off floor (a few thousand tokens) has no headroom
+  // left once high-effort reasoning is turned on.
   maxTokens: 40000,
   keyEnv: "DEEPSEEK_API_KEY",
 };
 const DEEPSEEK_SCENE_PLAN_PROVIDER = {
   client: deepseekClient,
   model: "deepseek-v4-flash",
-  extraParams: { thinking: { type: "disabled" } },
+  extraParams: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+  // Same reasoning-budget note as DEEPSEEK_COURSE_PLAN_PROVIDER above.
   maxTokens: 40000,
   keyEnv: "DEEPSEEK_API_KEY",
 };
@@ -206,22 +201,15 @@ const LESSON_CODE_MAX_CONCURRENT = Number(process.env.LESSON_CODE_MAX_CONCURRENT
 const limitLessonCodeCall = createLimiter(LESSON_CODE_MAX_CONCURRENT);
 const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;
 const limitAdCodeCall = createLimiter(AD_CODE_MAX_CONCURRENT);
-// DeepSeek's own account-wide concurrency cap isn't documented anywhere as
-// precisely as Z.ai's — 6 is sized to match buildLessonsConcurrently
-// (courseController.js), which fires a default course's 6 lessons' scene-plan
-// calls all at once. A lower cap here would silently queue one of those 6
-// behind the others, undermining the whole point of building them
-// concurrently. Shared by every direct-to-DeepSeek call (course plan, scene
-// plan, and the pre-course level assessment in levelAssessmentService.js,
-// which imports this same limiter) — course plan and scene plan never
-// overlap in time (the course plan fully resolves before any lesson starts),
-// so this only ever needs to cover 6 CONCURRENT scene-plan calls at once, not
-// 6 plus a course plan on top. A tier with more than 6 lessons will queue its
-// extra lessons' scene-plan calls behind this same pool — tune
-// DEEPSEEK_MAX_CONCURRENT up to match lessonCount if that becomes the norm,
-// or down if connection-drop errors show up under multi-user load (same as
-// the LESSON_CODE_MAX_CONCURRENT tuning note above).
-const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 6;
+// DeepSeek's own documented account-wide cap for deepseek-v4-flash is 2,500
+// concurrent requests (hard cap, HTTP 429 past it) — 100 is a comfortable
+// ceiling far under that, not a stretch. Course plan and scene plan run on
+// GLM again (see SCENE_PLAN_PROVIDER above); the only current caller of this
+// limiter is the pre-course level assessment in levelAssessmentService.js
+// (which imports it directly), so in practice this rarely sees more than a
+// couple of concurrent calls — the headroom just means it never becomes a
+// bottleneck if that changes.
+const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 100;
 const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 
 console.log(
@@ -585,7 +573,7 @@ Rules:
 - Pure JSON only, no backticks${levelGuidance}
 - CRITICAL: Respond with ONLY the JSON object. No commentary, no acknowledgment, no clarifying questions — even if the input is unusually long, looks like a document rather than a short topic, or seems ambiguous. If the input is long or document-like, identify its single most central subject and build the course plan around that. Never refuse and never ask a follow-up question — always produce the JSON.`;
 
-  // GLM is a text endpoint — it can't ingest raw document bytes. Extract
+  // DeepSeek is a text endpoint — it can't ingest raw document bytes. Extract
   // text first (PDF via pdf-parse, PPTX via extractPptxText), capped at
   // MAX_PDF_TEXT_CHARS, and feed the same plain-text path as pasted text.
   let effectivePdfText = pdfText;
@@ -624,13 +612,15 @@ ${rules}
   const plan = await generateJson({
     label: `plan`,
     maxAttempts,
-    // provider/limiter omitted — defaults to SCENE_PLAN_PROVIDER (GLM 5.2 via
-    // Z.ai, reasoning off) / limitZaiCall, back from the brief DeepSeek
-    // thinking-high experiment.
+    provider: DEEPSEEK_COURSE_PLAN_PROVIDER,
+    limiter: limitDeepSeekCall,
     // FIX: was a flat 8000, which a large tier (e.g. 10 lessons / 40 MCQs from
     // courseController's tier-priced path) could genuinely exceed — scale the
-    // budget with the requested shape instead.
-    maxTokens: Math.min(16000, 3000 + lessonCount * 500 + mcqCount * 200),
+    // budget with the requested shape instead. Floor raised from 3000 to
+    // 12000: with high-effort thinking ON, reasoning tokens draw from this
+    // SAME max_tokens budget before the actual JSON is written, so the
+    // reasoning-off floor left no room once thinking was turned on.
+    maxTokens: Math.min(40000, 12000 + lessonCount * 500 + mcqCount * 200),
     buildMessages: (feedback) => [{ role: "user", content: basePrompt + feedbackSuffix(feedback) }],
     validate: (parsed, raw) => {
       const { ok, errors } = validateCoursePlan(parsed, lessonCount, mcqCount);
@@ -1607,7 +1597,7 @@ module.exports = {
   // one place to change it.
   LESSON_CODE_PROVIDER,
   SCENE_PLAN_PROVIDER,
-  // sceneService.js's generateScenePlan runs on DeepSeek now (thinking off),
+  // sceneService.js's generateScenePlan runs on DeepSeek now (thinking high),
   // not GLM — see the "DEEPSEEK" comment block above SCENE_PLAN_PROVIDER.
   DEEPSEEK_SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
