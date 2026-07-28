@@ -30,10 +30,8 @@ const sceneProgressSchema = new mongoose.Schema(
     label: String,
     audioReady: { type: Boolean, default: false },
     codeReady: { type: Boolean, default: false },
-    // A self-contained, directly compilable single-scene composition. Only
-    // ever populated by the old header+per-scene codegen pipeline — the
-    // current single-call path (generateLessonCode in claudeService.js) has
-    // no per-scene code completions, so this and codeReady now stay unset.
+    // A self-contained, directly compilable single-scene composition (header
+    // + just this scene, stitched) — see stitchLessonCode in claudeService.js.
     previewCode: { type: String, default: null },
   },
   { _id: false }

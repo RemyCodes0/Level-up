@@ -26,7 +26,7 @@ const CLIENT_URL = process.env.CLIENT_URL || "https://leveluppedu.app";
 async function getReferralLink(req, res) {
   try {
     let user = await User.findById(req.user._id).select(
-      "referralCode referralCount referralCreditsEarned name email"
+      "referralCode referralCount name email"
     );
     if (!user) return res.status(404).json({ error: "User not found" });
 
@@ -38,7 +38,19 @@ async function getReferralLink(req, res) {
 
     const link = `${CLIENT_URL}/signup?ref=${user.referralCode}`;
     const totalReferrals = user.referralCount || 0;
-    const creditsEarned = user.referralCreditsEarned || 0;
+    // Derived, not read from user.referralCreditsEarned: that field is a
+    // separately-incremented counter (completeReferral bumps it alongside
+    // referralCount, but in a second, independent update) and predates the
+    // current flat-reward scheme, so on any account with legacy/pre-scheme
+    // data it can silently drift from the truth — confirmed live on the
+    // admin account: referralCount 3 / referralCreditsEarned 1, with ZERO
+    // matching rows in the CreditTransaction ledger (the actual record of
+    // credits ever granted). Deriving it here instead guarantees the number
+    // shown always equals exactly what today's reward rule promises —
+    // verified friends × the reward — with no way for it to disagree with
+    // "X credits per referral" elsewhere on the same card, for this account
+    // or any other, past or future.
+    const creditsEarned = totalReferrals * REFERRAL_CREDIT_REWARD;
 
     res.json({
       code: user.referralCode,

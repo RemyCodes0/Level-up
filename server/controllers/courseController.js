@@ -4,6 +4,7 @@ const path = require("path");
 const {
   generateCoursePlan,
   generateLessonCode,
+  generateLessonHeader,
   generateNextCourseSuggestions,
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
@@ -110,28 +111,29 @@ async function buildLesson(courseId, lesson) {
   // error surfaced anywhere. Fixed: this stage now reports failure
   // correctly, the same way the code-generation stage already did.
   //
-  // Audio is not awaited here — generateAllSceneAudioPipelined fires every
-  // scene's audio immediately and returns per-scene PROMISES synchronously.
-  // Code generation is now a SINGLE call for the whole lesson (see
-  // generateLessonCode in claudeService.js), so unlike a per-scene design it
-  // waits for EVERY scene's audio before that one call can be built — a
-  // scene whose audio ultimately fails still surfaces as a real failure
-  // (Promise.all inside generateLessonCode rejects, tagged `.stage = "audio"`
-  // by ttsService, so the Stage 2 catch block below reports it correctly as
+  // Audio is NOT awaited here at all (previously Stage "1+2": scene plan
+  // THEN audio, both inside this same try). generateAllSceneAudioPipelined
+  // fires every scene's audio immediately and returns per-scene PROMISES
+  // synchronously instead of one aggregate promise — code generation below
+  // then awaits EACH scene's own promise individually, right before that
+  // specific scene's code generation starts, instead of the whole lesson
+  // waiting for every scene's audio to finish before code generation even
+  // begins. A scene whose audio ultimately fails still surfaces as a
+  // real failure (its promise rejects, which generateLessonCode's own scene
+  // loop catches and — since ttsService tags that rejection with
+  // `.stage = "audio"` — the Stage 2 catch block below still reports it as
   // an "audio" stage failure, not a misleading "code" one).
-  let scenePlan, scenePromises;
+  let scenePlan, scenePromises, headerPromise;
   try {
     console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
     scenePlan = await generateScenePlan(lesson);
 
     // Scene count/labels are known immediately — initialize a placeholder
-    // progress entry per scene right away, before audio generation even
-    // starts, so the frontend's filmstrip can appear instantly instead of
-    // waiting for the first real completion event. Non-fatal: a failure
+    // progress entry per scene right away, before audio or code generation
+    // even starts, so the frontend's filmstrip can appear instantly instead
+    // of waiting for the first real completion event. Non-fatal: a failure
     // here shouldn't block generation, just means the filmstrip stays empty
-    // a little longer. codeReady/previewCode stay permanently false/null on
-    // this single-call path — there's no per-scene code completion anymore,
-    // only per-scene audio readiness.
+    // a little longer.
     try {
       const initialProgress = scenePlan.map((s, i) => ({
         index: i,
@@ -148,7 +150,20 @@ async function buildLesson(courseId, lesson) {
       console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to initialize scene progress (non-fatal):`, progressInitErr.message);
     }
 
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio, then one code call...`);
+    // Header generation only needs the scene DESCRIPTIONS (visualType/
+    // onScreenText/visualDescription) — never the measured audio durations —
+    // so there's no reason it has to wait behind the entire audio pipeline.
+    // Kick it off here, in parallel with audio, and hand the (probably-
+    // already-resolved-by-the-time-it's-needed) result to generateLessonCode
+    // below instead of letting it start its own header call from scratch.
+    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio + header + code (all overlapping)...`);
+    headerPromise = generateLessonHeader(lesson, scenePlan);
+    // Attach a no-op handler immediately so a header failure here doesn't
+    // log as an unhandled rejection before generateLessonCode gets to await
+    // this same promise further down — the real error still surfaces
+    // normally there.
+    headerPromise.catch(() => {});
+
     ({ scenePromises } = generateAllSceneAudioPipelined(scenePlan, async (index, measuredScene) => {
       try {
         await Course.findByIdAndUpdate(courseId, {
@@ -192,15 +207,40 @@ async function buildLesson(courseId, lesson) {
         );
       }
 
-      console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: code (single call for the whole lesson)...`);
-      // Single-call path: one AI request generates the entire lesson file.
-      // There's no per-scene code completion anymore, so the filmstrip's
-      // codeReady/previewCode fields simply stay unset — the frontend shows
-      // audio progress until the whole lesson flips to "ready".
+      console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: code...`);
       const { code: tsxCode, totalFrames } = await generateLessonCode(
         lesson,
         componentName,
-        scenePromises
+        scenePlan,
+        scenePromises,
+        undefined,
+        {
+          // Reuse the header kicked off above (in parallel with audio)
+          // instead of generateLessonCode starting a fresh one from scratch —
+          // only applies to this first buildLesson-level attempt; internal
+          // retries (and a second buildLesson attempt) still regenerate a
+          // fresh header as before.
+          headerPromise,
+          // Fires as EACH scene's code finishes, in whatever order they
+          // actually resolve — lets the frontend's progress filmstrip show a
+          // real thumbnail for that scene well before the rest of the lesson
+          // is done. Independent of, and never touches, the
+          // `code`/`status`/`scenes` fields that the final save below sets —
+          // a progress-write failure here is logged but never affects normal
+          // lesson completion.
+          onSceneCodeReady: async (index, previewCode) => {
+            try {
+              await Course.findByIdAndUpdate(courseId, {
+                $set: {
+                  [`lessons.${lesson.lessonNumber - 1}.sceneProgress.${index}.codeReady`]: true,
+                  [`lessons.${lesson.lessonNumber - 1}.sceneProgress.${index}.previewCode`]: previewCode,
+                },
+              });
+            } catch (progressSaveErr) {
+              console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to save code progress for scene ${index + 1} (non-fatal):`, progressSaveErr.message);
+            }
+          },
+        }
       );
 
       // Scene boundaries for replay analytics (Progress model) — computed
@@ -272,22 +312,17 @@ async function buildLesson(courseId, lesson) {
 // free-trial course after the user buys credits), so this logic only lives
 // in one place.
 //
-// Was built one lesson at a time (a strict sequential loop). That existed to
-// protect a DIFFERENT concurrency need: the old per-scene code-generation
-// design fired 8-14 parallel calls PER LESSON, all sharing one process-wide
-// semaphore — building 2 lessons at once meant their scenes competed for
-// the SAME slot pool, so giving each lesson the whole pool to itself,
-// sequentially, was the only way to keep any single lesson fast.
-//
-// Lesson code generation is now ONE call per lesson (see generateLessonCode
-// in claudeService.js), so that scene-level contention doesn't exist
-// anymore — the relevant pool (limitLessonCodeCall, default 6) now bounds
-// concurrent WHOLE-LESSON calls directly, exactly the shape it's sized for.
-// Building lessons sequentially under this design would just pay each
-// lesson's full scene-plan+audio+code pipeline time back-to-back for no
-// benefit, so every lesson now starts at once and queues behind the shared
-// limiters (limitDeepSeekCall, limitSceneAudioCall, limitLessonCodeCall)
-// naturally. A lesson that fails doesn't block its siblings — buildLesson
+// Lesson code generation is split header + per-scene again (see
+// generateLessonHeader/generateSceneCode in claudeService.js) — an earlier
+// version of this pipeline built lessons ONE AT A TIME specifically so each
+// lesson's 8-14 scene calls got a shared concurrency pool entirely to
+// themselves. This time the scene pool (limitLessonSceneCall, default 100 —
+// see claudeService.js) is deliberately sized to cover EVERY lesson's scenes
+// across the whole course at once (6 lessons × ~12 scenes ≈ 70+), not just
+// one lesson's worth, so building lessons concurrently no longer starves
+// any of them — every scene, from every lesson, starts the instant its own
+// audio is ready and just queues behind the shared pool like any other
+// scene. A lesson that fails doesn't block its siblings — buildLesson
 // handles its own errors internally and never rethrows for a content
 // failure, only Promise.allSettled below needs to know it settled.
 async function buildLessonsConcurrently(courseId, lessons) {

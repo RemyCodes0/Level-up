@@ -52,7 +52,7 @@ function ReferralModal({ link, creditsPerReferral, onClose }: { link: string; cr
       */}
       <div className="flex w-full max-h-[92dvh] flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-h-[90vh] sm:max-w-md sm:rounded-2xl">
         {/* Gradient header — pinned */}
-        <div className="relative shrink-0 p-5 pb-4 sm:p-6 sm:pb-5" style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6, #a855f7)" }}>
+        <div className="relative shrink-0 p-5 pb-4 sm:p-6 sm:pb-5" style={{ background: "linear-gradient(135deg, #2563eb, #3b82f6, #60a5fa)" }}>
           {/* Drag-handle affordance — mobile only, signals the sheet is dismissible */}
           <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/40 sm:hidden" />
           <button onClick={onClose} className="absolute top-4 right-4 w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-white hover:bg-white/30 transition-colors">
@@ -62,7 +62,7 @@ function ReferralModal({ link, creditsPerReferral, onClose }: { link: string; cr
             <Gift className="h-6 w-6 text-white" />
           </div>
           <h2 className="text-lg sm:text-xl font-bold text-white mb-1 pr-9">Invite friends, earn credits</h2>
-          <p className="text-purple-200 text-sm">Every verified friend who signs up = {creditsPerReferral} credits for you. No limit.</p>
+          <p className="text-blue-200 text-sm">Every verified friend who signs up = {creditsPerReferral} credits for you. No limit.</p>
         </div>
 
         {/* Scrollable middle: steps + warning */}
@@ -73,7 +73,7 @@ function ReferralModal({ link, creditsPerReferral, onClose }: { link: string; cr
               <div key={i} className="flex items-start gap-3">
                 <div className="shrink-0 flex flex-col items-center">
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
-                    style={{ background: i === 3 ? "linear-gradient(135deg, #22c55e, #16a34a)" : "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
+                    style={{ background: i === 3 ? "linear-gradient(135deg, #22c55e, #16a34a)" : "linear-gradient(135deg, #2563eb, #3b82f6)" }}>
                     {step.number}
                   </div>
                   {i < steps.length - 1 && <div className="w-px h-3 mt-1 bg-slate-200" />}
@@ -103,9 +103,9 @@ function ReferralModal({ link, creditsPerReferral, onClose }: { link: string; cr
           <button onClick={handleCopy}
             className="w-full py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all"
             style={{
-              background: copied ? "linear-gradient(135deg, #22c55e, #16a34a)" : "linear-gradient(135deg, #6366f1, #8b5cf6)",
+              background: copied ? "linear-gradient(135deg, #22c55e, #16a34a)" : "linear-gradient(135deg, #2563eb, #3b82f6)",
               color: "white",
-              boxShadow: copied ? "0 4px 14px rgba(34,197,94,0.4)" : "0 4px 14px rgba(99,102,241,0.4)",
+              boxShadow: copied ? "0 4px 14px rgba(34,197,94,0.4)" : "0 4px 14px rgba(37,99,235,0.4)",
             }}>
             {copied ? <><Check className="h-4 w-4" /> Copied! Send it to your friends</> : <><Copy className="h-4 w-4" /> Copy my invite link</>}
           </button>
@@ -133,46 +133,44 @@ export function ReferralCard() {
     <>
       {showModal && <ReferralModal link={data.link} creditsPerReferral={data.creditsPerReferral} onClose={() => setShowModal(false)} />}
 
-      <div className="mx-3 mb-3 rounded-2xl overflow-hidden border border-purple-200 shadow-sm"
-        style={{ background: "linear-gradient(135deg, #f5f3ff, #ede9fe)" }}>
+      <div className="mx-3 mb-3 rounded-2xl overflow-hidden border border-blue-200 shadow-sm"
+        style={{ background: "linear-gradient(135deg, #eff6ff, #dbeafe)" }}>
 
         {/* Top accent bar */}
-        <div className="h-1 w-full" style={{ background: "linear-gradient(90deg, #6366f1, #8b5cf6, #a855f7)" }} />
+        <div className="h-1 w-full" style={{ background: "linear-gradient(90deg, #2563eb, #3b82f6, #60a5fa)" }} />
 
         <div className="p-3.5">
           {/* Header */}
           <div className="flex items-center gap-2 mb-3">
             <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
-              style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
+              style={{ background: "linear-gradient(135deg, #2563eb, #3b82f6)" }}>
               <Gift className="h-4 w-4 text-white" />
             </div>
             <div className="min-w-0">
               <p className="text-xs font-bold text-slate-800">Invite friends, earn credits</p>
-              <p className="text-xs text-purple-600 font-medium">{data.creditsPerReferral} credits per friend</p>
+              <p className="text-xs text-blue-600 font-medium">{data.creditsPerReferral} credits per friend</p>
             </div>
           </div>
 
-          <p className="text-xs text-slate-500 mb-3">
-            {data.totalReferrals === 0
-              ? `Invite a friend — you both win once they verify their email.`
-              : `${data.totalReferrals} friend${data.totalReferrals !== 1 ? "s" : ""} joined · ${data.creditsEarned} credit${data.creditsEarned !== 1 ? "s" : ""} earned so far`}
-          </p>
+          {data.totalReferrals === 0 && (
+            <p className="text-xs text-slate-500 mb-3">Invite a friend — you both win once they verify their email.</p>
+          )}
 
           {/* CTA */}
           <button onClick={() => setShowModal(true)}
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold text-white transition-all hover:opacity-90"
-            style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 2px 8px rgba(99,102,241,0.4)" }}>
+            style={{ background: "linear-gradient(135deg, #2563eb, #3b82f6)", boxShadow: "0 2px 8px rgba(37,99,235,0.4)" }}>
             <Sparkles className="h-3.5 w-3.5" />
             Invite a friend & earn {data.creditsPerReferral} credits
           </button>
 
           {/* Stats */}
           {data.totalReferrals > 0 && (
-            <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-purple-200">
+            <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-blue-200">
               <span className="text-xs flex items-center gap-1 text-slate-500">
-                <Users className="h-3 w-3" />{data.totalReferrals} joined
+                <Users className="h-3 w-3" />{data.totalReferrals} verified
               </span>
-              <span className="text-xs font-bold text-purple-700">
+              <span className="text-xs font-bold text-blue-700">
                 {data.creditsEarned} credit{data.creditsEarned !== 1 ? "s" : ""} earned
               </span>
             </div>

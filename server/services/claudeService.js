@@ -2,7 +2,7 @@ const OpenAI = require("openai");
 const Anthropic = require("@anthropic-ai/sdk");
 const pdfParse = require("pdf-parse");
 const JSZip = require("jszip");
-const { validateGeneratedCode } = require("./validateCode");
+const { validateGeneratedCode, validateHeaderFragment, validateSceneFragment, getHeaderExposedNames, compactHeaderForPrompt } = require("./validateCode");
 const { reviewGeneratedCode } = require("./codeCriticService");
 const { createLimiter } = require("../utils/concurrencyLimiter");
 
@@ -118,10 +118,12 @@ const LESSON_CODE_PROVIDER = resolveProvider("LESSON_CODE_MODEL", "glm");
 const AD_CODE_PROVIDER = resolveProvider("AD_CODE_MODEL", "fable");
 
 // Derives a reasoning-off variant of whichever provider LESSON_CODE_MODEL
-// selects — generateLessonCode's single call always runs with reasoning off
-// (deterministic code generation gets nothing from a hidden chain-of-thought,
-// and on GLM it would draw unbounded invisible tokens from the same output
-// budget as the actual code).
+// selects — both the header call and every per-scene call run with reasoning
+// off (deterministic code generation gets nothing from a hidden
+// chain-of-thought, and on GLM it would draw unbounded invisible tokens from
+// the same output budget as the actual code — GLM's native `thinking` field
+// has no token cap, unlike DeepSeek's bounded `reasoning_effort`, so this is
+// a hard rule on GLM specifically, not just a preference).
 //
 // The reasoning-toggle FIELD differs by client, same distinction as the
 // clients comment above: Z.ai's native API and Anthropic's own Messages API
@@ -136,6 +138,8 @@ function withReasoningOff(provider) {
     : { thinking: { type: "disabled" } };
   return { ...provider, extraParams: { ...rest, ...reasoningOffParam } };
 }
+const LESSON_HEADER_PROVIDER = withReasoningOff(LESSON_CODE_PROVIDER);
+const LESSON_SCENE_PROVIDER = withReasoningOff(LESSON_CODE_PROVIDER);
 
 // Remedial-lesson-plan / next-course-suggestions: bounded, fixed-shape JSON
 // (not code) on GLM 5.2 via Z.ai directly — unchanged, lower-stakes calls not
@@ -182,23 +186,30 @@ const DEEPSEEK_SCENE_PLAN_PROVIDER = {
 // next-course generation — low volume/short calls where the connection-drop
 // risk under concurrency isn't worth the tiny time saved.
 //
-// Lesson code generation is now ONE call per lesson (not N per-scene calls),
-// so limitLessonCodeCall gates concurrent WHOLE-LESSON calls instead —
-// shared across every lesson a course builds, regardless of which
-// LESSON_CODE_MODEL client actually handles it. Default 6: GLM-5.2 is a
-// sparse MoE model (~40B active of far more total params per token), whose
-// serving infra (vLLM/SGLang) routes experts per-request rather than one
-// request blocking the whole model, so it handles several full-lesson
-// requests concurrently without the per-request slowdown a dense model
-// would show. courseController.js now builds every lesson in a course
-// concurrently (buildLessonsConcurrently) instead of one at a time, so this
-// pool is what actually bounds how many of those run their code-gen call at
-// once — tune LESSON_CODE_MAX_CONCURRENT down if connection-drop errors
-// reappear under multi-user load.
+// Lesson code generation is split header + per-scene again (see
+// generateLessonHeader/generateSceneCode below) — two pools:
+//   limitLessonHeaderCall (default 6) — one header call per lesson. With
+//     buildLessonsConcurrently building every lesson in a course at once,
+//     up to lessonCount of these can be in flight together; 6 covers the
+//     default course size with no queuing.
+//   limitLessonSceneCall (default 100) — per-scene code, the call type with
+//     real volume (8-15 scenes/lesson). With 6 lessons building concurrently
+//     AND each scene starting the instant ITS OWN audio is ready (not
+//     waiting on the rest of the lesson), a course can easily have 60-80+
+//     scene calls wanting to run together — 100 gives that plenty of room
+//     rather than forcing scenes to queue behind each other. GLM-5.2 is a
+//     sparse MoE model (~40B active of far more total params per token),
+//     whose serving infra (vLLM/SGLang) routes experts per-request rather
+//     than one request blocking the whole model, so it handles this volume
+//     of concurrent requests without the per-request slowdown a dense model
+//     would show. Tune either down if connection-drop errors show up under
+//     multi-user load.
 const ZAI_MAX_CONCURRENT = Number(process.env.ZAI_MAX_CONCURRENT) || 1;
 const limitZaiCall = createLimiter(ZAI_MAX_CONCURRENT);
-const LESSON_CODE_MAX_CONCURRENT = Number(process.env.LESSON_CODE_MAX_CONCURRENT) || 6;
-const limitLessonCodeCall = createLimiter(LESSON_CODE_MAX_CONCURRENT);
+const LESSON_HEADER_MAX_CONCURRENT = Number(process.env.LESSON_HEADER_MAX_CONCURRENT) || 6;
+const limitLessonHeaderCall = createLimiter(LESSON_HEADER_MAX_CONCURRENT);
+const LESSON_SCENE_MAX_CONCURRENT = Number(process.env.LESSON_SCENE_MAX_CONCURRENT) || 100;
+const limitLessonSceneCall = createLimiter(LESSON_SCENE_MAX_CONCURRENT);
 const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;
 const limitAdCodeCall = createLimiter(AD_CODE_MAX_CONCURRENT);
 // DeepSeek's own documented account-wide cap for deepseek-v4-flash is 2,500
@@ -727,293 +738,289 @@ Rules:
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LESSON CODE-GEN PROMPT — single call, whole lesson
+// LESSON CODE-GEN PROMPTS — split-call generation (header + per-scene)
 // ═══════════════════════════════════════════════════════════════════════════
-// ONE call generates the entire lesson: every scene plus the exported
-// <Series> wrapper that plays them with their narration audio. This
-// deliberately replaces an earlier header-call + N-parallel-per-scene-calls
-// design — that split let scenes run concurrently, but each scene's call
-// could only ever see the shared header, never its sibling scenes, so
-// cross-scene coherence had to be IMPOSED via an increasingly elaborate
-// prompt instead of arising naturally from the model seeing the whole
-// lesson at once. A single call trades that concurrency for letting the
-// model hold the entire lesson in context — closer to how a person would
-// actually storyboard one continuous piece.
-//
-// The prompt below is deliberately concise: a short list of hard
-// requirements, one clear worked example, and trust in the model's own
-// judgment for everything else — not a mandatory per-scene planning
-// checklist. Crash-safety rules (interpolate shape, clamping, forbidden
-// imports, duration sum) are kept in full — those reflect real runtime
-// constraints of the browser sandbox, not compensations for model weakness.
+// Splits lesson code generation into one header call (visual identity —
+// palette, motif, shared consts/helpers) + N parallel per-scene calls, so a
+// lesson's 8-15 scenes can generate concurrently instead of one long serial
+// stream. This is the SAME simple, example-driven prompt style that produced
+// the single-call design's "top" quality (three mandatory layers, a handful
+// of richness rules, one clear worked example, trust in the model's own
+// judgment) — split across two calls, not reverted to an earlier split
+// pipeline's exhaustive MECHANISM/FINGERPRINT/CAST/PACING/CONTAINMENT/
+// COLLISION planning checklist. Both header and scene calls run on GLM 5.2
+// (LESSON_CODE_MODEL), reasoning OFF for both — GLM's native `thinking`
+// field has no token cap, so leaving it on for either call would draw
+// unbounded invisible tokens from the same budget as the actual code. A
+// deterministic stitcher (stitchLessonCode) assembles header + scenes + a
+// <Series> wrapper from known metadata — the model never transcribes
+// durations or audio URLs on this path.
 
-const LESSON_CODE_GEN_RULES = `
-⚠️ OUTPUT FORMAT: You MUST respond with ONLY raw TypeScript/TSX code. No explanations, no descriptions, no topic summaries, no markdown. The FIRST character of your response must be "i" (from "import"). If you output anything other than TSX code, the entire system fails and the user loses their course. CODE ONLY.
+const HEADER_CODE_GEN_RULES = `
+⚠️ OUTPUT FORMAT: Respond with ONLY raw TypeScript/TSX code. No prose, no explanation, no markdown fences. The FIRST character of your response must be "i" (from "import"). Anything else fails the build and the user loses their course. CODE ONLY.
 
-You are a world-class Remotion motion-graphics developer creating visually astonishing educational animations. This is a premium learning product — every scene must feel alive, dynamic, and visually connected to the concept being taught.
+You are a world-class Remotion motion-graphics developer. You are building the SHARED FOUNDATION for an educational lesson — imports, a palette, a recurring motif, and reusable helper components — that every scene of this lesson will paste-reference by exact name. You do NOT write any scene's content, and you do NOT write the <Series> wrapper that plays the scenes — those come later, built by other code.
 
-Generate a complete, self-contained Remotion composition for a lesson. Each scene has an EXACT frame duration (measured from its voiceover audio) and you MUST build each scene to that exact duration.
+LESSON VISUAL IDENTITY — decide once, it must serve EVERY scene of this lesson:
+Every scene in this lesson must feel like part of the SAME designed piece, not unrelated clips. Before any code, fix:
+  • PALETTE: 3-4 colors derived from the SUBJECT, not a default. Biology→living greens; electronics→copper/PCB-green; finance→ink+ledger tones; astronomy→deep space + stellar accents; history→parchment/sepia; chemistry→lab-glass teals with reagent accents; economics→newsprint neutrals with one signal color. One background base, one primary accent (the "hero" color), one or two supporting hues — AND one dedicated TEXT color guaranteed high-contrast against the background base (near-white on dark bases, near-black on light bases). Declare ALL of these as named consts (a PALETTE object with a .text key) every scene will reuse — scenes must never have to guess what color makes text readable.
+  • MOTIF: one recurring visual element or geometry that threads through the lesson (a grid, a flowing current, orbital paths, a timeline spine, cells, layers). Build it as a reusable helper component so scenes can each evolve it. It MUST be in continuous motion (a slow gradient drift, a pulsing hue, a gently shifting pattern) — a static motif gives every scene a dead base layer. The motif's OWN geometry should echo the subject where possible — the motif is the single biggest lever for the lesson NOT looking like every other lesson.
+  • TONE: match motion energy to the subject. A meditation lesson breathes slowly; a rocket-launch lesson is kinetic. Don't give every topic the same restless jitter.
 
-STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
-1. The component MUST be named exactly as given below and exported as a named export: export const ComponentName = () => { ... }
+SANDBOX API — violate and the build fails:
+1. Do NOT write "export" anywhere. This file is only imports + consts + helper function components — no exported component.
 2. Import ONLY from "remotion" and "react".
-   From "remotion": ANY named export works (AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing, interpolateColors, random, Loop) — EXCEPT staticFile, which is not available.
-   From "react": ONLY useMemo, useCallback, useRef. DO NOT use useState — it DOES NOT EXIST in this sandbox. Using useState will crash the video.
-   Do NOT import from any other library.
-3. The component takes NO props — all data is hardcoded.
-4. Structure: a single <Series> with one <Series.Sequence> per scene, IN ORDER. Do NOT use a bare <Sequence> anywhere, including inside a scene component. A <Sequence from={...} durationInFrames={...}> nested inside a scene will UNMOUNT its children once its own duration elapses — even if that's shorter than the scene's real duration — which makes the visual disappear while the audio (in the parent Series.Sequence) keeps playing. If part of a scene should only show for a portion of the scene, control that with interpolate()-driven opacity/scale on an always-mounted element, never by wrapping it in a shorter-lived Sequence.
-5. Each <Series.Sequence durationInFrames={EXACT_NUMBER}> — copy the number EXACTLY. Never compute or round it.
-6. Inside each sequence: <Audio src={"EXACT_URL"} /> — copy URLs exactly, NO staticFile() wrapper.
+   • From "remotion": any named export EXCEPT staticFile (AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing, interpolateColors, random, Loop).
+   • From "react": ONLY useMemo, useCallback, useRef. useState DOES NOT EXIST here and crashes the video.
+   • No other imports of any kind — this is the ONLY place imports are written for the whole lesson.
+3. NO props, NO external/dynamic data. Every identifier must be locally declared or a listed remotion/react export.
+   • NEVER shadow a JS built-in (Math, Array, Object, String, Number, Date, JSON, Boolean, Map, Set).
+   • NEVER declare a top-level name matching /^Scene\\d+$/ (e.g. Scene1, Scene2) — those are reserved for scenes.
+4. Do NOT render <Series>, <Series.Sequence>, or <Audio> anywhere — there is no scene content here to sequence, and no audio to attach.
+5. SVG elements (<circle>, <rect>, <line>, <path>, <text>, <g>, <polygon>, <polyline>) ONLY render inside an <svg> tag — a shared helper that returns bare SVG shapes renders NOTHING once a scene drops it into a <div>/<AbsoluteFill> (no crash, no warning — it just silently doesn't exist). Every shared visual helper must be SELF-CONTAINED: either plain HTML (<div>/<AbsoluteFill>) or its OWN full-frame <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}> with the shapes inside.
+   • Any helper (like Label/Panel above) that wraps content MUST accept and render {children} ({ children } — NO type annotation; "React" is NOT imported/available here, so "React.ReactNode" or any other "React.X" type crashes with "React is not defined"). A wrapper missing {children} silently drops everything inside it.
+6. Any helper using useCurrentFrame() (e.g. an ambient backdrop) resets to 0 every time the scene that mounts it starts — design its motion (Math.sin(frame/k)) so it looks right from frame 0, don't assume accumulation across the whole lesson.
 
-ANIMATION QUALITY — THIS IS THE MOST CRITICAL REQUIREMENT. A boring animation is a failed animation.
-The user is paying for animated video lessons. If the animations are generic, static, or visually uninteresting, the product fails entirely. Every scene must feel like a professional motion graphics studio made it.
-
-7. CONTINUOUS MOTION IS NON-NEGOTIABLE. At frame 0, things move. At frame 100, things move. At frame 200, things move. If anything stops moving after its entrance animation, the scene is wrong. Use Math.sin(frame/k), Math.cos(frame/k), and (frame*speed)%360 to guarantee perpetual motion on every element.
-
-8. ILLUSTRATE THE EXACT CONCEPT — not generic particles. If the topic is DNA replication, show the double helix unwinding with individual base pairs. If it's photosynthesis, show photons hitting chlorophyll and electrons jumping energy levels. If it's sorting algorithms, show actual elements moving into order. If it's electromagnetism, show field lines rotating. The animation must make the concept VISIBLE — a viewer with no prior knowledge should understand the concept from the visuals alone, without reading the text. Each scene below is given its mechanism (the state it starts in, the state it ends in, and the visible action that drives that change) — build exactly that transformation; a scene where the end state looks the same as the start state has failed regardless of how much motion is on screen.
-
-9. THREE MANDATORY LAYERS — all three must exist in every scene:
-   - Layer 1 (background): Continuously moving gradient, rotating color field, or drifting particle system. Never static.
-   - Layer 2 (concept): The main animated diagram — the thing that illustrates what the scene teaches. This is the star of the scene.
-   - Layer 3 (text): Text that springs or fades in, positioned so it doesn't overlap layer 2.
-
-10. RICHNESS REQUIREMENTS — every scene must have at least:
-    - 3+ animated elements (not counting background particles)
-    - At least 1 element using spring() for a natural entrance
-    - At least 1 element using Math.sin or Math.cos for continuous periodic motion
-    - Colors chosen to match the concept (biology = greens, physics = blues/purples, chemistry = warm colors)
-    - Glow effects (boxShadow with color) on primary elements to make them pop
-    - The concept name or key formula as text, appearing with a stagger after the visual is established
-
-    THIS IS ENFORCED, NOT A SUGGESTION: a scene consisting of only a title fading in over a plain background, with no shape/diagram illustrating the concept, WILL be rejected and regenerated. Every scene needs a real Layer 2 diagram — text alone is never sufficient, no matter how well-animated the text itself is.
-
-VISUAL CONTINUITY ACROSS THE LESSON: you can see every scene below in one place — use that. Pick ONE palette and one or two recurring visual motifs (a shape, a color treatment, a layout habit) at the start and carry them through every scene, so the lesson reads as one designed piece, not unrelated clips. Don't force identical content between scenes — each still illustrates its OWN concept — just keep the same visual "voice."
-
-INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
-11. interpolate() ALWAYS needs exactly 3 arguments: interpolate(value, [in...], [out...]).
-    - The 2nd and 3rd arguments (inputRange, outputRange) MUST be array literals written directly in the call — [0, 20] — containing ONLY plain number literals. NEVER a variable holding an array, and NEVER an expression inside the array (no "end - 30", no "i * 8", no "startFrame + 20"). If a value needs to vary, shift the FIRST argument instead — see the staggering technique below — never the array contents.
-    - CRASH: interpolate(frame, [startFrame, startFrame + 20], [...]) — startFrame may be undefined = NaN, and this is a variable/expression inside the array either way.
-    - CRASH: interpolate(frame, [durationInFrames - 30, durationInFrames], [...]) — durationInFrames is not in scope inside scene components, and it's an expression inside the array regardless.
-    - CRASH: interpolate(frame, [end - 30, end], [...]) — even if "end" was itself declared as "const end = 210", referencing it inside the array is still banned. The array must contain the literal numbers themselves: [180, 210].
-    - GOOD: interpolate(frame, [0, 20], [0, 1], CLAMP) — plain number literals only, nothing else.
-    - If a boundary depends on scene duration, you already know that duration as a plain number (it's given to you per-scene) — write it directly as a literal: interpolate(frame, [180, 210], [1, 0], CLAMP), not a variable reference to it.
-    - CRASH: interpolate(frame, [0, 30, 60, 60], [...]) — duplicate 60. Fix: [0, 30, 60, 91]
-    - CRASH: interpolate(frame, [300, 320, 466, 466], [...]) — duplicate 466. Fix: [300, 320, 466, 467]
-    - CRASH: interpolate(frame, [0, 30]) — missing outputRange. Fix: interpolate(frame, [0, 30], [0, 1])
-    - For hold-at-final-value: use 2 values + CLAMP. interpolate(frame, [0, 30], [0, 1], CLAMP) — NOT [0, 30, 30].
-    - For staggered elements (e.g. inside a .map over an index i): do NOT put i inside the array — that's banned. Instead shift the VALUE argument: interpolate(frame - i * 8, [0, 20], [0, 1], CLAMP). This gives each element its own staggered start time while keeping the inputRange a plain literal array, exactly as required.
-12. NEVER produce NaN in any SVG attribute (cx, cy, r, x, y, width, height, points, d):
-    - Guard ALL division: write (value / (denominator || 1)) — never divide without this guard.
-    - Guard ALL array access: check i < arr.length before arr[i]. Out-of-bounds = NaN.
-    - Math.sin/cos ALWAYS receive a plain number — never undefined, null, or a string.
-    - Polygon/polyline points: filter out any NaN before joining: points.filter(p => !isNaN(p.x) && !isNaN(p.y))
-    - When using random() or useMemo for positions, ALWAYS validate the result is finite before using it.
-13. CLAMP entrance animations so elements don't fly off-screen after settling:
+FRAME-BOUNDARY SAFETY — every scene will rely on these exact consts, define them here:
     const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
-    Use CLAMP for interpolate() entrance animations. For Math.sin/cos continuous motion, CLAMP is NOT needed.
-14. THE 1920x1080 FRAME IS A HARD BOUNDARY. Elements that drift to the edges or off-screen are a FAILED scene even if they don't crash — the user simply cannot see them, which is just as bad as a crash. Do NOT compute safe positions by hand for each element. Instead, define these constants ONCE at the top of the file and route every position through them:
-
     const FRAME = { w: 1920, h: 1080 };
-    const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 }; // keep all element CENTERS inside this box
+    const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
     const clampPos = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+If this lesson's subject involves direction, vectors, forces, or angles (physics, math, engineering, navigation), also build shared Arrow({from,to,color,width}) and AngleArc({vertex,angle1,angle2,radius,color}) helpers here, computing direction with Math.atan2(dy,dx) — so every scene reuses the SAME correct geometry instead of each one re-deriving it.
 
-    Apply this pattern to EVERY positioned element, with no exceptions:
-    - Static/random position: const x = clampPos(rawX, SAFE.xMin, SAFE.xMax); const y = clampPos(rawY, SAFE.yMin, SAFE.yMax);
-    - Oscillating (base ± amplitude*sin/cos): compute the raw value, THEN clamp it — never trust that base±amplitude "should" stay in range:
-      const rawY = baseY + Math.sin(frame / 10) * amplitude;
-      const y = clampPos(rawY, SAFE.yMin, SAFE.yMax);
-    - Orbiting: radius must satisfy centerX ± radius and centerY ± radius both land within SAFE — i.e. radius ≤ min(centerX - SAFE.xMin, SAFE.xMax - centerX, centerY - SAFE.yMin, SAFE.yMax - centerY). For a center at (960, 540), radius ≤ 420 is always safe.
-    - Text: position from SAFE bounds too, and additionally leave ≥80px margin from SAFE's own edges since text has width/height beyond its anchor point.
-    - Particles/background elements: also clamp, even though they're decorative — an off-screen particle wastes a draw call and a few stray ones drifting to the edge look like a bug to the viewer.
-
-    This clamp MUST be the last operation applied to any x/y/cx/cy/top/left value before it's used in a style or SVG attribute — clamping the raw input to a formula and then adding more offsets afterward defeats the purpose.
+SHARED TEXT + FRAMING HELPERS — every scene renders on-screen text, so build these ONCE here instead of leaving each scene to reinvent its own text styling:
+  • Label({ children, size }): a text component using PALETTE.text with a strong textShadow (e.g. "0 2px 20px rgba(0,0,0,0.8)") baked in, so text is always readable over the motif regardless of what's behind it. Scenes pass their own position/animation but never redefine the color/shadow.
+  • Panel({ children, width, height }) OR Glow({ color, size }) — pick whichever suits the subject better: a soft rounded backdrop card (for grounding text/diagrams over a busy motif) or an ambient glow/particle wisp (for a more atmospheric subject). One small reusable "polish" piece scenes can drop in rather than each hand-rolling its own.
 
 CODE QUALITY:
-15. Sum of all durationInFrames MUST equal the total given. Verify before finishing.
-16. Inline styles ONLY. No Tailwind, no external CSS, no className for styling.
-17. No registerRoot, no Composition.
-18. Each scene component should be 200-300 lines — use the full budget to create rich, detailed animations. Extract shared helper components (ParticleBg, OrbitRing, Label) once near the top and reuse them across scenes, both to avoid repetition and to reinforce the lesson's visual continuity (see above).
-19. Every <Series.Sequence> must have a positive integer durationInFrames ≥ 1.
-20. NEVER write comma-separated expressions directly inside JSX curly braces: {a, b} is invalid JSX. Use separate expressions, or wrap in parens: {(a, b)} — but better to split into separate JSX attributes or elements.
-21. SVG elements (<circle>, <rect>, <line>, <path>, <text>, <g>, <polygon>, <polyline>) ONLY render inside an <svg> tag — placed directly under a <div> or <AbsoluteFill> they render NOTHING (no crash, no warning, the shape silently doesn't exist). Wrap any group of SVG primitives in its own <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}>...</svg>.
+- Inline styles only (no Tailwind, no className for styling, no external CSS). No registerRoot, no Composition, no export.
+- Every helper you declare should be genuinely reusable across scenes — this is the entire point of this file existing separately from scene code.
+- Never leave a "TODO" or placeholder — every const/component you declare must be complete, working code a scene could use immediately.
 
-WORKED EXAMPLE — two richly animated scenes. Study how EVERY frame has motion, how the concept is illustrated, how layers work together:
+WORKED EXAMPLE — copy the PATTERNS, not the picture. Your own palette/motif must come from YOUR lesson's subject, not this example's colors:
 
 \`\`\`tsx
-import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio, Easing } from "remotion";
+import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio } from "remotion";
 
 const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
-
-// Frame-boundary safety — defined ONCE, used by every positioned element.
-// See rule 14: never hand-compute a "should stay in bounds" position —
-// always clamp the final value instead.
 const FRAME = { w: 1920, h: 1080 };
 const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
 const clampPos = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-// A particle that orbits a central nucleus — illustrates atomic structure.
-// Motion is CONTINUOUS: orbit never stops, pulse never stops. The orbit
-// radius is chosen so centerX/centerY ± radius stays inside SAFE, and the
-// final position is still clamped as a last line of defense.
-function OrbitingParticle({ radius, speed, size, color, orbitColor, centerX = 960, centerY = 540 }: {
-  radius: number; speed: number; size: number; color: string; orbitColor: string; centerX?: number; centerY?: number;
-}) {
+const PALETTE = {
+  bg: "#0a0a1a",
+  accent: "#f59e0b",
+  support: "#60a5fa",
+  text: "#eaf0ff",
+};
+
+// LESSON MOTIF: a soft moving gradient wash in the lesson palette, reused as
+// the base layer of every scene so the course reads as one piece. Mood
+// motion only — it supports atmosphere, it is not the "content".
+function Backdrop() {
   const frame = useCurrentFrame();
-  const angle = (frame * speed * Math.PI) / 180;
-  const rawX = centerX + Math.cos(angle) * radius;
-  const rawY = centerY + Math.sin(angle) * radius;
-  const x = clampPos(rawX, SAFE.xMin, SAFE.xMax);
-  const y = clampPos(rawY, SAFE.yMin, SAFE.yMax);
+  const shift = 45 + Math.sin(frame / 60) * 10; // slow, calm — matches a calm subject's tone
   return (
-    <div style={{ position: "absolute", top: 0, left: 0, width: 0, height: 0 }}>
-      <div style={{
-        position: "absolute",
-        width: size, height: size,
-        borderRadius: "50%",
-        backgroundColor: color,
-        transform: \`translate(\${x - size / 2}px, \${y - size / 2}px)\`,
-        boxShadow: \`0 0 \${size * 1.5}px \${orbitColor}\`,
-      }} />
+    <AbsoluteFill style={{ background: "radial-gradient(circle at 50% " + shift + "%, " + PALETTE.bg + ", #05060f 70%)" }} />
+  );
+}
+
+// SHARED TEXT HELPER: every scene's title/caption goes through this instead
+// of hand-rolling its own color/shadow — guarantees readable text over the
+// motif in every scene without each one re-deciding it. NO type annotation
+// on children — "React" is not imported/available here, so "React.ReactNode"
+// or any other "React.X" type crashes with "React is not defined".
+function Label({ children, size = 36 }) {
+  return (
+    <div style={{ color: PALETTE.text, fontSize: size, fontWeight: 700, textShadow: "0 2px 20px rgba(0,0,0,0.8)" }}>
+      {children}
     </div>
   );
 }
-
-function AtomScene({ label }: { label: string }) {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  // Entrance: nucleus springs in
-  const nucleusScale = spring({ frame, fps, config: { damping: 10, stiffness: 80 } });
-  // Continuous: nucleus pulses with sine wave
-  const pulse = 1 + Math.sin(frame / 12) * 0.08;
-  // Label fades in with custom easing
-  const labelOpacity = interpolate(frame, [20, 50], [0, 1], {
-    ...CLAMP,
-    easing: Easing.bezier(0.25, 0.46, 0.45, 0.94),
-  });
-  // Background hue slowly rotates
-  const hue = (frame * 0.3) % 360;
-
-  return (
-    <AbsoluteFill style={{
-      background: \`radial-gradient(circle at 50% 50%, hsl(\${hue}, 30%, 15%), #0a0a1a)\`,
-      justifyContent: "center", alignItems: "center",
-    }}>
-      {/* Nucleus */}
-      <div style={{
-        width: 80, height: 80, borderRadius: "50%",
-        backgroundColor: "#f59e0b",
-        transform: \`scale(\${nucleusScale * pulse})\`,
-        boxShadow: "0 0 40px #f59e0b, 0 0 80px #f59e0b55",
-        position: "relative", zIndex: 2,
-      }} />
-      {/* Orbiting electrons at different radii and speeds */}
-      <OrbitingParticle radius={120} speed={2.4} size={20} color="#60a5fa" orbitColor="#3b82f6" />
-      <OrbitingParticle radius={180} speed={1.6} size={16} color="#a78bfa" orbitColor="#7c3aed" />
-      <OrbitingParticle radius={240} speed={1.0} size={14} color="#34d399" orbitColor="#059669" />
-      {/* Label */}
-      <div style={{
-        position: "absolute", bottom: 180,
-        color: "white", fontSize: 36, fontWeight: 700,
-        opacity: labelOpacity, letterSpacing: 2,
-        textShadow: "0 2px 20px rgba(0,0,0,0.8)",
-      }}>{label}</div>
-    </AbsoluteFill>
-  );
-}
-
-// A wave propagation scene — illustrates how waves travel through a medium.
-// Every point on the wave oscillates continuously with a phase offset.
-function WaveScene({ label }: { label: string }) {
-  const frame = useCurrentFrame();
-  const points = 32;
-  const labelOpacity = interpolate(frame, [10, 40], [0, 1], CLAMP);
-
-  return (
-    <AbsoluteFill style={{ backgroundColor: "#0f172a", justifyContent: "center", alignItems: "center" }}>
-      <svg width={1920} height={400} style={{ position: "absolute", top: "50%", transform: "translateY(-50%)" }}>
-        {/* Wave made of individually oscillating circles for a particle-wave look */}
-        {Array.from({ length: points }, (_, i) => {
-          const x = (i / (points - 1)) * 1920;
-          const phase = (i / points) * Math.PI * 4;
-          const y = 200 + Math.sin(frame / 10 + phase) * 80;
-          const brightness = (Math.sin(frame / 10 + phase) + 1) / 2;
-          return (
-            <circle
-              key={i}
-              cx={x} cy={y} r={8}
-              fill={"hsl(" + (200 + brightness * 60) + ", 80%, " + (40 + brightness * 40) + "%)"}
-              opacity={0.6 + brightness * 0.4}
-            />
-          );
-        })}
-        {/* Connecting line */}
-        <polyline
-          points={Array.from({ length: points }, (_, i) => {
-            const x = (i / (points - 1)) * 1920;
-            const phase = (i / points) * Math.PI * 4;
-            const y = 200 + Math.sin(frame / 10 + phase) * 80;
-            return \`\${x},\${y}\`;
-          }).join(" ")}
-          fill="none"
-          stroke="rgba(96,165,250,0.4)"
-          strokeWidth={2}
-        />
-      </svg>
-      <div style={{
-        position: "absolute", bottom: 160,
-        color: "white", fontSize: 36, fontWeight: 700,
-        opacity: labelOpacity, textShadow: "0 2px 20px rgba(0,0,0,0.9)",
-      }}>{label}</div>
-    </AbsoluteFill>
-  );
-}
-
-export const LessonExample = () => {
-  return (
-    <Series>
-      <Series.Sequence durationInFrames={210}>
-        <Audio src={"https://example.com/audio/scene1.mp3"} />
-        <AtomScene label="Electrons orbit the nucleus" />
-      </Series.Sequence>
-      <Series.Sequence durationInFrames={240}>
-        <Audio src={"https://example.com/audio/scene2.mp3"} />
-        <WaveScene label="Waves propagate through a medium" />
-      </Series.Sequence>
-    </Series>
-  );
-};
 \`\`\`
 
-Every scene above has motion on EVERY frame. The atom's nucleus pulses, electrons orbit, background hue shifts. The wave's particles oscillate continuously. There is no static frame. Build every scene in your lesson to this standard.
-
-Begin with imports, then the CLAMP/FRAME/SAFE/clampPos constants, then any shared helper components, then the main component.
+Begin with imports, then CLAMP/FRAME/SAFE/clampPos, then your palette const, then your shared helper components. Your entire response is the code file, first characters "import", no text or fences around it.
 `;
 
-function buildLessonUserContent(lesson, componentName, scenes, totalFrames) {
+// ── Header user-content builder ──────────────────────────────────────────────
+function buildHeaderUserContent(lesson, scenes) {
   const sceneTable = scenes
-    .map((s, i) => {
-      const m = s.mechanism;
-      const mechanismLine =
-        m && m.before && m.after && m.driver
-          ? `\n   mechanism: starts at "${m.before}", ends at "${m.after}", driven by "${m.driver}"`
-          : "";
-      return `Scene ${i + 1}: durationInFrames=${s.durationInFrames}, audioUrl="${s.audioUrl}", targetLines=200-300
-   visualType: ${s.visualType}
-   onScreenText: ${s.onScreenText}
-   visualDescription: ${s.visualDescription}${mechanismLine}`;
-    })
+    .map(
+      (s, i) =>
+        `Scene ${i + 1}: visualType: ${s.visualType}
+   onScreenText: ${s.onScreenText}${s.mechanism?.driver ? `
+   driver: ${s.mechanism.driver}` : ""}
+   visualDescription: ${s.visualDescription}`
+    )
     .join("\n\n");
 
   return `
 LESSON: ${lesson.title}
-COMPONENT NAME: ${componentName}
-TOTAL FRAMES: ${totalFrames}
-TOTAL SCENES: ${scenes.length}
-LINE BUDGET: 200-300 lines per scene — use the full budget to create rich, detailed animations. Shared helper components don't count toward per-scene budget.
+${lesson.description ? "LESSON SUMMARY: " + lesson.description + "\n" : ""}TOTAL SCENES: ${scenes.length}
 
-SCENES (in order) — build one <Series.Sequence> per scene, in this exact order, with these EXACT durations:
+Derive ONE lesson-wide VISUAL IDENTITY (palette + motif) from "${lesson.title}" that will suit ALL ${scenes.length} scenes below. Do not write any scene's content — just the shared imports, palette/motif consts, and reusable helper components.
+
+SCENES (context only, so your palette/motif choice suits all of them — do not build these):
 
 ${sceneTable}
+`;
+}
+
+const SCENE_CODE_GEN_RULES = `
+⚠️ OUTPUT FORMAT: Respond with ONLY raw TypeScript/TSX code. No prose, no explanation, no markdown fences. The FIRST character of your response must be "f" (from "function"). Anything else fails the build and the user loses their course. CODE ONLY.
+
+You are a world-class Remotion motion-graphics developer creating ONE SCENE of a visually astonishing educational lesson. This is a premium learning product — the scene must feel alive, dynamic, and visually connected to the concept being taught. The HEADER CODE below (already generated) has this lesson's imports, palette, and shared helper components already declared and in scope — reference those exact names; never redeclare, reimport, or rename them, and never invent a different palette.
+
+This scene has an EXACT frame duration (measured from its voiceover audio) — build it to exactly that duration.
+
+STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
+1. Write EXACTLY one top-level declaration: function SceneN() { ... } (using the exact name given to you), with no parameters and no props. Any local helper you need must be a function NESTED inside this one — never a second top-level declaration (it would collide with another scene's code when combined).
+2. Do NOT write ANY import statement. Everything you need — AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, the palette consts, the shared helper components — is already imported/declared by the header code below and in scope for you.
+   From "react": ONLY useMemo, useCallback, useRef exist. useState DOES NOT EXIST here and crashes the video.
+3. NO external/dynamic data. Variables like user, session, props, context do not exist — referencing them crashes with "X is not defined". Every identifier must be locally declared (inside your function), a listed remotion/react export, or something declared in the header code below.
+   • NEVER shadow a JS built-in (Math, Array, Object, String, Number, Date, JSON, Boolean, Map, Set).
+4. Do NOT render <Series>, <Series.Sequence>, or <Audio> — this scene is combined with the header and other scenes into those wrappers by other code after you return your function.
+5. THIS SCENE'S DURATION is given to you as a literal number (durationInFrames). Hardcode that literal directly in your interpolate() calls for pacing — do not read it from a variable named durationInFrames, it does not exist in scope.
+6. FRAME NUMBERS ARE PER-SCENE. useCurrentFrame() resets to 0 at the start of THIS scene — never offset a timing as if earlier scenes' durations apply here. Entrances live near [0, 30]; exits near [thisSceneDuration - 30, thisSceneDuration], written as literals of THIS scene's own duration.
+7. Aim for roughly 200-300 lines — use the full budget to create rich, detailed animations. Extract any local helper (ParticleBg, OrbitRing, a small Label variant) once near the top of your function and reuse it, rather than repeating similar JSX blocks.
+
+ANIMATION QUALITY — THIS IS THE MOST CRITICAL REQUIREMENT. A boring animation is a failed animation.
+The user is paying for animated video lessons. If the animation is generic, static, or visually uninteresting, the product fails entirely. This scene must feel like a professional motion graphics studio made it.
+
+8. CONTINUOUS MOTION IS NON-NEGOTIABLE. At frame 0, things move. At the midpoint, things move. At the final frame, things move. If anything stops moving after its entrance animation, the scene is wrong. Use Math.sin(frame/k), Math.cos(frame/k), and (frame*speed)%360 to guarantee perpetual motion on every element.
+
+9. ILLUSTRATE THE EXACT CONCEPT — not generic particles. You are given this scene's mechanism (the state it starts in, the state it ends in, and the visible action that drives that change) — build exactly that transformation. A scene where the end state looks the same as the start state has failed regardless of how much motion is on screen. If the concept is DNA replication, show the double helix unwinding with individual base pairs. If it's sorting algorithms, show actual elements moving into order. The animation must make the concept VISIBLE — a viewer with no prior knowledge should understand it from the visuals alone, without reading the text.
+
+10. THREE MANDATORY LAYERS — all three must exist in this scene:
+   - Layer 1 (background): the header's Backdrop/motif (already continuously moving) as your base layer. If it isn't a full-screen wash, add one small ambient touch of your own (a couple of slow-drifting, low-opacity shapes).
+   - Layer 2 (concept): the main animated diagram — the thing that illustrates what this scene teaches. This is the star of the scene.
+   - Layer 3 (text): text that springs or fades in, positioned so it doesn't overlap layer 2.
+
+11. RICHNESS REQUIREMENTS — this scene must have at least:
+    - 3+ animated elements (not counting background particles)
+    - At least 1 element using spring() for a natural entrance
+    - At least 1 element using Math.sin or Math.cos for continuous periodic motion
+    - Glow effects (boxShadow with color, from the header's palette) on primary elements to make them pop
+    - The onScreenText given below, appearing with a stagger after the visual is established
+
+    THIS IS ENFORCED, NOT A SUGGESTION: a scene consisting of only a title fading in over a plain background, with no shape/diagram illustrating the concept, WILL be rejected and regenerated. Every scene needs a real Layer 2 diagram — text alone is never sufficient, no matter how well-animated the text itself is.
+
+VISUAL CONTINUITY: reuse the header's palette/motif/helpers by NAME — never invent your own colors or redeclare a name the header already declares. Render Layer 3 text through the header's Label helper (not a hand-styled <div>), and use the header's Panel/Glow helper wherever this scene would otherwise hand-roll a text backing or ambient touch. This is what makes 12+ independently-generated scenes read as one designed lesson instead of unrelated clips.
+
+INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
+12. interpolate() ALWAYS needs exactly 3 arguments: interpolate(value, [in...], [out...]).
+    - The 2nd and 3rd arguments (inputRange, outputRange) MUST be array literals written directly in the call — [0, 20] — containing ONLY plain number literals. NEVER a variable holding an array, and NEVER an expression inside the array (no "end - 30", no "i * 8", no "startFrame + 20"). If a value needs to vary, shift the FIRST argument instead: interpolate(frame - i * 8, [0, 20], [0, 1], CLAMP).
+    - inputRange strictly increasing, no repeats. [0, 30, 60, 60] crashes — bump the dupe: [0, 30, 60, 61].
+    - For hold-at-final-value: use 2 values + CLAMP. interpolate(frame, [0, 30], [0, 1], CLAMP) — NOT [0, 30, 30].
+    - GOOD: interpolate(frame, [0, 20], [0, 1], CLAMP) — plain number literals only.
+    - This scene's duration is a known literal (given below) — write boundaries directly as that literal, e.g. interpolate(frame, [180, 210], [1, 0], CLAMP) for a 210-frame scene's exit.
+13. NEVER produce NaN in any SVG attribute (cx, cy, r, x, y, width, height, points, d):
+    - Guard ALL division: write (value / (denominator || 1)).
+    - Guard ALL array access: check i < arr.length before arr[i].
+    - Math.sin/cos ALWAYS receive a plain finite number.
+    - Polygon/polyline points: filter out any NaN before joining: points.filter(p => !isNaN(p.x) && !isNaN(p.y))
+14. CLAMP entrance animations so elements don't fly off-screen after settling. Use the header's CLAMP constant for entrance/exit interpolations. For Math.sin/cos continuous motion, CLAMP is NOT needed.
+15. THE 1920x1080 FRAME IS A HARD BOUNDARY. Route every final x/y/cx/cy/top/left value through the header's clampPos() to SAFE as its LAST step.
+    - Oscillating: compute base ± amp*sin, THEN clamp — never assume it "stays in range".
+    - Orbiting: radius ≤ min(centerX-SAFE.xMin, SAFE.xMax-centerX, centerY-SAFE.yMin, SAFE.yMax-centerY). For center (960,540), radius ≤ 420 is always safe.
+    - Text: also leave ≥80px margin inside SAFE.
+    - When generating random positions, generate INSIDE SAFE from the start, not via Math.random()*1920 then clamp (that piles everything onto the boundary).
+16. SVG elements (<circle>, <rect>, <line>, <path>, <text>, <g>, <polygon>, <polyline>) ONLY render inside an <svg> tag — placed directly under a <div> or <AbsoluteFill> they render NOTHING (no crash, no warning). Wrap any group of SVG primitives in its own <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}>...</svg>. The header's shared components are already self-contained — you can place THOSE anywhere.
+17. NEVER write comma-separated expressions directly inside JSX curly braces: {a, b} is invalid JSX.
+
+WORKED EXAMPLE — study how EVERY frame has motion, how the concept is illustrated, how layers work together. Your scene's actual visual must be invented from YOUR concept and the header's palette — do NOT reproduce this atom/electron look unless your topic genuinely is atomic structure. Note: CLAMP, SAFE, clampPos, and Backdrop are NOT redeclared here — they come from the header, exactly like yours will.
+
+\`\`\`tsx
+// (CLAMP, SAFE, clampPos, PALETTE, Backdrop, Label already exist — from the header, not redeclared here)
+
+function AtomScene() {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  // Entrance: nucleus springs in
+  const nucleusScale = spring({ frame, fps, config: { damping: 10, stiffness: 80 } });
+  // Continuous: nucleus pulses with sine wave — motion never stops (rule 8)
+  const pulse = 1 + Math.sin(frame / 12) * 0.08;
+  const labelOpacity = interpolate(frame, [20, 50], [0, 1], CLAMP);
+
+  // Local helper NESTED inside the scene function — never a second
+  // top-level declaration (rule 1).
+  function OrbitingParticle({ radius, speed, size, color }: { radius: number; speed: number; size: number; color: string }) {
+    const angle = (frame * speed * Math.PI) / 180;
+    const x = clampPos(960 + Math.cos(angle) * radius, SAFE.xMin, SAFE.xMax);
+    const y = clampPos(540 + Math.sin(angle) * radius, SAFE.yMin, SAFE.yMax);
+    return (
+      <div style={{
+        position: "absolute", left: x - size / 2, top: y - size / 2,
+        width: size, height: size, borderRadius: "50%", backgroundColor: color,
+        boxShadow: "0 0 " + (size * 1.5) + "px " + color,
+      }} />
+    );
+  }
+
+  return (
+    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
+      <Backdrop />
+      {/* Layer 2: the concept — nucleus + orbiting electrons, all in motion */}
+      <div style={{
+        width: 80, height: 80, borderRadius: "50%", backgroundColor: PALETTE.accent,
+        transform: "scale(" + (nucleusScale * pulse) + ")",
+        boxShadow: "0 0 40px " + PALETTE.accent + ", 0 0 80px " + PALETTE.accent + "55",
+      }} />
+      <OrbitingParticle radius={120} speed={2.4} size={20} color={PALETTE.support} />
+      <OrbitingParticle radius={180} speed={1.6} size={16} color={PALETTE.support} />
+      {/* Layer 3: text, through the header's Label helper */}
+      <div style={{ position: "absolute", bottom: 180, opacity: labelOpacity, letterSpacing: 2 }}>
+        <Label size={36}>Electrons orbit the nucleus</Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+\`\`\`
+
+Every element above has motion on EVERY frame — the nucleus pulses, electrons orbit at different speeds. There is no static frame. Reference PALETTE/Backdrop/Label/CLAMP/SAFE/clampPos by name exactly as the header declares them; build this scene's OWN concept to this same standard.
+
+Your entire response is the scene's code, first characters "function", no text or fences around it.
+`;
+
+// ── Scene naming + user-content builder ─────────────────────────────────────
+// Single source of truth for scene component names — used by the scene
+// prompt, the validator, and the stitcher, so they can never disagree.
+function sceneComponentName(index) {
+  return `Scene${index + 1}`;
+}
+
+// Ordered so everything IDENTICAL across a lesson's 8-14 scene calls (the
+// lesson line + header code block) comes FIRST and everything that varies per
+// scene comes LAST — together with the system prompt this forms the longest
+// possible shared prefix across those calls, which is what automatic prefix
+// caching keys off of (a cache hit requires the prefix to match from the very
+// start of the request).
+function buildSceneUserContent(lesson, scene, index, totalScenes, headerCode, componentName) {
+  const sceneName = sceneComponentName(index);
+  const m = scene.mechanism;
+  const mechanismBlock =
+    m && m.before && m.after && m.driver
+      ? `mechanism: starts at "${m.before}", ends at "${m.after}", driven by "${m.driver}"`
+      : `mechanism: not provided — derive it from the visualDescription.`;
+
+  return `
+LESSON: ${lesson.title} (component ${componentName})
+
+HEADER CODE (already imported/declared — reference these exact names, do not redeclare or reimport):
+\`\`\`tsx
+${headerCode}
+\`\`\`
+
+SCENE ${index + 1} of ${totalScenes}
+YOUR FUNCTION NAME (use exactly this): ${sceneName}
+durationInFrames: ${scene.durationInFrames}
+visualType: ${scene.visualType}${scene.domainSkill && scene.domainSkill !== "none" ? `
+domainSkill: ${scene.domainSkill}` : ""}
+onScreenText (render verbatim): ${scene.onScreenText}
+${mechanismBlock}
+visualDescription: ${scene.visualDescription}
+
+Write ONLY the function ${sceneName}, illustrating this scene's mechanism to the standard shown in the worked example above. No import, no export, no <Series>/<Series.Sequence>/<Audio>.
 `;
 }
 
@@ -1371,93 +1378,279 @@ async function streamAnthropicNative({ provider, systemPrompt, userContent, maxO
   return { text: streamedText, stopReason: normalizedStopReason, usage };
 }
 
-// Reasoning is OFF for both, so these budgets only need to cover the actual
-// code plus headroom — no reasoning tokens draw from them. Scenes get more
-// because individual scenes have run up to ~30k tokens of real content.
-// Reasoning is OFF: this is deterministic code generation, not a task that
-// benefits from a hidden chain-of-thought, and (for GLM specifically) leaving
-// it on draws unbounded invisible reasoning tokens from this SAME budget.
-const LESSON_MAX_OUTPUT_TOKENS = 100000;
+// Reasoning is OFF for both (LESSON_HEADER_PROVIDER / LESSON_SCENE_PROVIDER
+// above), so these budgets only need to cover the actual code, not hidden
+// reasoning tokens. Scenes get more because individual scenes have run up to
+// ~300 lines of real content.
+const HEADER_MAX_OUTPUT_TOKENS = 32000;
+const SCENE_MAX_OUTPUT_TOKENS = 72000;
 
-// ── Full-lesson single-call generation ──────────────────────────────────────
-// ONE call generates the entire lesson file (imports + shared helpers + every
-// scene + the exported <Series> wrapper) — see LESSON_CODE_GEN_RULES above
-// for why this replaced an earlier header + per-scene-call split.
-//
-// `scenePromises[i]` resolves to scene i's FULL measured version (plan
-// fields + durationInFrames/audioUrl from TTS) — every scene's audio must be
-// measured before this one request can be built, so unlike a per-scene
-// design, code generation starts only after the slowest scene's audio
-// finishes, not scene-by-scene as each one's audio completes.
-async function generateLessonCode(lesson, componentName, scenePromises, maxAttempts = 3) {
-  const lessonStart = Date.now();
+// ── Header generation ───────────────────────────────────────────────────────
+async function generateLessonHeader(lesson, scenes, maxAttempts = 2) {
+  const label = `header L${lesson.lessonNumber}`;
+  const start = Date.now();
 
-  // A scene whose audio permanently failed rejects here — ttsService tags
-  // that rejection with `.stage = "audio"` so buildLesson reports it as an
-  // audio failure, not a code one, and skips retries that can't fix it.
-  let measuredScenes;
-  try {
-    measuredScenes = await Promise.all(scenePromises);
-  } catch (err) {
-    if (!err.stage) err.stage = "audio";
-    throw err;
-  }
+  return withRetries(label, maxAttempts, async ({ attempt, feedback }) => {
+    console.log(`  [${label}] Attempt ${attempt}/${maxAttempts}...`);
 
-  const totalFrames = measuredScenes.reduce((sum, s) => sum + s.durationInFrames, 0);
-  const userContent = buildLessonUserContent(lesson, componentName, measuredScenes, totalFrames);
-  // Reasoning off regardless of which model LESSON_CODE_MODEL selects — see
-  // withReasoningOff's own comment for why the toggle field differs by client.
-  const provider = withReasoningOff(LESSON_CODE_PROVIDER);
+    const { text, stopReason, usage } = await streamCodeCompletion({
+      limiter: limitLessonHeaderCall,
+      provider: LESSON_HEADER_PROVIDER,
+      systemPrompt: HEADER_CODE_GEN_RULES,
+      userContent: buildHeaderUserContent(lesson, scenes) + feedbackSuffix(feedback),
+      maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
+    });
+    logUsage(label, usage);
 
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Everything after a fully-received stream is a CONTENT problem — tag it
+    // so withRetries threads the message back into the next attempt's prompt.
     try {
-      console.log(`  [code] Attempt ${attempt}/${maxAttempts} for ${componentName} (${measuredScenes.length} scenes, one call)...`);
-
-      const { text, stopReason, usage } = await streamCodeCompletion({
-        limiter: limitLessonCodeCall,
-        provider,
-        systemPrompt: LESSON_CODE_GEN_RULES,
-        userContent,
-        maxOutputTokens: Math.min(LESSON_MAX_OUTPUT_TOKENS, provider.maxTokens),
-      });
-      logUsage("code", usage);
-
       if (stopReason === "length") {
-        throw contentError("Hit max_tokens — code was truncated");
+        throw new Error("Header hit max_tokens — code was truncated. Generate more compact code.");
       }
 
       const code = stripCodeFences(text);
-
-      // Detect plain text output — a model occasionally ignores the prompt
-      // and describes the topic instead of writing TSX. Catch this early.
-      if (!/^(import|const|\/\/|export)/.test(code)) {
-        throw contentError("Model output plain text instead of TSX code — ignoring system prompt");
+      if (!/^(import|const|function|\/\/|\/\*)/.test(code)) {
+        throw new Error("Header output wasn't code — you MUST output only TSX code starting with `import`.");
       }
 
-      const fixedCode = autoFixCode(code, { totalFrames });
-      // The model transcribes audio URLs itself on this path (unlike the old
-      // split pipeline's deterministic stitcher) — force-correct any
-      // mistyped URL against the real per-scene files, same safety net the
-      // ad path already relies on.
-      const audioFixedCode = enforceCorrectAudioUrls(fixedCode, measuredScenes);
-      const validatedCode = validateGeneratedCode(audioFixedCode, componentName, totalFrames);
+      const fixed = autoFixCode(code, {});
+      const validated = validateHeaderFragment(fixed);
+
+      const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(`  [${label}] Valid header generated (${validated.length} chars) — took ${elapsedSec}s`);
+      return validated;
+    } catch (err) {
+      err.isContentError = true;
+      throw err;
+    }
+  }, { keyEnv: LESSON_HEADER_PROVIDER.keyEnv, stage: "header" });
+}
+
+// ── Per-scene code generation ───────────────────────────────────────────────
+// Given the already-validated header as context. Own retry loop scoped to
+// just this scene — a syntax slip in scene 7 only costs re-rolling scene 7.
+async function generateSceneCode(lesson, scene, index, totalScenes, headerCode, headerAvailableNames, componentName, maxAttempts = 2) {
+  const sceneName = sceneComponentName(index);
+  const label = `scene ${index + 1} L${lesson.lessonNumber}`;
+  const start = Date.now();
+
+  // compactHeaderForPrompt strips shared-component BODIES (a scene never
+  // needs to know how Backdrop/Arrow animate internally, only their names/
+  // signatures) — cuts what's resent on every one of this lesson's 8-14
+  // scene calls, and buildSceneUserContent keeps it in the shared-prefix
+  // position for prefix caching (see its comment).
+  const compactHeader = compactHeaderForPrompt(headerCode);
+
+  return withRetries(label, maxAttempts, async ({ feedback }) => {
+    const { text, stopReason, usage } = await streamCodeCompletion({
+      limiter: limitLessonSceneCall,
+      provider: LESSON_SCENE_PROVIDER,
+      systemPrompt: SCENE_CODE_GEN_RULES,
+      userContent: buildSceneUserContent(lesson, scene, index, totalScenes, compactHeader, componentName) + feedbackSuffix(feedback),
+      maxOutputTokens: SCENE_MAX_OUTPUT_TOKENS,
+    });
+    logUsage(label, usage);
+
+    try {
+      if (stopReason === "length") {
+        throw new Error(`Scene ${index + 1} hit max_tokens — code was truncated. Generate more compact code.`);
+      }
+
+      const code = stripCodeFences(text);
+      if (!/^(function|const)\s/.test(code)) {
+        throw new Error(`Scene ${index + 1} output wasn't code — you MUST output only a \`function ${sceneName}\` declaration.`);
+      }
+
+      const fixed = autoFixCode(code, { totalFrames: scene.durationInFrames });
+      const validated = validateSceneFragment(fixed, sceneName, { headerAvailableNames });
+
+      const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(`  [${label}] Valid code generated (${validated.length} chars) — took ${elapsedSec}s for ${sceneName}`);
+      return validated;
+    } catch (err) {
+      err.isContentError = true;
+      throw err;
+    }
+  }, { keyEnv: LESSON_SCENE_PROVIDER.keyEnv });
+}
+
+// ── Deterministic stitcher ──────────────────────────────────────────────────
+// Non-LLM assembly: header + every scene's function component + a <Series>
+// wrapper built directly from known scene metadata (durationInFrames,
+// audioUrl) — never transcribed by the model, so a duration-sum drift or a
+// mistyped audio URL is structurally impossible on this path. `sceneIndices`
+// (optional) gives each entry's REAL scene index for partial stitches (e.g. a
+// single-scene preview of scene 3, whose LOCAL index is 0 but whose
+// component is "Scene4"). Defaults to local order — the normal full-lesson
+// stitch.
+function stitchLessonCode({ header, sceneCodes, scenes, componentName, sceneIndices }) {
+  const sequences = scenes
+    .map((s, i) => {
+      const realIndex = sceneIndices ? sceneIndices[i] : i;
+      const name = sceneComponentName(realIndex);
+      return (
+        `      <Series.Sequence durationInFrames={${s.durationInFrames}}>\n` +
+        `        <Audio src={${JSON.stringify(s.audioUrl)}} />\n` +
+        `        <${name} />\n` +
+        `      </Series.Sequence>`
+      );
+    })
+    .join("\n");
+
+  return [
+    header.trim(),
+    "",
+    sceneCodes.join("\n\n"),
+    "",
+    `export const ${componentName} = () => {`,
+    `  return (`,
+    `    <Series>`,
+    sequences,
+    `    </Series>`,
+    `  );`,
+    `};`,
+    "",
+  ].join("\n");
+}
+
+// ── Full-lesson orchestration ───────────────────────────────────────────────
+// `scenePlan` is the raw scene-plan array (no audio measurements — used for
+// scene count and header regen). `scenePromises[i]` resolves to scene i's
+// FULL measured version (plan fields + durationInFrames/audioUrl from TTS);
+// each scene's code generation awaits ONLY its own promise, so scene 1's code
+// starts the moment scene 1's audio is ready, without waiting on scene 12's.
+//
+// Retry topology:
+//   • ALL scenes fire at once; real concurrency is bounded ONLY by the
+//     limitLessonSceneCall semaphore (100), which rolls — the instant a slot
+//     frees, the next queued scene takes it.
+//   • Each scene owns its FULL retry budget (SCENE_MAX_ATTEMPTS_PER_LESSON)
+//     inside its own generateSceneCode call — no round barrier.
+//   • Per-scene progress notifications attach to EACH scene's own promise
+//     via .then(), never to the awaited allSettled result — otherwise every
+//     notification waits for the slowest scene overall.
+async function generateLessonCode(
+  lesson,
+  componentName,
+  scenePlan,
+  scenePromises,
+  maxAttempts = 3,
+  { onSceneCodeReady = null, headerPromise = null } = {}
+) {
+  let lastError = null;
+  const lessonStart = Date.now();
+
+  const SCENE_MAX_ATTEMPTS_PER_LESSON = 6;
+
+  // Header reuse across outer attempts. The header and the scenes are
+  // independent failure domains — when an outer attempt dies because scenes
+  // failed, regenerating a header that already validated is pure waste.
+  // Policy:
+  //   attempt 1           → caller's prefetched headerPromise (or fresh)
+  //   middle attempts     → reuse the last validated header, UNLESS the
+  //                         failure was header-stage
+  //   final attempt       → always fresh
+  let reusableHeader = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`  [code L${lesson.lessonNumber}] Outer attempt ${attempt}/${maxAttempts} for ${componentName} (header + ${scenePlan.length} scenes)...`);
+
+      let header;
+      if (attempt === 1 && headerPromise) {
+        header = await headerPromise;
+      } else if (reusableHeader && lastError?.stage !== "header" && attempt < maxAttempts) {
+        console.log(`  [code L${lesson.lessonNumber}] Reusing validated header from a previous attempt (prior failure was not header-stage).`);
+        header = reusableHeader;
+      } else {
+        header = await generateLessonHeader(lesson, scenePlan);
+      }
+      reusableHeader = header;
+      const headerAvailableNames = getHeaderExposedNames(header);
+
+      const sceneCodes = new Array(scenePlan.length).fill(null);
+      const sceneErrors = new Array(scenePlan.length).fill(null);
+
+      await Promise.allSettled(
+        scenePlan.map((_, i) =>
+          scenePromises[i].then((measuredScene) =>
+            generateSceneCode(lesson, measuredScene, i, scenePlan.length, header, headerAvailableNames, componentName, SCENE_MAX_ATTEMPTS_PER_LESSON).then((code) => {
+              sceneCodes[i] = code;
+              sceneErrors[i] = null;
+
+              if (onSceneCodeReady) {
+                try {
+                  const previewStitched = stitchLessonCode({
+                    header,
+                    sceneCodes: [code],
+                    scenes: [measuredScene],
+                    componentName,
+                    sceneIndices: [i],
+                  });
+                  const validatedPreview = validateGeneratedCode(previewStitched, componentName, measuredScene.durationInFrames);
+                  const maybePromise = onSceneCodeReady(i, validatedPreview);
+                  if (maybePromise?.catch) {
+                    maybePromise.catch((notifyErr) =>
+                      console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress notification failed (non-fatal): ${describeError(notifyErr)}`)
+                    );
+                  }
+                } catch (stitchErr) {
+                  console.warn(`  [code L${lesson.lessonNumber}] Scene ${i + 1} progress stitch/validate failed (non-fatal): ${describeError(stitchErr)}`);
+                }
+              }
+
+              return code;
+            })
+          ).catch((err) => {
+            sceneErrors[i] = err;
+            throw err;
+          })
+        )
+      );
+
+      const stillFailingIndices = scenePlan.map((_, i) => i).filter((i) => sceneCodes[i] === null);
+      if (stillFailingIndices.length > 0) {
+        const detail = stillFailingIndices
+          .map((i) => `scene ${i + 1} (${sceneComponentName(i)}): ${describeError(sceneErrors[i])}`)
+          .join(" | ");
+        const err = contentError(
+          `${stillFailingIndices.length}/${scenePlan.length} scene(s) still failing after ${SCENE_MAX_ATTEMPTS_PER_LESSON} attempts each: ${detail}`
+        );
+        const audioFailure = stillFailingIndices.find((i) => sceneErrors[i]?.stage === "audio");
+        if (audioFailure !== undefined) err.stage = "audio";
+        throw err;
+      }
+
+      const measuredScenes = await Promise.all(scenePromises);
+      const totalFrames = measuredScenes.reduce((sum, s) => sum + s.durationInFrames, 0);
+
+      const stitched = stitchLessonCode({ header, sceneCodes, scenes: measuredScenes, componentName });
+
+      const validatedCode = validateGeneratedCode(stitched, componentName, totalFrames);
 
       const review = await reviewGeneratedCode(validatedCode, lesson);
       if (!review.skipped && review.ok === false) {
-        throw contentError(`Code critic flagged issues: ${review.issues?.join("; ") || "unspecified"}`);
+        throw contentError(
+          `Code critic flagged issues: ${review.issues?.join("; ") || "unspecified"}`
+        );
       }
 
       const elapsedSec = ((Date.now() - lessonStart) / 1000).toFixed(1);
-      console.log(`  [code] Valid code generated (${validatedCode.length} chars) — took ${elapsedSec}s for ${componentName}`);
+      console.log(
+        `  [code L${lesson.lessonNumber}] Valid code generated (${validatedCode.length} chars) — took ${elapsedSec}s for ${componentName}`
+      );
       return { code: validatedCode, totalFrames };
     } catch (err) {
       lastError = err;
+
       if (isNonRetryable(err)) {
-        throw new Error(`Lesson code generation failed with a non-retryable error (check ${provider.keyEnv}): ${describeError(err)}`);
+        throw new Error(
+          `Lesson code generation failed with a non-retryable error (check ${LESSON_SCENE_PROVIDER.keyEnv}): ${describeError(err)}`
+        );
       }
-      console.warn(`  [code] Attempt ${attempt} failed: ${describeError(err)}. Retrying...`);
+
+      console.warn(`  [code L${lesson.lessonNumber}] Outer attempt ${attempt} failed: ${describeError(err)}. Retrying...`);
       if (attempt < maxAttempts) await backoffDelay(attempt);
     }
   }
@@ -1591,6 +1784,13 @@ module.exports = {
   generateAdCode,
   generateRemedialLessonPlan,
   generateNextCourseSuggestions,
+  // Exposed for standalone testing of the split lesson-codegen pipeline
+  // (header + per-scene calls + deterministic stitching) without needing a
+  // full course-generation run.
+  generateLessonHeader,
+  generateSceneCode,
+  stitchLessonCode,
+  sceneComponentName,
   // Exposed so other lesson-pipeline services (sceneService, codeCriticService)
   // can run their own calls on whichever model is actually configured for
   // lesson code (LESSON_CODE_MODEL=glm|fable|claude) — one provider choice,
@@ -1602,9 +1802,9 @@ module.exports = {
   DEEPSEEK_SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
   // Z.ai concurrency limiter (serialized to 1) — remedial/next-course
-  // generation (still GLM) uses this for its Z.ai-direct calls. Lesson code
-  // generation uses its own separate limitLessonCodeCall, internal to this
-  // file only.
+  // generation (still GLM) uses this for its Z.ai-direct calls. Lesson header
+  // and per-scene code generation use their own separate
+  // limitLessonHeaderCall/limitLessonSceneCall, internal to this file only.
   limitZaiCall,
   // DeepSeek's own shared account-wide concurrency pool — sceneService.js's
   // generateScenePlan AND levelAssessmentService.js's pre-course level check
