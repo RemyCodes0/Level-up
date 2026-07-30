@@ -53,7 +53,7 @@ exports.nextQuestionHandler = async (req, res) => {
     const rawText = await streamNextQuestion(topic, turns, (chunk) => {
       // Stream each text chunk to the client as it arrives.
       send("token", { text: chunk });
-    });
+    }, 3, { userId: req.user._id });
 
     // Parse the completed JSON question and send it as the final structured
     // payload so the frontend can render tappable options.
@@ -94,7 +94,7 @@ exports.determineLevelHandler = async (req, res) => {
     const { topic, turns = [] } = req.body;
     if (!topic) return res.status(400).json({ error: "topic is required" });
 
-    const level = await determineLevel(topic, turns);
+    const level = await determineLevel(topic, turns, { userId: req.user._id });
     res.json({ level });
   } catch (err) {
     console.error("determineLevelHandler error:", err);

@@ -8,8 +8,8 @@ import { Loader2, Save, Plus, Trash2 } from "lucide-react";
 import {
   getAdminPricingConfig,
   updateAdminPricingConfig,
-} from "../api/CourseApi";
-import type { CourseTier, CreditPack } from "../api/CourseApi";
+} from "../../api/CourseApi";
+import type { CourseTier, CreditPack } from "../../api/CourseApi";
 
 // A simple admin form for tuning course-tier/credit-pack pricing without a
 // redeploy — deliberately minimal (edit fields, one Save button per table)
@@ -28,7 +28,7 @@ function numberInput(value: number, onChange: (v: number) => void, className = "
   );
 }
 
-export default function AdminPricingConfigPage() {
+export default function PricingConfigPage() {
   const [courseTiers, setCourseTiers] = useState<CourseTier[]>([]);
   const [creditPacks, setCreditPacks] = useState<CreditPack[]>([]);
   const [loading, setLoading] = useState(true);

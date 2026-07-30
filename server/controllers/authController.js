@@ -5,6 +5,7 @@ const sendEmail = require("../services/emailService");
 const { completeReferral } = require("./referralController");
 const { validatePasswordStrength } = require("../utils/passwordStrength");
 const { grantCredits } = require("../services/creditService");
+const { isAdminUser } = require("../middleware/requireAdmin");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
@@ -363,8 +364,14 @@ exports.deleteUser = async (req, res) => {
 };
 
 exports.getUser = async (req, res) => {
+  // Route only requires `protect` (any logged-in user) — self-or-admin is
+  // enforced here so a normal user can still fetch their OWN profile (this
+  // is what Profile.tsx calls) without opening every other account's data.
+  if (req.user._id.toString() !== req.params.id && !isAdminUser(req.user)) {
+    return res.status(403).json({ message: "Not authorized to view this user" });
+  }
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findById(req.params.id).select("-password");
     if (!user) {
       return res.status(404).json({ message: "No user found" });
     }
@@ -376,6 +383,12 @@ exports.getUser = async (req, res) => {
 
 exports.updateUser = async (req, res) => {
   const userId = req.params.id;
+
+  // Same self-or-admin rule as getUser above — this is the endpoint
+  // Profile.tsx uses to save the logged-in user's own edits.
+  if (req.user._id.toString() !== userId && !isAdminUser(req.user)) {
+    return res.status(403).json({ message: "Not authorized to edit this user" });
+  }
 
   try {
     let user = await User.findById(userId);
@@ -401,5 +414,38 @@ exports.updateUser = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+// PATCH /api/auth/:id/admin — admin-only, broader than self-service
+// updateUser above (which deliberately can't touch role/verified/credits).
+// Route-gated with protect+requireAdmin, so no self-or-admin check needed
+// here the way getUser/updateUser need it.
+exports.adminUpdateUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // role only ever "learner"/"tutor" — there is no stored "admin" role in
+    // this app (see User.js's enum); admin-ness is the ADMIN_EMAIL check in
+    // middleware/requireAdmin.js, not a field on the user document.
+    const allowedFields = ["name", "email", "role", "verified", "courseCredits"];
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        user[field] = req.body[field];
+      }
+    });
+
+    const updatedUser = await user.save();
+    res.status(200).json({
+      _id: updatedUser._id,
+      name: updatedUser.name,
+      email: updatedUser.email,
+      role: updatedUser.role,
+      verified: updatedUser.verified,
+      courseCredits: updatedUser.courseCredits,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };

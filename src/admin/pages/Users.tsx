@@ -1,0 +1,181 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Search, Trash2, Pencil, X, Loader2 } from "lucide-react";
+import { adminApi } from "../adminApi";
+import { PageHeader, LoadingBlock, ErrorBlock, EmptyState } from "../components";
+
+interface User {
+  _id: string;
+  name: string;
+  email: string;
+  role: "learner" | "tutor";
+  verified: boolean;
+  courseCredits: number;
+  createdAt: string;
+}
+
+export default function Users() {
+  const [users, setUsers] = useState<User[]>([]);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<User | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    adminApi
+      .get<{ user: User[] }>("/api/auth/getUsers")
+      .then((res) => setUsers(res.user))
+      .catch((err) => setError(err.message || "Failed to load users."))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, []);
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm("Delete this user permanently? This can't be undone.")) return;
+    try {
+      await adminApi.delete(`/api/auth/${id}/delete`);
+      setUsers((prev) => prev.filter((u) => u._id !== id));
+    } catch (err: any) {
+      alert(err.message || "Failed to delete user.");
+    }
+  };
+
+  const filtered = users.filter(
+    (u) => u.name?.toLowerCase().includes(search.toLowerCase()) || u.email?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+      <PageHeader title="Users" sub={`${users.length} total`} />
+
+      <div className="relative mb-4 max-w-sm">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name or email…"
+          className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200"
+        />
+      </div>
+
+      {loading ? <LoadingBlock /> : error ? <ErrorBlock message={error} /> : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          {filtered.length === 0 ? (
+            <div className="p-8"><EmptyState label="users" /></div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                  <th className="px-5 py-3 font-medium">Name</th>
+                  <th className="px-5 py-3 font-medium">Email</th>
+                  <th className="px-5 py-3 font-medium">Role</th>
+                  <th className="px-5 py-3 font-medium">Verified</th>
+                  <th className="px-5 py-3 font-medium">Credits</th>
+                  <th className="px-5 py-3 font-medium w-20" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {filtered.map((u) => (
+                  <tr key={u._id} className="hover:bg-slate-50">
+                    <td className="px-5 py-3 font-medium text-slate-800">{u.name}</td>
+                    <td className="px-5 py-3 text-slate-500">{u.email}</td>
+                    <td className="px-5 py-3">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 capitalize">{u.role}</span>
+                    </td>
+                    <td className="px-5 py-3">
+                      {u.verified ? <span className="text-xs text-emerald-600">Yes</span> : <span className="text-xs text-slate-400">No</span>}
+                    </td>
+                    <td className="px-5 py-3 text-slate-600">{u.courseCredits ?? 0}</td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-1 justify-end">
+                        <button onClick={() => setEditing(u)} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button onClick={() => handleDelete(u._id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {editing && (
+        <EditUserModal
+          user={editing}
+          onClose={() => setEditing(null)}
+          onSaved={(updated) => {
+            setUsers((prev) => prev.map((u) => (u._id === updated._id ? { ...u, ...updated } : u)));
+            setEditing(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function EditUserModal({ user, onClose, onSaved }: { user: User; onClose: () => void; onSaved: (u: Partial<User> & { _id: string }) => void }) {
+  const [name, setName] = useState(user.name);
+  const [role, setRole] = useState(user.role);
+  const [verified, setVerified] = useState(user.verified);
+  const [courseCredits, setCourseCredits] = useState(user.courseCredits ?? 0);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await adminApi.patch<any>(`/api/auth/${user._id}/admin`, { name, role, verified, courseCredits });
+      onSaved(updated);
+    } catch (err: any) {
+      setError(err.message || "Failed to save.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold text-slate-900">Edit user</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-slate-500 mb-1 block">Name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500 mb-1 block">Role</label>
+            <select value={role} onChange={(e) => setRole(e.target.value as User["role"])} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm">
+              <option value="learner">learner</option>
+              <option value="tutor">tutor</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-slate-500 mb-1 block">Course credits</label>
+            <input type="number" value={courseCredits} onChange={(e) => setCourseCredits(Number(e.target.value))} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input type="checkbox" checked={verified} onChange={(e) => setVerified(e.target.checked)} />
+            Verified
+          </label>
+        </div>
+        {error && <p className="text-xs text-red-500 mt-3">{error}</p>}
+        <button onClick={handleSave} disabled={saving} className="w-full mt-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg py-2.5 text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2">
+          {saving && <Loader2 className="h-4 w-4 animate-spin" />} Save changes
+        </button>
+      </div>
+    </div>
+  );
+}

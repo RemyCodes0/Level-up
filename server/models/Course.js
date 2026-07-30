@@ -30,8 +30,6 @@ const sceneProgressSchema = new mongoose.Schema(
     label: String,
     audioReady: { type: Boolean, default: false },
     codeReady: { type: Boolean, default: false },
-    // A self-contained, directly compilable single-scene composition (header
-    // + just this scene, stitched) — see stitchLessonCode in claudeService.js.
     previewCode: { type: String, default: null },
   },
   { _id: false }

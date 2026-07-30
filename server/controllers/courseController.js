@@ -72,7 +72,8 @@ async function generateCourseHandler(req, res) {
       level,
       sourceFileName,
       tierSnapshot.lessonCount,
-      tierSnapshot.mcqCount
+      tierSnapshot.mcqCount,
+      req.user._id
     );
   } catch (err) {
     console.error(err);
@@ -81,7 +82,7 @@ async function generateCourseHandler(req, res) {
 }
 
 // ── Builds one lesson: scenes → audio → code → save to DB ───────────────────
-async function buildLesson(courseId, lesson) {
+async function buildLesson(courseId, lesson, userId = null) {
   const MAX_ATTEMPTS = 2;
   const lessonStart = Date.now();
 
@@ -126,7 +127,7 @@ async function buildLesson(courseId, lesson) {
   let scenePlan, scenePromises, headerPromise;
   try {
     console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
-    scenePlan = await generateScenePlan(lesson);
+    scenePlan = await generateScenePlan(lesson, 3, { userId, courseId });
 
     // Scene count/labels are known immediately — initialize a placeholder
     // progress entry per scene right away, before audio or code generation
@@ -157,7 +158,7 @@ async function buildLesson(courseId, lesson) {
     // already-resolved-by-the-time-it's-needed) result to generateLessonCode
     // below instead of letting it start its own header call from scratch.
     console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio + header + code (all overlapping)...`);
-    headerPromise = generateLessonHeader(lesson, scenePlan);
+    headerPromise = generateLessonHeader(lesson, scenePlan, undefined, { userId, courseId });
     // Attach a no-op handler immediately so a header failure here doesn't
     // log as an unhandled rejection before generateLessonCode gets to await
     // this same promise further down — the real error still surfaces
@@ -175,7 +176,7 @@ async function buildLesson(courseId, lesson) {
       } catch (progressErr) {
         console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to save audio progress for scene ${index + 1} (non-fatal):`, progressErr.message);
       }
-    }));
+    }, { userId, courseId }));
   } catch (err) {
     const stage = "scenes";
     const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
@@ -240,6 +241,8 @@ async function buildLesson(courseId, lesson) {
               console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to save code progress for scene ${index + 1} (non-fatal):`, progressSaveErr.message);
             }
           },
+          userId,
+          courseId,
         }
       );
 
@@ -312,21 +315,19 @@ async function buildLesson(courseId, lesson) {
 // free-trial course after the user buys credits), so this logic only lives
 // in one place.
 //
-// Lesson code generation is split header + per-scene again (see
-// generateLessonHeader/generateSceneCode in claudeService.js) — an earlier
-// version of this pipeline built lessons ONE AT A TIME specifically so each
-// lesson's 8-14 scene calls got a shared concurrency pool entirely to
-// themselves. This time the scene pool (limitLessonSceneCall, default 100 —
-// see claudeService.js) is deliberately sized to cover EVERY lesson's scenes
-// across the whole course at once (6 lessons × ~12 scenes ≈ 70+), not just
-// one lesson's worth, so building lessons concurrently no longer starves
-// any of them — every scene, from every lesson, starts the instant its own
-// audio is ready and just queues behind the shared pool like any other
-// scene. A lesson that fails doesn't block its siblings — buildLesson
-// handles its own errors internally and never rethrows for a content
-// failure, only Promise.allSettled below needs to know it settled.
-async function buildLessonsConcurrently(courseId, lessons) {
-  await Promise.allSettled(lessons.map((lesson) => buildLesson(courseId, lesson)));
+// Lesson code generation is split header + per-scene (see
+// generateLessonHeader/generateSceneCode in claudeService.js) — the scene
+// pool (limitLessonSceneCall, default 100 — see claudeService.js) is
+// deliberately sized to cover EVERY lesson's scenes across the whole course
+// at once (6 lessons × ~12 scenes ≈ 70+), not just one lesson's worth, so
+// building lessons concurrently doesn't starve any of them — every scene,
+// from every lesson, starts the instant its own audio is ready and just
+// queues behind the shared pool like any other scene. A lesson that fails
+// doesn't block its siblings — buildLesson handles its own errors internally
+// and never rethrows for a content failure, only Promise.allSettled below
+// needs to know it settled.
+async function buildLessonsConcurrently(courseId, lessons, userId = null) {
+  await Promise.allSettled(lessons.map((lesson) => buildLesson(courseId, lesson, userId)));
 }
 
 // ── Orchestrates the whole course ────────────────────────────────────────────
@@ -349,7 +350,8 @@ async function processCourse(
   level = null,
   sourceFileName = null,
   lessonCount = 6,
-  mcqCount = 20
+  mcqCount = 20,
+  userId = null
 ) {
   const courseStart = Date.now();
   try {
@@ -362,7 +364,8 @@ async function processCourse(
       level,
       3,
       lessonCount,
-      mcqCount
+      mcqCount,
+      { userId, courseId }
     );
 
     await Course.findByIdAndUpdate(courseId, {
@@ -379,7 +382,7 @@ async function processCourse(
     // Build all of this course's lessons one at a time, regardless of trial
     // status — how many that is now depends on the selected tier (or the
     // free trial's fixed 6), not a hardcoded count.
-    await buildLessonsConcurrently(courseId, lessons);
+    await buildLessonsConcurrently(courseId, lessons, userId);
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
     const totalMin = ((Date.now() - courseStart) / 60000).toFixed(1);
@@ -688,6 +691,32 @@ async function listCoursesHandler(req, res) {
 }
 
 // ── Delete a course + clean up its audio files ───────────────────────────────
+// Shared by the user-facing handler below (ownership-checked) and the admin
+// delete endpoint (adminController.js's adminDeleteCourse, no ownership
+// check — an admin can delete ANY course). `course` must already be the
+// fetched Mongoose/lean doc for the course to delete.
+async function deleteCourseById(course) {
+  // Collect every audio file path first, then delete them all in parallel
+  // off the event loop (fs.promises.unlink instead of the old
+  // fs.existsSync + fs.unlinkSync pair, which blocked the whole server —
+  // not just this request — once per scene, sequentially).
+  const filePaths = (course.lessons || [])
+    .flatMap((lesson) => lesson.scenes || [])
+    .map((scene) => scene.audioUrl?.split("/audio/")[1])
+    .filter(Boolean)
+    .map((fileName) => path.join(AUDIO_DIR, fileName));
+
+  await Promise.all(
+    filePaths.map((filePath) =>
+      fs.promises.unlink(filePath).catch((e) => {
+        if (e.code !== "ENOENT") console.error("Failed to delete audio file (non-fatal):", e.message);
+      })
+    )
+  );
+
+  await Course.deleteOne({ _id: course._id });
+}
+
 async function deleteCourseHandler(req, res) {
   try {
     const course = await Course.findOne({
@@ -700,25 +729,7 @@ async function deleteCourseHandler(req, res) {
       return;
     }
 
-    // Collect every audio file path first, then delete them all in parallel
-    // off the event loop (fs.promises.unlink instead of the old
-    // fs.existsSync + fs.unlinkSync pair, which blocked the whole server —
-    // not just this request — once per scene, sequentially).
-    const filePaths = (course.lessons || [])
-      .flatMap((lesson) => lesson.scenes || [])
-      .map((scene) => scene.audioUrl?.split("/audio/")[1])
-      .filter(Boolean)
-      .map((fileName) => path.join(AUDIO_DIR, fileName));
-
-    await Promise.all(
-      filePaths.map((filePath) =>
-        fs.promises.unlink(filePath).catch((e) => {
-          if (e.code !== "ENOENT") console.error("Failed to delete audio file (non-fatal):", e.message);
-        })
-      )
-    );
-
-    await Course.deleteOne({ _id: course._id });
+    await deleteCourseById(course);
     res.json({ success: true });
   } catch (err) {
     console.error(err);
@@ -810,7 +821,7 @@ async function retryLessonHandler(req, res) {
     // "generating" forever after a retry, since nothing else ever flips it
     // back — the opposite failure mode from the bug this whole change fixes
     // (pollCourse would never stop, instead of stopping too early).
-    buildLesson(courseId, lessonData)
+    buildLesson(courseId, lessonData, req.user._id)
       .then(() => Course.findByIdAndUpdate(courseId, { status: "ready" }))
       .catch((err) => {
         console.error(`[${courseId}] Retry lesson ${idx + 1} failed:`, err.message);
@@ -884,7 +895,7 @@ async function unlockRemainingLessonsHandler(req, res) {
       keyPoints: l.keyPoints,
     }));
 
-    buildLessonsConcurrently(courseId, lessonsToBuild)
+    buildLessonsConcurrently(courseId, lessonsToBuild, req.user._id)
       .then(() => Course.findByIdAndUpdate(courseId, { status: "ready" }))
       .catch((err) => {
         console.error(`[${courseId}] Unlock build failed:`, err.message);
@@ -918,7 +929,7 @@ async function getNextSuggestionsHandler(req, res) {
       ? latestAttempt.topicBreakdown.filter((t) => t.pct < 70).map((t) => t.topic)
       : [];
 
-    const suggestions = await generateNextCourseSuggestions(course.topic, weakTopics);
+    const suggestions = await generateNextCourseSuggestions(course.topic, weakTopics, 2, { userId: req.user._id, courseId: course._id });
     res.json({ suggestions });
   } catch (err) {
     console.error("getNextSuggestionsHandler error:", err);
@@ -946,4 +957,7 @@ module.exports = {
   unpublishCourseHandler,
   listPublicCoursesHandler,
   getNextSuggestionsHandler,
+  // Exported for adminController.js's adminDeleteCourse — same audio-cleanup
+  // + delete logic, just without the ownership (userId) filter.
+  deleteCourseById,
 };

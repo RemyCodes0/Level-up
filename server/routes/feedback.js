@@ -1,7 +1,9 @@
 const { Router } = require("express");
-const { createFeedback } = require("../controllers/feedbackController");
+const { createFeedback, adminGetFeedback, adminDeleteFeedback } = require("../controllers/feedbackController");
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
+const { protect } = require("../middleware/authMiddleware");
+const { requireAdmin } = require("../middleware/requireAdmin");
 
 const router = Router();
 
@@ -23,5 +25,7 @@ async function optionalAuth(req, res, next) {
 }
 
 router.post("/", optionalAuth, createFeedback);
+router.get("/admin", protect, requireAdmin, adminGetFeedback);
+router.delete("/admin/:id", protect, requireAdmin, adminDeleteFeedback);
 
 module.exports = router;

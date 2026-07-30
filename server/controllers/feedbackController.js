@@ -70,3 +70,38 @@ exports.createFeedback = async (req, res) => {
     res.status(500).json({ message: "Failed to submit feedback" });
   }
 };
+
+// GET /api/feedback/admin?page=1&limit=20 — admin-only, no equivalent
+// existed before this.
+exports.adminGetFeedback = async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+
+    const [feedback, total] = await Promise.all([
+      Feedback.find({})
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Feedback.countDocuments({}),
+    ]);
+
+    res.json({ feedback, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+  } catch (err) {
+    console.error("adminGetFeedback error:", err);
+    res.status(500).json({ message: "Failed to load feedback" });
+  }
+};
+
+// DELETE /api/feedback/admin/:id — admin-only moderation.
+exports.adminDeleteFeedback = async (req, res) => {
+  try {
+    const deleted = await Feedback.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: "Feedback not found" });
+    res.status(200).json({ message: "Feedback deleted" });
+  } catch (err) {
+    console.error("adminDeleteFeedback error:", err);
+    res.status(500).json({ message: "Failed to delete feedback" });
+  }
+};

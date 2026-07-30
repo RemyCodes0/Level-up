@@ -16,12 +16,16 @@ import TutorEarningsPage from './tutors/earnings'
 import TutorAvailabilityPage from './tutors/availability'
 import TutorProfileEditPage from './tutors/Profile'
 import TutorSessionsPage from './tutors/Session'
-import AdminDashboardPage from './admin/Dashboard'
-import AdminUsersPage from './admin/Users'
-import AdminSessionsPage from './admin/Sessions'
-import AdminApplicationsPage from './admin/Application'
-import AdminAnalyticsPage from './admin/Analytics'
-import AdminEmailPage from './admin/EmailComposer'
+import AdminLayout from './admin/AdminLayout'
+import AdminOverviewPage from './admin/pages/Overview'
+import AdminAiSpendPage from './admin/pages/AiSpend'
+import AdminCoursesPage from './admin/pages/Courses'
+import AdminUsersPage from './admin/pages/Users'
+import AdminTutorsAndBookingsPage from './admin/pages/TutorsAndBookings'
+import AdminFeedbackAndReviewsPage from './admin/pages/FeedbackAndReviews'
+import AdminTrafficPage from './admin/pages/Traffic'
+import AdminPricingConfigPage from './admin/pages/PricingConfigPage'
+import AdminEmailPage from './admin/pages/EmailComposerPage'
 import AdStudio from './ads/AdStudio'
 import TutorProfilePage from './tutors/tutors-detail/tutors-detail'
 import MessagesPage from './messages/Messages'
@@ -31,8 +35,6 @@ import Analytics from "./Analytics";
 import AILearningPage from './ai/AiTutor'
 import ShowcasePage from './showcase/ShowCase'
 import VerifyEmailPage from './signup/Verifyemailpage'
-import AdminDashboard from './ai/AdminDashboard'
-import AdminPricingConfigPage from './ai/AdminPricingConfig'
 import PricingPage from './price/PricePage'
 import CreditsDashboardPage from './dashboard/CreditsDashboard'
 import SharedCoursePage from './share/SharePage'
@@ -71,8 +73,6 @@ function App() {
       <Route path="/ai_tutor" element={<AILearningPage/>}/>
       <Route path="/ai_tutor/:courseId" element={<AILearningPage/>}/>
       <Route path="/ai_showcase" element={<ShowcasePage/>}/>
-      <Route path="/ai_admin" element={<AdminDashboard/>}/>
-      <Route path="/ai_admin/pricing" element={<AdminPricingConfigPage/>}/>
       <Route path="/bookings" element={<BookingsPage/>}/>
       <Route path="/tutor/dashboard" element={<TutorDashboardPage/>}/>
       <Route path="/tutor/earnings" element={<TutorEarningsPage/>}/>
@@ -81,12 +81,21 @@ function App() {
       <Route path="/credits" element={<CreditsDashboardPage/>}/>
       <Route path="/tutor/profile" element={<TutorProfileEditPage/>}/>
       <Route path="/tutor/sessions" element={<TutorSessionsPage/>}/>
-      <Route path="/admin/dashboard" element={<AdminDashboardPage/>}/>
-      <Route path="/admin/users" element={<AdminUsersPage/>}/>
-      <Route path="/admin/sessions" element={<AdminSessionsPage/>}/>
-      <Route path="/admin/applications" element={<AdminApplicationsPage/>}/>
-      <Route path="/admin/analytics" element={<AdminAnalyticsPage/>}/>
-      <Route path="/admin/email" element={<AdminEmailPage/>}/>
+      {/* Unified admin dashboard — replaces the old /ai_admin and /admin/*
+          trees. One auth-gated layout (AdminLayout -> RequireAdmin) with
+          nested pages below. */}
+      <Route path="/admin" element={<AdminLayout/>}>
+        <Route index element={<AdminOverviewPage/>}/>
+        <Route path="ai-spend" element={<AdminAiSpendPage/>}/>
+        <Route path="courses" element={<AdminCoursesPage/>}/>
+        <Route path="courses/:courseId" element={<AdminCoursesPage/>}/>
+        <Route path="users" element={<AdminUsersPage/>}/>
+        <Route path="tutors-bookings" element={<AdminTutorsAndBookingsPage/>}/>
+        <Route path="feedback-reviews" element={<AdminFeedbackAndReviewsPage/>}/>
+        <Route path="traffic" element={<AdminTrafficPage/>}/>
+        <Route path="pricing" element={<AdminPricingConfigPage/>}/>
+        <Route path="emails" element={<AdminEmailPage/>}/>
+      </Route>
       <Route path="/ad-studio" element={<AdStudio/>}/>
       <Route path="/messages" element={<MessagesPage/>}/>
       <Route path="/book/:id" element={<BookSessionPage/>}/>

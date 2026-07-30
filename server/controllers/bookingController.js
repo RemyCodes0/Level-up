@@ -206,6 +206,24 @@ exports.declineBooking = async (req, res) => {
   }
 };
 
+// ── Admin: cancel any booking ─────────────────────────────────────────────────
+// Soft-cancel (status flip, same as declineBooking) rather than a hard
+// delete — preserves the record for the admin dashboard's history instead
+// of destroying it. No equivalent existed before this.
+exports.adminCancelBooking = async (req, res) => {
+  try {
+    const booking = await Booking.findByIdAndUpdate(
+      req.params.id,
+      { status: "canceled" },
+      { new: true }
+    ).lean();
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    res.status(200).json(booking);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 // ── Check if the logged-in user has booked a specific tutor ──────────────────
 exports.hasBookedTutor = async (req, res) => {
   try {

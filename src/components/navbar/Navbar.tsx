@@ -22,8 +22,6 @@ import {
   Settings,
   GraduationCap,
   Shield,
-  Users,
-  FileText,
   Calendar,
   Sparkles,
   ChevronDown
@@ -144,8 +142,8 @@ export function Navbar() {
         </a>
       )}
       {user?.role === "admin" && (
-        <a 
-          href="/admin/dashboard" 
+        <a
+          href="/admin"
           className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors relative group"
         >
           Admin Panel
@@ -274,21 +272,9 @@ export function Navbar() {
                 {user.role === "admin" ? (
                   <>
                     <DropdownMenuItem asChild className="cursor-pointer rounded-md hover:bg-blue-50">
-                      <a href="/admin/dashboard" className="flex items-center gap-2 px-2 py-2">
+                      <a href="/admin" className="flex items-center gap-2 px-2 py-2">
                         <LayoutDashboard className="h-4 w-4 text-blue-600" />
                         <span className="font-medium">Admin Dashboard</span>
-                      </a>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild className="cursor-pointer rounded-md hover:bg-blue-50">
-                      <a href="/admin/users" className="flex items-center gap-2 px-2 py-2">
-                        <Users className="h-4 w-4 text-purple-600" />
-                        <span className="font-medium">Manage Users</span>
-                      </a>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild className="cursor-pointer rounded-md hover:bg-blue-50">
-                      <a href="/admin/applications" className="flex items-center gap-2 px-2 py-2">
-                        <FileText className="h-4 w-4 text-emerald-600" />
-                        <span className="font-medium">Applications</span>
                       </a>
                     </DropdownMenuItem>
                   </>

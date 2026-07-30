@@ -1,6 +1,6 @@
 // Runs scene-plan generation on DEEPSEEK_SCENE_PLAN_PROVIDER (DeepSeek V4
-// Flash, reasoning HIGH, hit directly at api.deepseek.com — see
-// claudeService.js) — a deliberate, separate model choice from whichever
+// Flash, reasoning HIGH, via OpenRouter — see claudeService.js) — a
+// deliberate, separate model choice from whichever
 // model handles the actual animation CODE, since this is lighter structured
 // JSON generation (scene timing, narration text, visual descriptions), not
 // code. Reasoning is on because this call decides each scene's mechanism
@@ -16,6 +16,7 @@ const {
   isNonRetryable,
   backoffDelay,
 } = require("./claudeService");
+const { recordAiUsage } = require("./aiUsageService");
 
 // Safely extracts and parses a JSON object from a model response that may
 // contain stray text, markdown fences, or minor formatting issues.
@@ -90,19 +91,15 @@ Rules:
 // duration is derived directly from its OWN measured audio length, so a
 // too-short narration means a too-short scene, not a sync bug).
 //
-// Calibrated to this project's TTS voice AT THE TIME (Kokoro/af_nova via
-// OpenRouter, chunked to work around a per-call truncation bug), measured
-// directly: 22-36 word inputs played fully at a natural ~150-165 words/
-// minute. 15 seconds at that rate needs ~38-41 words; this floor sits just
-// under that so a legitimately terse-but-complete scene isn't rejected,
-// while still catching anything that's really just a title in disguise.
-// (NOT the ~330wpm figure from an earlier, mistaken measurement — that
-// number came from measuring TTS audio that was being silently truncated by
-// a since-fixed Kokoro bug, not the model's real speaking rate.)
-// ttsService.js has since moved back to OpenAI's tts-1/"nova" directly (no
-// more chunking — tts-1 has no per-call truncation limit) — this floor's
-// wpm basis hasn't been re-measured against that voice's actual speaking
-// rate, so treat it as a reasonable carryover estimate, not a verified one.
+// Calibrated to this project's current TTS voice (Kokoro/af_nova via
+// OpenRouter, chunked in ttsService.js to work around a per-call truncation
+// bug), measured directly: 22-36 word inputs played fully at a natural
+// ~150-165 words/minute. 15 seconds at that rate needs ~38-41 words; this
+// floor sits just under that so a legitimately terse-but-complete scene
+// isn't rejected, while still catching anything that's really just a title
+// in disguise. (NOT the ~330wpm figure from an earlier, mistaken measurement
+// — that number came from measuring TTS audio that was being silently
+// truncated by the same class of bug, not the model's real speaking rate.)
 const MIN_NARRATION_WORDS = 40;
 
 // Mechanical check, not a judgment call — see the comment above
@@ -117,7 +114,7 @@ function findShortNarrationScenes(scenes) {
 
 // Generates a scene-by-scene plan for ONE lesson.
 // Each scene has: narration text (for TTS) + a visual description (for the animation).
-async function generateScenePlan(lesson, maxAttempts = 3) {
+async function generateScenePlan(lesson, maxAttempts = 3, { userId = null, courseId = null } = {}) {
   let lastError = null;
   let contentFeedback = null;
   const start = Date.now();
@@ -130,12 +127,12 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
           ? `\n\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:\n"${contentFeedback}"\nRegenerate the full scene list from scratch and make absolutely sure this specific problem does not occur again — every scene needs at least 40 words of narration AND a real mechanism whose before/after states visibly differ.`
           : "");
 
-      const { text, stopReason } = await streamCodeCompletion({
+      const { text, stopReason, usage } = await streamCodeCompletion({
         // DeepSeek's own shared concurrency pool — see limitDeepSeekCall's
         // definition in claudeService.js.
         limiter: limitDeepSeekCall,
-        // DeepSeek V4 Flash, reasoning high, hit directly at api.deepseek.com —
-        // see DEEPSEEK_SCENE_PLAN_PROVIDER's definition in claudeService.js.
+        // DeepSeek V4 Flash, reasoning high, via OpenRouter — see
+        // DEEPSEEK_SCENE_PLAN_PROVIDER's definition in claudeService.js.
         provider: DEEPSEEK_SCENE_PLAN_PROVIDER,
         systemPrompt: SCENE_PLAN_SYSTEM_PROMPT,
         userContent,
@@ -144,6 +141,18 @@ async function generateScenePlan(lesson, maxAttempts = 3) {
         // actually need.
         maxOutputTokens: 40000,
       });
+      if (usage) {
+        recordAiUsage({
+          kind: "scene-plan",
+          provider: DEEPSEEK_SCENE_PLAN_PROVIDER.providerName,
+          model: DEEPSEEK_SCENE_PLAN_PROVIDER.model,
+          userId,
+          courseId,
+          promptTokens: usage.prompt_tokens,
+          completionTokens: usage.completion_tokens,
+          cachedTokens: usage.prompt_cache_hit_tokens || 0,
+        });
+      }
 
       if (stopReason === "length") {
         throw new Error("Hit max_tokens — scene plan was truncated.");

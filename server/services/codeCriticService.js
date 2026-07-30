@@ -41,6 +41,8 @@ function buildCriticUserContent(code, lesson) {
 
 The code has already passed syntax and structural validation — your job is ONLY to flag QUALITATIVE issues:
 - Scenes that are visually static/boring (little to no movement across most of the scene, few animated elements, no particle field/background motion)
+- Scenes that STOP moving partway through — an element that plays an entrance animation and then holds a fixed value for the rest of the scene, leaving a frozen frame
+- REPETITION BETWEEN SCENES: two or more scenes that are essentially the same animation with different labels/colors (e.g. every scene is "shapes fade in then gently bob on a sine"). Each scene should use a visibly different motion technique — this is the difference between a lesson that holds attention and one that bores the learner
 - Animations that clearly don't match what the scene is supposed to be teaching
 - A lesson that leans heavily on text/labels with little to no actual diagram or moving visual illustrating the concept
 

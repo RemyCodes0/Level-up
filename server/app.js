@@ -65,6 +65,7 @@ app.use('/api/referral', require('./routes/referral'))
 app.use('/api/collab', require('./routes/collab'));
 app.use('/api/progress', require('./routes/progress'));
 app.use('/api/quiz', require('./routes/quiz'));
+app.use('/api/track', require('./routes/track'));
 // app.use('/api', checkoutRouter);
 
 // Serve audio files for browser playback at /audio/*

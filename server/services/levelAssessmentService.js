@@ -16,31 +16,20 @@
 // The conversation is intentionally short: MAX_QUESTIONS keeps it to a quick
 // 3-4 exchange check, not a full exam.
 
-const OpenAI = require("openai");
-// DeepSeek's own account-wide concurrency cap (limitDeepSeekCall) — shared
-// with every other direct-to-DeepSeek call in the app (course plan,
-// per-lesson scene plan, see claudeService.js). Importing this rather than
-// running a separate limiter here is required, not just tidy: DeepSeek
-// enforces the cap per ACCOUNT, not per call site, so a separate pool here
-// could still push the account over its real limit combined with
-// claudeService.js's traffic.
-const { limitDeepSeekCall } = require("./claudeService");
+// DeepSeek V4 Flash via OpenRouter (openRouterClient) — same shared client
+// every other course-path provider in claudeService.js routes through, not a
+// separate direct-to-DeepSeek instance. limitDeepSeekCall is shared with
+// every other OpenRouter-routed DeepSeek call (course plan, per-lesson scene
+// plan, see claudeService.js) — importing it rather than running a separate
+// limiter here keeps this call's traffic coordinated against that same pool.
+const { limitDeepSeekCall, openRouterClient: client } = require("./claudeService");
+const { recordAiUsage } = require("./aiUsageService");
 
-// DeepSeek V4 Flash via its own official API directly — own client instance,
-// but same account/key/concurrency cap as claudeService.js's deepseekClient
-// (see limitDeepSeekCall above). Not OpenRouter: hits api.deepseek.com
-// directly. maxRetries: the SDK auto-retries failed requests (including
-// network timeouts like ETIMEDOUT) this many times with backoff before
-// giving up — important for unstable connections. timeout: how long to wait
-// per attempt.
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: "https://api.deepseek.com/v1",
-  maxRetries: 3,
-  timeout: 60 * 1000,
-});
-
-const MODEL = "deepseek-v4-flash"; // fast, fine for short MCQs (was GPT-5.6 Luna, then GLM 5.2)
+const MODEL = "deepseek/deepseek-v4-flash"; // fast, fine for short MCQs (was GPT-5.6 Luna, then GLM 5.2)
+// `provider: { order: ["deepseek"], allow_fallbacks: true }` — same
+// quantized-third-party-backend precaution used for every other
+// OpenRouter-routed DeepSeek/GLM call in claudeService.js.
+const OPENROUTER_PROVIDER_PIN = { order: ["deepseek"], allow_fallbacks: true };
 const MAX_QUESTIONS = 3;
 
 // Builds the system prompt that defines how the assessor behaves.
@@ -103,26 +92,35 @@ function buildMessages(turns) {
 // before producing any text, we retry once or twice rather than failing the
 // whole assessment. (We only retry if NO text was emitted yet, to avoid
 // showing the user duplicated/partial question text.)
-async function streamNextQuestion(topic, turns, onToken, maxAttempts = 3) {
+async function streamNextQuestion(topic, turns, onToken, maxAttempts = 3, { userId = null } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let fullText = "";
     let emittedAny = false;
+    let usage = null;
     try {
       // Held for the WHOLE stream lifetime (create + consume every chunk),
       // not just until create() resolves — same contract as
       // claudeService.js's streamCodeCompletion, required so the limiter
-      // actually caps concurrent open connections against DeepSeek's account.
+      // actually caps concurrent open connections against the shared
+      // OpenRouter-routed DeepSeek pool.
       await limitDeepSeekCall(async () => {
         const stream = await client.chat.completions.create({
           model: MODEL,
           max_tokens: 400,
           // Off: this is a live "typing" question generator — reasoning
           // would add latency to what should feel instant, and writing one
-          // simple self-report MCQ doesn't need it. DeepSeek's native
-          // `thinking` field, same shape as Z.ai/Anthropic's.
-          thinking: { type: "disabled" },
+          // simple self-report MCQ doesn't need it. OpenRouter's unified
+          // `reasoning` field, not DeepSeek's native `thinking`/
+          // `reasoning_effort` (this now routes through OpenRouter, not
+          // DeepSeek's own API).
+          reasoning: { enabled: false },
+          provider: OPENROUTER_PROVIDER_PIN,
           stream: true,
+          // Without this, a streamed response never carries a `usage` chunk
+          // at all — same OpenAI-spec requirement as claudeService.js's
+          // streamOpenAiCompatible.
+          stream_options: { include_usage: true },
           messages: [
             { role: "system", content: buildSystemPrompt(topic) },
             ...buildMessages(turns),
@@ -136,8 +134,22 @@ async function streamNextQuestion(topic, turns, onToken, maxAttempts = 3) {
             emittedAny = true;
             onToken(textChunk);
           }
+          // The usage chunk arrives LAST with an empty `choices` array.
+          if (chunk.usage) usage = chunk.usage;
         }
       });
+
+      if (usage) {
+        recordAiUsage({
+          kind: "level-assessment",
+          provider: "deepseek",
+          model: MODEL,
+          userId,
+          promptTokens: usage.prompt_tokens,
+          completionTokens: usage.completion_tokens,
+          cachedTokens: usage.prompt_cache_hit_tokens || 0,
+        });
+      }
 
       return fullText;
     } catch (err) {
@@ -157,7 +169,7 @@ async function streamNextQuestion(topic, turns, onToken, maxAttempts = 3) {
 
 // After the conversation, ask the model for a final level verdict. Returns
 // one of: "beginner" | "intermediate" | "advanced".
-async function determineLevel(topic, turns) {
+async function determineLevel(topic, turns, { userId = null } = {}) {
   const transcript = turns
     .map((t, i) => `Q${i + 1}: ${t.question}\nThey answered: "${t.answer}"`)
     .join("\n\n");
@@ -166,7 +178,8 @@ async function determineLevel(topic, turns) {
     client.chat.completions.create({
       model: MODEL,
       max_tokens: 50,
-      thinking: { type: "disabled" }, // a one-word verdict needs no reasoning
+      reasoning: { enabled: false }, // a one-word verdict needs no reasoning
+      provider: OPENROUTER_PROVIDER_PIN,
       messages: [
         {
           role: "system",
@@ -179,6 +192,18 @@ async function determineLevel(topic, turns) {
       ],
     })
   );
+
+  if (response.usage) {
+    recordAiUsage({
+      kind: "level-assessment",
+      provider: "deepseek",
+      model: MODEL,
+      userId,
+      promptTokens: response.usage.prompt_tokens,
+      completionTokens: response.usage.completion_tokens,
+      cachedTokens: response.usage.prompt_cache_hit_tokens || 0,
+    });
+  }
 
   const raw = (response.choices?.[0]?.message?.content || "").toLowerCase().trim();
   if (raw.includes("advanced")) return "advanced";

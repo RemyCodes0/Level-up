@@ -5,13 +5,21 @@ const JSZip = require("jszip");
 const { validateGeneratedCode, validateHeaderFragment, validateSceneFragment, getHeaderExposedNames, compactHeaderForPrompt } = require("./validateCode");
 const { reviewGeneratedCode } = require("./codeCriticService");
 const { createLimiter } = require("../utils/concurrencyLimiter");
+const { recordAiUsage } = require("./aiUsageService");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CLIENTS
 // ═══════════════════════════════════════════════════════════════════════════
-// OpenRouter — Fable 5 ONLY (ads). GLM used to route through here too, but
-// every GLM call now goes straight to Z.ai's own API (zaiClient): separate
-// account/balance, and no OpenRouter routing-to-quantized-backend risk.
+// OpenRouter — every course-path model (GLM, DeepSeek, Fable) routes through
+// here now; one account/key instead of separate direct-vendor clients. GLM
+// and DeepSeek each pin `provider: { order: [vendor], allow_fallbacks: true }`
+// in their own extraParams below — WITHOUT that pin, OpenRouter's default
+// behavior is to load-balance across every third party serving that model
+// name, ordered by price, which previously landed GLM traffic on a heavily
+// quantized (FP4/Int4) backend that passed validation but crashed at
+// runtime. The pin prefers the real vendor's own backend but still allows a
+// fallback if that specific backend is briefly unavailable — same tradeoff
+// this project already tuned once for GLM, now applied to DeepSeek too.
 const openRouterClient = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
   baseURL: "https://openrouter.ai/api/v1",
@@ -19,66 +27,52 @@ const openRouterClient = new OpenAI({
   maxRetries: 0,       // retries are handled manually (withRetries)
 });
 
-// Z.ai direct — ALL GLM calls in this file (lesson header, per-scene code,
-// scene-plan, course-plan, remedial plan, next-course suggestions). Same
-// OpenAI-compatible chat-completions shape as OpenRouter; only the base
-// URL/key and the reasoning-toggle syntax differ (Z.ai's NATIVE
-// `thinking: { type: "disabled" | "enabled" }`, NOT OpenRouter's unified
-// `reasoning: { enabled }` — Z.ai's own API does not understand the latter).
-const zaiClient = new OpenAI({
-  apiKey: process.env.ZAI_API_KEY,
-  baseURL: "https://api.z.ai/api/paas/v4",
-  timeout: 300 * 1000,
-  maxRetries: 0,
-});
-
-// Anthropic direct — Claude Sonnet 5 lesson/scene/ad code. NOT OpenRouter:
-// this hits Anthropic's own Messages API, which is a different wire shape
-// from the OpenAI-compatible chat-completions surface the two clients above
-// use (content blocks + top-level `stop_reason`/`usage.input_tokens`, not
-// `delta.content` + `finish_reason`/`usage.prompt_tokens`) — streamCodeCompletion
-// branches on provider.isAnthropicNative to speak the right one.
+// Anthropic direct — Claude Sonnet 5 lesson/scene/ad code, an OPT-IN
+// alternative selectable via LESSON_CODE_MODEL=claude / AD_CODE_MODEL=claude
+// (not the default for either path). Deliberately left off OpenRouter —
+// Anthropic is the sole backend for its own models, so none of the
+// quantized-third-party-backend risk above applies, and this entry is
+// shared by both the lesson and ad code-model switches, so moving it isn't
+// scoped to "course only". NOT OpenRouter: this hits Anthropic's own
+// Messages API, which is a different wire shape from the OpenAI-compatible
+// chat-completions surface openRouterClient uses (content blocks + top-level
+// `stop_reason`/`usage.input_tokens`, not `delta.content` +
+// `finish_reason`/`usage.prompt_tokens`) — streamCodeCompletion branches on
+// provider.isAnthropicNative to speak the right one.
 const anthropicClient = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
   timeout: 300 * 1000,
   maxRetries: 0,
 });
 
-// DeepSeek direct — course plan + per-lesson scene plan (see
-// DEEPSEEK_COURSE_PLAN_PROVIDER / DEEPSEEK_SCENE_PLAN_PROVIDER below). Own
-// account/balance, hit directly at api.deepseek.com — not OpenRouter. Same
-// OpenAI-compatible chat-completions wire shape as zaiClient/openRouterClient,
-// and DeepSeek's native reasoning toggle mirrors Z.ai/Anthropic's own
-// `thinking: { type: "disabled" | "enabled" }` field (plus its own
-// `reasoning_effort` knob — see DEEPSEEK_COURSE_PLAN_PROVIDER).
-const deepseekClient = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: "https://api.deepseek.com/v1",
-  timeout: 300 * 1000,
-  maxRetries: 0,
-});
-if (!process.env.DEEPSEEK_API_KEY) {
-  console.warn("[codegen] WARNING: DEEPSEEK_API_KEY is not set — course-plan and scene-plan generation will fail with an auth error.");
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // PROVIDER TABLE
 // ═══════════════════════════════════════════════════════════════════════════
 // Reasoning is OFF everywhere on GLM by design: GLM's native `thinking` field
-// has no token cap (unlike OpenRouter's old unified shape), so leaving it on
-// meant unbounded invisible reasoning tokens — measured 200-870+ seconds per
-// call at "high" effort, 987s+ for one lesson's code stage.
+// has no token cap, so leaving it on meant unbounded invisible reasoning
+// tokens — measured 200-870+ seconds per call at "high" effort, 987s+ for one
+// lesson's code stage. Via OpenRouter this is now the unified
+// `reasoning: { enabled: false }` field (GLM's native `thinking` field isn't
+// understood by OpenRouter's own API surface, only by Z.ai's).
+// `providerName` on every provider object below (CODE_PROVIDERS entries,
+// SCENE_PLAN_PROVIDER, DEEPSEEK_*_PROVIDER) is purely a label for the AI
+// cost ledger (AiUsageLog.provider / aiUsageService.js) — it plays no part
+// in which API actually gets called, that's still driven by `client`/`model`.
 const CODE_PROVIDERS = {
   glm: {
-    client: zaiClient,
-    model: "glm-5.2",
-    extraParams: { thinking: { type: "disabled" } },
+    client: openRouterClient,
+    model: "z-ai/glm-5.2",
+    providerName: "glm",
+    // `provider: { order: ["z-ai"] }` — see the CLIENTS comment above for why
+    // this pin is load-bearing, not cosmetic.
+    extraParams: { reasoning: { enabled: false }},
     maxTokens: 100000,
-    keyEnv: "ZAI_API_KEY",
+    keyEnv: "OPENROUTER_API_KEY",
   },
   fable: {
     client: openRouterClient,
     model: "anthropic/claude-fable-5",
+    providerName: "fable",
     // Fable 5's max output is far lower than GLM's — 32k is plenty for an ad
     // composition and anything higher errors. MUCH pricier than GLM
     // (~$15/$75 per M tokens vs cents) — used deliberately for ads only
@@ -91,12 +85,13 @@ const CODE_PROVIDERS = {
   // OpenRouter, not Z.ai) via anthropicClient. No extraParams: Sonnet 5
   // rejects non-default temperature/top_p/top_k outright (400). maxTokens
   // is a fallback only — every call site below passes its own explicit
-  // maxOutputTokens (HEADER/SCENE_MAX_OUTPUT_TOKENS), well under Sonnet 5's
-  // 128k ceiling.
+  // maxOutputTokens (e.g. HEADER_MAX_OUTPUT_TOKENS/SCENE_MAX_OUTPUT_TOKENS),
+  // well under Sonnet 5's 128k ceiling.
   claude: {
     client: anthropicClient,
     isAnthropicNative: true,
     model: "claude-sonnet-5",
+    providerName: "claude",
     extraParams: {},
     maxTokens: 100000,
     keyEnv: "ANTHROPIC_API_KEY",
@@ -118,17 +113,16 @@ const LESSON_CODE_PROVIDER = resolveProvider("LESSON_CODE_MODEL", "glm");
 const AD_CODE_PROVIDER = resolveProvider("AD_CODE_MODEL", "fable");
 
 // Derives a reasoning-off variant of whichever provider LESSON_CODE_MODEL
-// selects — both the header call and every per-scene call run with reasoning
-// off (deterministic code generation gets nothing from a hidden
-// chain-of-thought, and on GLM it would draw unbounded invisible tokens from
-// the same output budget as the actual code — GLM's native `thinking` field
-// has no token cap, unlike DeepSeek's bounded `reasoning_effort`, so this is
-// a hard rule on GLM specifically, not just a preference).
+// selects — the single whole-lesson code call runs with reasoning off
+// (deterministic code generation gets nothing from a hidden chain-of-
+// thought, and on GLM it would draw unbounded invisible tokens from the
+// same output budget as the actual code — GLM's native `thinking` field has
+// no token cap, unlike DeepSeek's bounded `reasoning_effort`, so this is a
+// hard rule on GLM specifically, not just a preference).
 //
-// The reasoning-toggle FIELD differs by client, same distinction as the
-// clients comment above: Z.ai's native API and Anthropic's own Messages API
-// both take `thinking: {type}` (Z.ai mirrors Anthropic's wire shape).
-// OpenRouter (fable) takes its own unified `reasoning: {enabled}` instead —
+// The reasoning-toggle FIELD differs by client: Anthropic's own Messages API
+// takes `thinking: {type}`. Every OpenRouter-routed provider (glm, fable,
+// deepseek) takes OpenRouter's own unified `reasoning: {enabled}` instead —
 // sending the wrong shape is either ignored or a 400, not a no-op, so this
 // can't be one hardcoded field for every provider.
 function withReasoningOff(provider) {
@@ -142,52 +136,68 @@ const LESSON_HEADER_PROVIDER = withReasoningOff(LESSON_CODE_PROVIDER);
 const LESSON_SCENE_PROVIDER = withReasoningOff(LESSON_CODE_PROVIDER);
 
 // Remedial-lesson-plan / next-course-suggestions: bounded, fixed-shape JSON
-// (not code) on GLM 5.2 via Z.ai directly — unchanged, lower-stakes calls not
+// (not code) on GLM 5.2 via OpenRouter — unchanged, lower-stakes calls not
 // worth reasoning tokens. Course plan and per-lesson scene plan both run on
 // DeepSeek V4 Flash instead (see DEEPSEEK_COURSE_PLAN_PROVIDER /
-// DEEPSEEK_SCENE_PLAN_PROVIDER below), reasoning at HIGH effort — both set
+// DEEPSEEK_SCENE_PLAN_PROVIDER below), reasoning at MAX effort — both set
 // the structure everything downstream depends on (the whole course's shape;
 // one lesson's scene breakdown, including each scene's mechanism), so the
-// extra latency is worth it. DeepSeek's `reasoning_effort` only accepts
-// "high"/"max" (low/medium are silently remapped up to "high" for
-// compatibility), so "high" here is the true minimum, not a soft preference.
+// extra latency is worth it. "max" is DeepSeek's own top reasoning tier
+// (its native `reasoning_effort` field only recognizes "high"/"max" —
+// "low"/"medium" are silently remapped up to "high"); confirmed live that
+// OpenRouter's unified `reasoning: {effort}` field forwards "max" through to
+// DeepSeek without erroring, even though OpenRouter's own documented enum is
+// only low/medium/high.
 const SCENE_PLAN_PROVIDER = {
-  client: zaiClient,
-  model: "glm-5.2",
-  extraParams: { thinking: { type: "disabled" } },
+  client: openRouterClient,
+  model: "z-ai/glm-5.2",
+  providerName: "glm",
+  extraParams: { reasoning: { enabled: false }, provider: { order: ["z-ai"], allow_fallbacks: true } },
   maxTokens: 40000,
-  keyEnv: "ZAI_API_KEY",
+  keyEnv: "OPENROUTER_API_KEY",
 };
 
+// `provider: { order: ["deepseek"] }` — same quantized-third-party-backend
+// concern as GLM's pin above, applied here as a precaution even though it
+// was only ever confirmed as an actual incident on GLM.
 const DEEPSEEK_COURSE_PLAN_PROVIDER = {
-  client: deepseekClient,
-  model: "deepseek-v4-flash",
-  extraParams: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+  client: openRouterClient,
+  model: "deepseek/deepseek-v4-flash",
+  providerName: "deepseek",
+  extraParams: { reasoning: { effort: "max" }, provider: { order: ["deepseek"], allow_fallbacks: true } },
   // Reasoning tokens are drawn from this SAME budget, on top of the actual
   // JSON — the reasoning-off floor (a few thousand tokens) has no headroom
   // left once high-effort reasoning is turned on.
   maxTokens: 40000,
-  keyEnv: "DEEPSEEK_API_KEY",
+  keyEnv: "OPENROUTER_API_KEY",
 };
 const DEEPSEEK_SCENE_PLAN_PROVIDER = {
-  client: deepseekClient,
-  model: "deepseek-v4-flash",
-  extraParams: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+  client: openRouterClient,
+  model: "deepseek/deepseek-v4-flash",
+  providerName: "deepseek",
+  extraParams: { reasoning: { effort: "max" }, provider: { order: ["deepseek"], allow_fallbacks: true } },
   // Same reasoning-budget note as DEEPSEEK_COURSE_PLAN_PROVIDER above.
   maxTokens: 40000,
-  keyEnv: "DEEPSEEK_API_KEY",
+  keyEnv: "OPENROUTER_API_KEY",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONCURRENCY
 // ═══════════════════════════════════════════════════════════════════════════
-// Z.ai enforces ONE account-wide concurrency cap across all models and
-// endpoints. limitZaiCall (default 1) covers remedial-lesson-plan and
-// next-course generation — low volume/short calls where the connection-drop
-// risk under concurrency isn't worth the tiny time saved.
+// All of these now bound requests against ONE OpenRouter account (every
+// course-path provider routes through openRouterClient), not separate
+// per-vendor account caps the way they did when GLM/DeepSeek hit Z.ai/
+// DeepSeek directly. Kept as separate named pools anyway — they're still
+// useful circuit breakers against connection-drop bursts to whichever
+// pinned backend (`provider.order`) actually serves a given request, and
+// splitting them lets one call category be tuned without affecting others.
+// limitZaiCall (default 1) covers remedial-lesson-plan and next-course
+// generation — low volume/short calls where the connection-drop risk under
+// concurrency isn't worth the tiny time saved.
 //
-// Lesson code generation is split header + per-scene again (see
-// generateLessonHeader/generateSceneCode below) — two pools:
+// Lesson code generation is split header + per-scene (see
+// HEADER_CODE_GEN_RULES/SCENE_CODE_GEN_RULES/generateLessonCode below) — two
+// pools:
 //   limitLessonHeaderCall (default 6) — one header call per lesson. With
 //     buildLessonsConcurrently building every lesson in a course at once,
 //     up to lessonCount of these can be in flight together; 6 covers the
@@ -204,6 +214,16 @@ const DEEPSEEK_SCENE_PLAN_PROVIDER = {
 //     of concurrent requests without the per-request slowdown a dense model
 //     would show. Tune either down if connection-drop errors show up under
 //     multi-user load.
+//
+// NOTE: this split raises the number of billed requests per course from ~6
+// (single-call) to ~65-90 (1 header + ~10-14 scenes × 6 lessons) — this is
+// exactly what caused a Z.ai-account-balance production incident the one
+// time this ran against Z.ai directly (see git history / project memory on
+// "single-call-codegen-experiment"). Now that every call routes through
+// OpenRouter instead, that specific failure mode (a single vendor account
+// silently running dry) no longer applies the same way, but the call-volume
+// increase itself is unchanged — watch OpenRouter spend after this if
+// enabling for the first time again.
 const ZAI_MAX_CONCURRENT = Number(process.env.ZAI_MAX_CONCURRENT) || 1;
 const limitZaiCall = createLimiter(ZAI_MAX_CONCURRENT);
 const LESSON_HEADER_MAX_CONCURRENT = Number(process.env.LESSON_HEADER_MAX_CONCURRENT) || 6;
@@ -212,14 +232,14 @@ const LESSON_SCENE_MAX_CONCURRENT = Number(process.env.LESSON_SCENE_MAX_CONCURRE
 const limitLessonSceneCall = createLimiter(LESSON_SCENE_MAX_CONCURRENT);
 const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;
 const limitAdCodeCall = createLimiter(AD_CODE_MAX_CONCURRENT);
-// DeepSeek's own documented account-wide cap for deepseek-v4-flash is 2,500
-// concurrent requests (hard cap, HTTP 429 past it) — 100 is a comfortable
-// ceiling far under that, not a stretch. Course plan and scene plan run on
-// GLM again (see SCENE_PLAN_PROVIDER above); the only current caller of this
-// limiter is the pre-course level assessment in levelAssessmentService.js
-// (which imports it directly), so in practice this rarely sees more than a
-// couple of concurrent calls — the headroom just means it never becomes a
-// bottleneck if that changes.
+// Shared by every OpenRouter-routed DeepSeek call: course plan and
+// per-lesson scene plan (DEEPSEEK_COURSE_PLAN_PROVIDER /
+// DEEPSEEK_SCENE_PLAN_PROVIDER above) and the pre-course level assessment in
+// levelAssessmentService.js (which imports this limiter directly). DeepSeek's
+// own documented account-wide cap for deepseek-v4-flash was 2,500 concurrent
+// requests when hit directly — now mediated through OpenRouter's own
+// concurrency handling instead, so that figure is no longer a guaranteed
+// ceiling, just the best available evidence that 100 has ample headroom.
 const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 100;
 const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 
@@ -408,14 +428,21 @@ function safeParseJson(text) {
 }
 
 // ONE JSON-generation path for course plans, remedial plans, and next-course
-// suggestions: Z.ai direct, shared limiter, truncation detection, safe parse,
-// caller-supplied shape validation, and corrective feedback on retry (a
-// shape-validation failure message rides into the next attempt's prompt
-// exactly like code-gen does). `provider`/`limiter` are overridable (used
-// briefly to route course-plan generation to DeepSeek — see
-// DEEPSEEK_COURSE_PLAN_PROVIDER above) but every current call site uses the
-// GLM/Z.ai defaults.
-async function generateJson({ label, maxAttempts, maxTokens, buildMessages, validate, provider = SCENE_PLAN_PROVIDER, limiter = limitZaiCall }) {
+// suggestions: GLM via OpenRouter, shared limiter, truncation detection, safe
+// parse, caller-supplied shape validation, and corrective feedback on retry
+// (a shape-validation failure message rides into the next attempt's prompt
+// exactly like code-gen does). `provider`/`limiter` are overridable (used to
+// route course-plan/scene-plan generation to DeepSeek — see
+// DEEPSEEK_COURSE_PLAN_PROVIDER above) but remedial/next-course use the
+// GLM defaults.
+// `onUsage(usage)` is optional — fires with the raw OpenAI-SDK `usage`
+// object right before returning, once validation has already succeeded, so
+// callers can feed the AI cost ledger (recordAiUsage) without generateJson
+// itself needing to know about courseId/userId/kind. Not called on a
+// content-error retry — only the attempt that actually succeeds gets logged
+// (a rejected attempt's tokens were still spent, but attributing per-retry
+// cost isn't worth the complexity this would add for 3 low-volume call sites).
+async function generateJson({ label, maxAttempts, maxTokens, buildMessages, validate, provider = SCENE_PLAN_PROVIDER, limiter = limitZaiCall, onUsage = null }) {
   return withRetries(label, maxAttempts, async ({ feedback }) => {
     const response = await limiter(() =>
       provider.client.chat.completions.create({
@@ -436,7 +463,9 @@ async function generateJson({ label, maxAttempts, maxTokens, buildMessages, vali
     // mixed into `message.content` — no extra stripping needed here.
     const text = choice?.message?.content || "";
     const parsed = safeParseJson(text);
-    return validate(parsed, text);
+    const result = validate(parsed, text);
+    if (onUsage && response.usage) onUsage(response.usage);
+    return result;
   }, { keyEnv: provider.keyEnv });
 }
 
@@ -551,7 +580,7 @@ function isPptxFile(fileName) {
   return typeof fileName === "string" && fileName.toLowerCase().endsWith(".pptx");
 }
 
-async function generateCoursePlan(topic, pdfText, pdfBuffer, sourceFileName, level = null, maxAttempts = 3, lessonCount = 6, mcqCount = 20) {
+async function generateCoursePlan(topic, pdfText, pdfBuffer, sourceFileName, level = null, maxAttempts = 3, lessonCount = 6, mcqCount = 20, { userId = null, courseId = null } = {}) {
   const jsonSchema = `
 {
   "lessons": [
@@ -645,6 +674,16 @@ ${rules}
       }
       return parsed;
     },
+    onUsage: (usage) => recordAiUsage({
+      kind: "course-plan",
+      provider: DEEPSEEK_COURSE_PLAN_PROVIDER.providerName,
+      model: DEEPSEEK_COURSE_PLAN_PROVIDER.model,
+      userId,
+      courseId,
+      promptTokens: usage.prompt_tokens,
+      completionTokens: usage.completion_tokens,
+      cachedTokens: usage.prompt_cache_hit_tokens || 0,
+    }),
   });
 
   if (truncated) plan.__truncatedInput = true;
@@ -655,7 +694,7 @@ ${rules}
 // {title, description, keyPoints} for ONE new lesson targeting the group's
 // weakest topic; hands off to the existing buildLesson pipeline. Deliberately
 // re-teaches from a different angle than a first pass would.
-async function generateRemedialLessonPlan(courseTopic, weakTopic, groupAvgPct, maxAttempts = 3) {
+async function generateRemedialLessonPlan(courseTopic, weakTopic, groupAvgPct, maxAttempts = 3, { userId = null, courseId = null } = {}) {
   const basePrompt = `
 You are an expert educational content designer creating ONE remedial lesson for a study group that just took a quiz together.
 
@@ -693,11 +732,21 @@ Rules:
       }
       return plan;
     },
+    onUsage: (usage) => recordAiUsage({
+      kind: "remedial-plan",
+      provider: SCENE_PLAN_PROVIDER.providerName,
+      model: SCENE_PLAN_PROVIDER.model,
+      userId,
+      courseId,
+      promptTokens: usage.prompt_tokens,
+      completionTokens: usage.completion_tokens,
+      cachedTokens: usage.prompt_cache_hit_tokens || 0,
+    }),
   });
 }
 
 // ── Continuous learning: next-course suggestions ────────────────────────────
-async function generateNextCourseSuggestions(completedTopic, weakTopics = [], maxAttempts = 2) {
+async function generateNextCourseSuggestions(completedTopic, weakTopics = [], maxAttempts = 2, { userId = null, courseId = null } = {}) {
   const weakContext = weakTopics.length
     ? `The learner's weaker areas from their quiz results were: ${weakTopics.join(", ")}.`
     : "";
@@ -732,6 +781,16 @@ Rules:
       }
       return p;
     },
+    onUsage: (usage) => recordAiUsage({
+      kind: "next-course",
+      provider: SCENE_PLAN_PROVIDER.providerName,
+      model: SCENE_PLAN_PROVIDER.model,
+      userId,
+      courseId,
+      promptTokens: usage.prompt_tokens,
+      completionTokens: usage.completion_tokens,
+      cachedTokens: usage.prompt_cache_hit_tokens || 0,
+    }),
   });
 
   return parsed.suggestions;
@@ -749,12 +808,22 @@ Rules:
 // judgment) — split across two calls, not reverted to an earlier split
 // pipeline's exhaustive MECHANISM/FINGERPRINT/CAST/PACING/CONTAINMENT/
 // COLLISION planning checklist. Both header and scene calls run on GLM 5.2
-// (LESSON_CODE_MODEL), reasoning OFF for both — GLM's native `thinking`
-// field has no token cap, so leaving it on for either call would draw
-// unbounded invisible tokens from the same budget as the actual code. A
+// (LESSON_CODE_MODEL) via OpenRouter, reasoning OFF for both — GLM's native
+// `thinking` field has no token cap, so leaving it on for either call would
+// draw unbounded invisible tokens from the same budget as the actual code. A
 // deterministic stitcher (stitchLessonCode) assembles header + scenes + a
 // <Series> wrapper from known metadata — the model never transcribes
 // durations or audio URLs on this path.
+//
+// Restored deliberately (back from the single-call design) at the user's
+// request — this was the architecture judged to produce the best per-scene
+// animation quality, before an earlier revert driven by a Z.ai-account-
+// balance incident (splitting raises billed requests per course from ~6 to
+// ~65-90). That incident was specific to hitting Z.ai's own account
+// directly; now that GLM/DeepSeek route through OpenRouter instead (see
+// CLIENTS above), the exact failure mode doesn't repeat the same way, but
+// the higher call volume itself is unchanged — worth watching OpenRouter
+// spend (see the admin dashboard's AI Spend page) after re-enabling this.
 
 const HEADER_CODE_GEN_RULES = `
 ⚠️ OUTPUT FORMAT: Respond with ONLY raw TypeScript/TSX code. No prose, no explanation, no markdown fences. The FIRST character of your response must be "i" (from "import"). Anything else fails the build and the user loses their course. CODE ONLY.
@@ -1023,7 +1092,6 @@ visualDescription: ${scene.visualDescription}
 Write ONLY the function ${sceneName}, illustrating this scene's mechanism to the standard shown in the worked example above. No import, no export, no <Series>/<Series.Sequence>/<Audio>.
 `;
 }
-
 // ── Auto-fix common code-generation errors ───────────────────────────────────
 // Text-level (not AST) fixes for systematic model slips. Kept deliberately
 // narrow: only fixes with a very low false-positive surface; anything
@@ -1255,8 +1323,8 @@ async function streamCodeCompletion({ limiter, provider, systemPrompt, userConte
   );
 }
 
-// GLM (Z.ai) and Fable (OpenRouter) both speak the OpenAI chat-completions
-// wire shape — this is that path.
+// GLM, DeepSeek, and Fable — every OpenRouter-routed provider — all speak
+// the OpenAI chat-completions wire shape — this is that path.
 async function streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens }) {
   const controller = new AbortController();
   const stream = await provider.client.chat.completions.create(
@@ -1386,7 +1454,7 @@ const HEADER_MAX_OUTPUT_TOKENS = 32000;
 const SCENE_MAX_OUTPUT_TOKENS = 72000;
 
 // ── Header generation ───────────────────────────────────────────────────────
-async function generateLessonHeader(lesson, scenes, maxAttempts = 2) {
+async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = null, courseId = null } = {}) {
   const label = `header L${lesson.lessonNumber}`;
   const start = Date.now();
 
@@ -1401,6 +1469,18 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2) {
       maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
     });
     logUsage(label, usage);
+    if (usage) {
+      recordAiUsage({
+        kind: "lesson-header",
+        provider: LESSON_HEADER_PROVIDER.providerName,
+        model: LESSON_HEADER_PROVIDER.model,
+        userId,
+        courseId,
+        promptTokens: usage.prompt_tokens,
+        completionTokens: usage.completion_tokens,
+        cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      });
+    }
 
     // Everything after a fully-received stream is a CONTENT problem — tag it
     // so withRetries threads the message back into the next attempt's prompt.
@@ -1430,7 +1510,7 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2) {
 // ── Per-scene code generation ───────────────────────────────────────────────
 // Given the already-validated header as context. Own retry loop scoped to
 // just this scene — a syntax slip in scene 7 only costs re-rolling scene 7.
-async function generateSceneCode(lesson, scene, index, totalScenes, headerCode, headerAvailableNames, componentName, maxAttempts = 2) {
+async function generateSceneCode(lesson, scene, index, totalScenes, headerCode, headerAvailableNames, componentName, maxAttempts = 2, { userId = null, courseId = null } = {}) {
   const sceneName = sceneComponentName(index);
   const label = `scene ${index + 1} L${lesson.lessonNumber}`;
   const start = Date.now();
@@ -1451,6 +1531,18 @@ async function generateSceneCode(lesson, scene, index, totalScenes, headerCode, 
       maxOutputTokens: SCENE_MAX_OUTPUT_TOKENS,
     });
     logUsage(label, usage);
+    if (usage) {
+      recordAiUsage({
+        kind: "lesson-scene",
+        provider: LESSON_SCENE_PROVIDER.providerName,
+        model: LESSON_SCENE_PROVIDER.model,
+        userId,
+        courseId,
+        promptTokens: usage.prompt_tokens,
+        completionTokens: usage.completion_tokens,
+        cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      });
+    }
 
     try {
       if (stopReason === "length") {
@@ -1536,7 +1628,7 @@ async function generateLessonCode(
   scenePlan,
   scenePromises,
   maxAttempts = 3,
-  { onSceneCodeReady = null, headerPromise = null } = {}
+  { onSceneCodeReady = null, headerPromise = null, userId = null, courseId = null } = {}
 ) {
   let lastError = null;
   const lessonStart = Date.now();
@@ -1564,7 +1656,7 @@ async function generateLessonCode(
         console.log(`  [code L${lesson.lessonNumber}] Reusing validated header from a previous attempt (prior failure was not header-stage).`);
         header = reusableHeader;
       } else {
-        header = await generateLessonHeader(lesson, scenePlan);
+        header = await generateLessonHeader(lesson, scenePlan, undefined, { userId, courseId });
       }
       reusableHeader = header;
       const headerAvailableNames = getHeaderExposedNames(header);
@@ -1575,7 +1667,7 @@ async function generateLessonCode(
       await Promise.allSettled(
         scenePlan.map((_, i) =>
           scenePromises[i].then((measuredScene) =>
-            generateSceneCode(lesson, measuredScene, i, scenePlan.length, header, headerAvailableNames, componentName, SCENE_MAX_ATTEMPTS_PER_LESSON).then((code) => {
+            generateSceneCode(lesson, measuredScene, i, scenePlan.length, header, headerAvailableNames, componentName, SCENE_MAX_ATTEMPTS_PER_LESSON, { userId, courseId }).then((code) => {
               sceneCodes[i] = code;
               sceneErrors[i] = null;
 
@@ -1739,7 +1831,7 @@ ${sceneTable}
 `;
 }
 
-async function generateAdCode(ad, componentName, scenes, totalFrames, maxAttempts = 3) {
+async function generateAdCode(ad, componentName, scenes, totalFrames, maxAttempts = 3, { userId = null, adId = null } = {}) {
   return withRetries("ad-code", maxAttempts, async ({ attempt, feedback }) => {
     console.log(`  [ad-code] Attempt ${attempt}/${maxAttempts} for ${componentName}...`);
 
@@ -1754,6 +1846,18 @@ async function generateAdCode(ad, componentName, scenes, totalFrames, maxAttempt
       maxOutputTokens: AD_CODE_PROVIDER.maxTokens,
     });
     logUsage("ad-code", usage);
+    if (usage) {
+      recordAiUsage({
+        kind: "ad-code",
+        provider: AD_CODE_PROVIDER.providerName,
+        model: AD_CODE_PROVIDER.model,
+        userId,
+        adId,
+        promptTokens: usage.prompt_tokens,
+        completionTokens: usage.completion_tokens,
+        cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      });
+    }
 
     try {
       if (stopReason === "length") {
@@ -1801,16 +1905,19 @@ module.exports = {
   // not GLM — see the "DEEPSEEK" comment block above SCENE_PLAN_PROVIDER.
   DEEPSEEK_SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
-  // Z.ai concurrency limiter (serialized to 1) — remedial/next-course
-  // generation (still GLM) uses this for its Z.ai-direct calls. Lesson header
-  // and per-scene code generation use their own separate
+  // GLM concurrency limiter (serialized to 1) — remedial/next-course
+  // generation (still GLM, via OpenRouter) uses this. Lesson header and
+  // per-scene code generation use their own separate
   // limitLessonHeaderCall/limitLessonSceneCall, internal to this file only.
   limitZaiCall,
-  // DeepSeek's own shared account-wide concurrency pool — sceneService.js's
-  // generateScenePlan AND levelAssessmentService.js's pre-course level check
-  // both hit DeepSeek directly and import this same limiter so their traffic
-  // is coordinated against one account cap, exactly like limitZaiCall above.
+  // Shared concurrency pool for every OpenRouter-routed DeepSeek call —
+  // sceneService.js's generateScenePlan AND levelAssessmentService.js's
+  // pre-course level check both import this same limiter so their traffic is
+  // coordinated against one pool, exactly like limitZaiCall above.
   limitDeepSeekCall,
+  // levelAssessmentService.js's own DeepSeek calls route through this same
+  // OpenRouter client rather than instantiating a second one.
+  openRouterClient,
   describeError,
   isNonRetryable,
   backoffDelay,

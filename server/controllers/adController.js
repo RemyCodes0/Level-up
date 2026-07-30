@@ -50,14 +50,14 @@ async function processAd(adId) {
     // 1) Script
     ad.status = "planning";
     await ad.save();
-    const planned = await generateAdPlan(ad);
+    const planned = await generateAdPlan(ad, { userId: ad.userId, adId });
     console.log(`[ad ${adId}] planned ${planned.length} scenes`);
 
     // 2) Voiceover — TTS reads scene.narration / scene.id
     ad.status = "generating";
     await ad.save();
     const forTts = planned.map((s, i) => ({ id: i + 1, narration: s.script }));
-    const { scenes: measured, totalFrames } = await generateAllSceneAudio(forTts);
+    const { scenes: measured, totalFrames } = await generateAllSceneAudio(forTts, null, { userId: ad.userId, adId });
 
     // Merge measured audio back with the creative fields.
     const scenes = planned.map((s, i) => ({
@@ -70,7 +70,7 @@ async function processAd(adId) {
     }));
 
     // 3) Animation code
-    const code = await generateAdCode(ad, "AdComposition", scenes, totalFrames);
+    const code = await generateAdCode(ad, "AdComposition", scenes, totalFrames, 3, { userId: ad.userId, adId });
 
     ad.scenes = scenes;
     ad.totalFrames = totalFrames;

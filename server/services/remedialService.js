@@ -85,7 +85,7 @@ async function maybeTriggerRemedial(roomId) {
       `[remedial] Room ${roomId}: generating remedial lesson for weakest group topic "${weakest.topic}" (avg ${weakest.avgPct}%)`
     );
 
-    const plan = await generateRemedialLessonPlan(course.topic, weakest.topic, weakest.avgPct);
+    const plan = await generateRemedialLessonPlan(course.topic, weakest.topic, weakest.avgPct, 3, { userId: course.userId, courseId: course._id });
     const lessonNumber = course.lessons.length + 1;
 
     // buildLesson only ever $sets fields on an EXISTING lessons[] slot — it
@@ -110,7 +110,7 @@ async function maybeTriggerRemedial(roomId) {
       title: plan.title,
       description: plan.description,
       keyPoints: plan.keyPoints,
-    });
+    }, course.userId);
 
     console.log(`[remedial] Room ${roomId}: remedial lesson ${lessonNumber} ready`);
   } catch (err) {

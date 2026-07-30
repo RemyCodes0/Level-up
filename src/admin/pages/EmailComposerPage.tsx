@@ -13,7 +13,7 @@ type Job = {
 const API = import.meta.env.VITE_API_URL;
 const PREVIEW_NAME = "Alex"; // sample value for {{name}} in the preview
 
-export default function EmailComposer() {
+export default function EmailComposerPage() {
   const token = localStorage.getItem("token");
   const auth = { headers: { Authorization: `Bearer ${token}` } };
 

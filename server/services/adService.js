@@ -1,5 +1,7 @@
 const Anthropic = require("@anthropic-ai/sdk");
+const { recordAiUsage } = require("./aiUsageService");
 
+const AD_PLAN_MODEL = "claude-haiku-4-5-20251001";
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Best-effort fetch of a product website's visible text to ground the script.
@@ -32,7 +34,7 @@ function sceneCountFor(durationTarget) {
 }
 
 // Produce the ad script as ordered scenes. Returns [{ role, script, onScreenText, visualDescription }].
-async function generateAdPlan(ad) {
+async function generateAdPlan(ad, { userId = null, adId = null } = {}) {
   const websiteText = await fetchWebsiteText(ad.websiteUrl);
   const count = sceneCountFor(ad.durationTarget || 30);
 
@@ -63,10 +65,23 @@ Return ${count} scenes. Rules:
 ${schema}`;
 
   const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+    model: AD_PLAN_MODEL,
     max_tokens: 4000,
     messages: [{ role: "user", content: prompt }],
   });
+
+  if (message.usage) {
+    recordAiUsage({
+      kind: "ad-plan",
+      provider: "claude",
+      model: AD_PLAN_MODEL,
+      userId,
+      adId,
+      promptTokens: message.usage.input_tokens || 0,
+      completionTokens: message.usage.output_tokens || 0,
+      cachedTokens: message.usage.cache_read_input_tokens || 0,
+    });
+  }
 
   const text = message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
 
