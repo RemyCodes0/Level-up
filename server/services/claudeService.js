@@ -866,10 +866,11 @@ CODE QUALITY:
 - Every helper you declare should be genuinely reusable across scenes — this is the entire point of this file existing separately from scene code.
 - Never leave a "TODO" or placeholder — every const/component you declare must be complete, working code a scene could use immediately.
 
-WORKED EXAMPLE — copy the PATTERNS, not the picture. Your own palette/motif must come from YOUR lesson's subject, not this example's colors:
+WORKED EXAMPLE — copy the PATTERNS, not the picture. Your own palette/motif must come from YOUR lesson's subject, not this example's colors. This is adapted from a real lesson (on QR codes) that came out particularly well — the Motif below is the exact reason: it's not a generic shape, it's built from the subject itself (a QR code's own grid of modules), which is what made every scene in that lesson feel like one designed piece instead of unrelated clips:
 
 \`\`\`tsx
-import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio } from "remotion";
+import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio, random } from "remotion";
+import { useMemo } from "react";
 
 const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
 const FRAME = { w: 1920, h: 1080 };
@@ -877,28 +878,68 @@ const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
 const clampPos = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 const PALETTE = {
-  bg: "#0a0a1a",
-  accent: "#f59e0b",
-  support: "#60a5fa",
+  bg: "#0f1923",
+  moduleDark: "#111111",
+  moduleLight: "#f0f0f0",
+  accent: "#2196f3",
   text: "#eaf0ff",
 };
 
-// LESSON MOTIF: a soft moving gradient wash in the lesson palette, reused as
-// the base layer of every scene so the course reads as one piece. Mood
-// motion only — it supports atmosphere, it is not the "content".
+// LESSON MOTIF: a grid of small squares — this IS a QR code's own structure,
+// not a decorative stand-in for one. Deriving the motif directly from the
+// subject like this (not "a generic grid," THIS subject's actual grid) is
+// the single biggest lever for a lesson not looking like every other lesson.
+// random() with a fixed seed per cell keeps the pattern stable across
+// re-renders instead of flickering every frame. Continuous slow rotation
+// keeps it alive as a background layer without distracting from Layer 2.
+function Motif({ columns = 24, rows = 24, cellSize = 12, opacity = 0.15 }: {
+  columns?: number; rows?: number; cellSize?: number; opacity?: number;
+}) {
+  const frame = useCurrentFrame();
+  const cells = useMemo(() => {
+    const arr = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < columns; c++) {
+        arr.push({ r, c, isDark: random("motif-" + r + "-" + c) > 0.5 });
+      }
+    }
+    return arr;
+  }, [rows, columns]);
+  const angle = Math.sin(frame / 120) * 5; // slow, perpetual — never stops
+
+  return (
+    <AbsoluteFill style={{ opacity, pointerEvents: "none" }}>
+      <svg width={FRAME.w} height={FRAME.h} style={{ position: "absolute", top: 0, left: 0 }}>
+        <g transform={"translate(960, 540) rotate(" + angle + ")"}>
+          {cells.map((cell) => (
+            <rect
+              key={cell.r * columns + cell.c}
+              x={cell.c * cellSize - (columns * cellSize) / 2}
+              y={cell.r * cellSize - (rows * cellSize) / 2}
+              width={cellSize} height={cellSize}
+              fill={cell.isDark ? PALETTE.moduleDark : PALETTE.moduleLight}
+            />
+          ))}
+        </g>
+      </svg>
+    </AbsoluteFill>
+  );
+}
+
+// LESSON BACKDROP: a soft moving gradient wash beneath the Motif — mood
+// motion only, it supports atmosphere, it is not the "content".
 function Backdrop() {
   const frame = useCurrentFrame();
-  const shift = 45 + Math.sin(frame / 60) * 10; // slow, calm — matches a calm subject's tone
+  const shift = clampPos(45 + Math.sin(frame / 90) * 8, 30, 60);
   return (
     <AbsoluteFill style={{ background: "radial-gradient(circle at 50% " + shift + "%, " + PALETTE.bg + ", #05060f 70%)" }} />
   );
 }
 
 // SHARED TEXT HELPER: every scene's title/caption goes through this instead
-// of hand-rolling its own color/shadow — guarantees readable text over the
-// motif in every scene without each one re-deciding it. NO type annotation
-// on children — "React" is not imported/available here, so "React.ReactNode"
-// or any other "React.X" type crashes with "React is not defined".
+// of hand-rolling its own color/shadow. NO type annotation on children —
+// "React" is not imported/available here, so "React.ReactNode" or any other
+// "React.X" type crashes with "React is not defined".
 function Label({ children, size = 36 }) {
   return (
     <div style={{ color: PALETTE.text, fontSize: size, fontWeight: 700, textShadow: "0 2px 20px rgba(0,0,0,0.8)" }}>
@@ -997,56 +1038,98 @@ INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exception
 16. SVG elements (<circle>, <rect>, <line>, <path>, <text>, <g>, <polygon>, <polyline>) ONLY render inside an <svg> tag — placed directly under a <div> or <AbsoluteFill> they render NOTHING (no crash, no warning). Wrap any group of SVG primitives in its own <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}>...</svg>. The header's shared components are already self-contained — you can place THOSE anywhere.
 17. NEVER write comma-separated expressions directly inside JSX curly braces: {a, b} is invalid JSX.
 
-WORKED EXAMPLE — study how EVERY frame has motion, how the concept is illustrated, how layers work together. Your scene's actual visual must be invented from YOUR concept and the header's palette — do NOT reproduce this atom/electron look unless your topic genuinely is atomic structure. Note: CLAMP, SAFE, clampPos, and Backdrop are NOT redeclared here — they come from the header, exactly like yours will.
+WORKED EXAMPLE — adapted from a scene in that same real, proven-good QR-code lesson (study how the mechanism is staged in clear beats, how EVERY frame still has motion including the last one, how layers work together). Your scene's actual visual must be invented from YOUR concept and the header's palette — do NOT reproduce this QR-decoding look unless your topic genuinely is QR codes/data encoding. Note: CLAMP, SAFE, clampPos, PALETTE, Motif, Backdrop, and Label are NOT redeclared here — they come from the header, exactly like yours will.
 
 \`\`\`tsx
-// (CLAMP, SAFE, clampPos, PALETTE, Backdrop, Label already exist — from the header, not redeclared here)
+// (CLAMP, SAFE, clampPos, PALETTE, Motif, Backdrop, Label already exist — from the header, not redeclared here)
 
-function AtomScene() {
+// Mechanism for this scene: starts as a plain grid of modules with nothing
+// selected; ends with three bytes fully decoded into glowing characters on
+// the right. The driver — a selection window sweeping onto each byte in
+// turn, an arrow tracing to the decoded result — IS the thing rule 9 asks
+// for: a concrete, watchable transformation, not a static diagram with a
+// caption bolted on.
+function DecodingScene() {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  // Entrance: nucleus springs in
-  const nucleusScale = spring({ frame, fps, config: { damping: 10, stiffness: 80 } });
-  // Continuous: nucleus pulses with sine wave — motion never stops (rule 8)
-  const pulse = 1 + Math.sin(frame / 12) * 0.08;
-  const labelOpacity = interpolate(frame, [20, 50], [0, 1], CLAMP);
+  const cols = 6, rows = 5, cell = 22;
+  const gridLeft = 300, gridTop = 380;
+
+  const modules = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      modules.push({ r, c, isDark: ((r * cols + c) % 3) === 0 });
+    }
+  }
+
+  const bytes = [
+    { col: 0, char: "h", start: 20 },
+    { col: 2, char: "t", start: 80 },
+    { col: 4, char: "p", start: 140 },
+  ];
 
   // Local helper NESTED inside the scene function — never a second
   // top-level declaration (rule 1).
-  function OrbitingParticle({ radius, speed, size, color }: { radius: number; speed: number; size: number; color: string }) {
-    const angle = (frame * speed * Math.PI) / 180;
-    const x = clampPos(960 + Math.cos(angle) * radius, SAFE.xMin, SAFE.xMax);
-    const y = clampPos(540 + Math.sin(angle) * radius, SAFE.yMin, SAFE.yMax);
+  function DecodedByte({ col, char, start }: { col: number; char: string; start: number }) {
+    const selX = gridLeft + col * cell;
+    const selProgress = interpolate(frame - start, [0, 25], [0, 1], CLAMP);
+    const arrowProgress = interpolate(frame - start, [25, 55], [0, 1], CLAMP);
+    const charScale = spring({ frame: frame - start - 55, fps, config: { damping: 12, stiffness: 90 } });
+    // Continuous even after arrival — motion never stops (rule 8).
+    const glow = 20 + Math.sin(frame / 10 + col) * 8;
+
     return (
-      <div style={{
-        position: "absolute", left: x - size / 2, top: y - size / 2,
-        width: size, height: size, borderRadius: "50%", backgroundColor: color,
-        boxShadow: "0 0 " + (size * 1.5) + "px " + color,
-      }} />
+      <>
+        <svg style={{ position: "absolute", left: 0, top: 0, width: 1920, height: 1080, pointerEvents: "none", overflow: "visible" }}>
+          <rect
+            x={clampPos(selX, SAFE.xMin, SAFE.xMax)} y={clampPos(gridTop, SAFE.yMin, SAFE.yMax)}
+            width={cell * selProgress} height={cell * 2}
+            fill="none" stroke={PALETTE.accent} strokeWidth={2} strokeDasharray="6 4"
+          />
+          {arrowProgress > 0 && (
+            <line
+              x1={clampPos(selX + cell, SAFE.xMin, SAFE.xMax)} y1={clampPos(gridTop + cell, SAFE.yMin, SAFE.yMax)}
+              x2={clampPos(1300, SAFE.xMin, SAFE.xMax)} y2={clampPos(460 + col * 60, SAFE.yMin, SAFE.yMax)}
+              stroke={PALETTE.accent} strokeWidth={2} strokeDasharray="6 4" opacity={arrowProgress}
+            />
+          )}
+        </svg>
+        <div style={{
+          position: "absolute",
+          left: clampPos(1300, SAFE.xMin, SAFE.xMax - 40), top: clampPos(430 + col * 60, SAFE.yMin, SAFE.yMax - 60),
+          color: PALETTE.text, fontSize: 42, fontWeight: 700, fontFamily: "monospace",
+          transform: "scale(" + Math.max(0, charScale) + ")",
+          textShadow: "0 0 " + glow + "px " + PALETTE.accent,
+        }}>{char}</div>
+      </>
     );
   }
 
   return (
-    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
+    <AbsoluteFill>
       <Backdrop />
-      {/* Layer 2: the concept — nucleus + orbiting electrons, all in motion */}
-      <div style={{
-        width: 80, height: 80, borderRadius: "50%", backgroundColor: PALETTE.accent,
-        transform: "scale(" + (nucleusScale * pulse) + ")",
-        boxShadow: "0 0 40px " + PALETTE.accent + ", 0 0 80px " + PALETTE.accent + "55",
-      }} />
-      <OrbitingParticle radius={120} speed={2.4} size={20} color={PALETTE.support} />
-      <OrbitingParticle radius={180} speed={1.6} size={16} color={PALETTE.support} />
+      <Motif opacity={0.1} />
+      {/* Layer 2: the concept — the grid being decoded byte by byte */}
+      <svg style={{ position: "absolute", left: 0, top: 0, width: 1920, height: 1080, pointerEvents: "none", overflow: "visible" }}>
+        {modules.map((m) => (
+          <rect key={m.r * cols + m.c}
+            x={clampPos(gridLeft + m.c * cell, SAFE.xMin, SAFE.xMax)} y={clampPos(gridTop + m.r * cell, SAFE.yMin, SAFE.yMax)}
+            width={cell - 1} height={cell - 1}
+            fill={m.isDark ? PALETTE.moduleDark : PALETTE.moduleLight}
+          />
+        ))}
+      </svg>
+      {bytes.map((b) => <DecodedByte key={b.col} col={b.col} char={b.char} start={b.start} />)}
       {/* Layer 3: text, through the header's Label helper */}
-      <div style={{ position: "absolute", bottom: 180, opacity: labelOpacity, letterSpacing: 2 }}>
-        <Label size={36}>Electrons orbit the nucleus</Label>
+      <div style={{ position: "absolute", bottom: 160, opacity: interpolate(frame, [0, 25], [0, 1], CLAMP), width: "100%", textAlign: "center" }}>
+        <Label size={36}>Each byte decodes into one character</Label>
       </div>
     </AbsoluteFill>
   );
 }
 \`\`\`
 
-Every element above has motion on EVERY frame — the nucleus pulses, electrons orbit at different speeds. There is no static frame. Reference PALETTE/Backdrop/Label/CLAMP/SAFE/clampPos by name exactly as the header declares them; build this scene's OWN concept to this same standard.
+Three bytes decode in a staggered sequence (rule: shift the VALUE argument for staggering, never put the index inside the array), and every decoded character keeps a soft pulsing glow afterward — nothing goes fully static once its beat is done. Reference PALETTE/Motif/Backdrop/Label/CLAMP/SAFE/clampPos by name exactly as the header declares them; build this scene's OWN concept to this same standard.
 
 Your entire response is the scene's code, first characters "function", no text or fences around it.
 `;
