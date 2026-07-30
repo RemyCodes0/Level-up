@@ -14,9 +14,56 @@ const GenerationLog = require("../models/GenerationLog");
 const User = require("../models/User");
 const QuizAttempt = require("../models/QuizAttempt");
 const { grantCredits } = require("../services/creditService");
+const sendEmail = require("../services/emailService");
 
 // Audio dir — for cleanup when a course is deleted
 const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+// Fires once whenever a course transitions into "all lessons built" — the
+// initial full build (1/3/6-lesson tiers alike) and the free-trial
+// unlock-the-rest flow both count. Never throws — a failed notification
+// should never surface as a course-generation error.
+async function sendCourseReadyEmail(courseId, userId) {
+  if (!userId) return;
+  try {
+    const [course, user] = await Promise.all([
+      Course.findById(courseId).select("topic lessonCount"),
+      User.findById(userId).select("email name"),
+    ]);
+    if (!course || !user?.email) return;
+
+    const title = course.topic || "Your course";
+    const lessonWord = course.lessonCount === 1 ? "lesson" : "lessons";
+    const courseUrl = `${process.env.CLIENT_URL}/ai_tutor/${courseId}`;
+
+    await sendEmail({
+      to: user.email,
+      subject: `"${title}" is ready to watch`,
+      text: `Hi ${user.name || ""},\n\nAll ${course.lessonCount || ""} ${lessonWord} of "${title}" have finished generating and are ready to watch.\n\n${courseUrl}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
+          <h2 style="color: #1e293b; margin-bottom: 8px;">Your course is ready!</h2>
+          <p style="color: #475569; font-size: 15px; line-height: 1.6;">
+            Hi ${escapeHtml(user.name || "")}, all ${course.lessonCount || ""} ${lessonWord} of
+            <strong>${escapeHtml(title)}</strong> have finished generating.
+          </p>
+          <a href="${courseUrl}"
+             style="display: inline-block; margin: 24px 0; padding: 12px 28px; background: linear-gradient(135deg, #3b82f6, #6366f1); color: #fff; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 15px;">
+            Watch it now
+          </a>
+        </div>
+      `,
+    });
+  } catch (err) {
+    console.error(`[${courseId}] Failed to send course-ready email:`, err.message);
+  }
+}
 
 // ── Entry point: client calls this to start course generation ────────────────
 async function generateCourseHandler(req, res) {
@@ -387,6 +434,7 @@ async function processCourse(
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
     const totalMin = ((Date.now() - courseStart) / 60000).toFixed(1);
     console.log(`[${courseId}] Course fully ready — took ${totalMin} min total.`);
+    sendCourseReadyEmail(courseId, userId);
   } catch (err) {
     const totalMin = ((Date.now() - courseStart) / 60000).toFixed(1);
     console.error(`[${courseId}] Course processing failed after ${totalMin} min:`, err);
@@ -897,6 +945,7 @@ async function unlockRemainingLessonsHandler(req, res) {
 
     buildLessonsConcurrently(courseId, lessonsToBuild, req.user._id)
       .then(() => Course.findByIdAndUpdate(courseId, { status: "ready" }))
+      .then(() => sendCourseReadyEmail(courseId, req.user._id))
       .catch((err) => {
         console.error(`[${courseId}] Unlock build failed:`, err.message);
       });

@@ -857,6 +857,14 @@ FRAME-BOUNDARY SAFETY — every scene will rely on these exact consts, define th
     const clampPos = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 If this lesson's subject involves direction, vectors, forces, or angles (physics, math, engineering, navigation), also build shared Arrow({from,to,color,width}) and AngleArc({vertex,angle1,angle2,radius,color}) helpers here, computing direction with Math.atan2(dy,dx) — so every scene reuses the SAME correct geometry instead of each one re-deriving it.
 
+LAYOUT ZONES — copy this EXACT const, verbatim, unchanged. Do not compute your own title/caption/stage coordinates — that per-scene guesswork is exactly what makes some scenes feel "off," a label drifting into a diagram, a caption sitting at a different height than the last scene's. Every scene anchors its content to these THREE fixed zones instead:
+    const ZONES = {
+      title:   { x: 120, y: 120, w: 1680, h: 130, cx: 960 },
+      stage:   { x: 120, y: 270, w: 1680, h: 580, cx: 960, cy: 560 },
+      caption: { x: 120, y: 870, w: 1680, h: 90,  cx: 960 },
+    };
+title = the headline/title band (top). stage = the main Layer-2 diagram's working area (middle — generous, not a cage: a scene's diagram can use any internal geometry it needs, but its overall footprint should stay inside this box so it never collides with title/caption). caption = the onScreenText band (bottom). Scenes reference ZONES.title/.stage/.caption by name — never redeclare this object or invent alternate zone numbers.
+
 SHARED TEXT + FRAMING HELPERS — every scene renders on-screen text, so build these ONCE here instead of leaving each scene to reinvent its own text styling:
   • Label({ children, size }): a text component using PALETTE.text with a strong textShadow (e.g. "0 2px 20px rgba(0,0,0,0.8)") baked in, so text is always readable over the motif regardless of what's behind it. Scenes pass their own position/animation but never redefine the color/shadow.
   • Panel({ children, width, height }) OR Glow({ color, size }) — pick whichever suits the subject better: a soft rounded backdrop card (for grounding text/diagrams over a busy motif) or an ambient glow/particle wisp (for a more atmospheric subject). One small reusable "polish" piece scenes can drop in rather than each hand-rolling its own.
@@ -876,6 +884,12 @@ const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
 const FRAME = { w: 1920, h: 1080 };
 const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
 const clampPos = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+const ZONES = {
+  title:   { x: 120, y: 120, w: 1680, h: 130, cx: 960 },
+  stage:   { x: 120, y: 270, w: 1680, h: 580, cx: 960, cy: 560 },
+  caption: { x: 120, y: 870, w: 1680, h: 90,  cx: 960 },
+};
 
 const PALETTE = {
   bg: "#0f1923",
@@ -949,7 +963,7 @@ function Label({ children, size = 36 }) {
 }
 \`\`\`
 
-Begin with imports, then CLAMP/FRAME/SAFE/clampPos, then your palette const, then your shared helper components. Your entire response is the code file, first characters "import", no text or fences around it.
+Begin with imports, then CLAMP/FRAME/SAFE/clampPos, then ZONES (verbatim, as given above), then your palette const, then your shared helper components. Your entire response is the code file, first characters "import", no text or fences around it.
 `;
 
 // ── Header user-content builder ──────────────────────────────────────────────
@@ -1001,10 +1015,10 @@ The user is paying for animated video lessons. If the animation is generic, stat
 
 9. ILLUSTRATE THE EXACT CONCEPT — not generic particles. You are given this scene's mechanism (the state it starts in, the state it ends in, and the visible action that drives that change) — build exactly that transformation. A scene where the end state looks the same as the start state has failed regardless of how much motion is on screen. If the concept is DNA replication, show the double helix unwinding with individual base pairs. If it's sorting algorithms, show actual elements moving into order. The animation must make the concept VISIBLE — a viewer with no prior knowledge should understand it from the visuals alone, without reading the text.
 
-10. THREE MANDATORY LAYERS — all three must exist in this scene:
+10. THREE MANDATORY LAYERS — all three must exist in this scene, each anchored to its fixed ZONE from the header (never hand-picked coordinates — that per-scene guesswork is exactly what makes some scenes feel visually "off" relative to the others):
    - Layer 1 (background): the header's Backdrop/motif (already continuously moving) as your base layer. If it isn't a full-screen wash, add one small ambient touch of your own (a couple of slow-drifting, low-opacity shapes).
-   - Layer 2 (concept): the main animated diagram — the thing that illustrates what this scene teaches. This is the star of the scene.
-   - Layer 3 (text): text that springs or fades in, positioned so it doesn't overlap layer 2.
+   - Layer 2 (concept): the main animated diagram, its overall footprint centered/sized to fit inside ZONES.stage — this is a generous working area, not a cage; use whatever internal geometry the concept needs, just keep the diagram's bounding footprint within this zone so it can never drift into the title or caption bands. This layer is the star of the scene.
+   - Layer 3 (text): the scene's title (if it has one) inside ZONES.title, and onScreenText inside ZONES.caption — springs or fades in, never overlapping Layer 2 because it lives in its own reserved band.
 
 11. RICHNESS REQUIREMENTS — this scene must have at least:
     - 3+ animated elements (not counting background particles)
@@ -1015,7 +1029,7 @@ The user is paying for animated video lessons. If the animation is generic, stat
 
     THIS IS ENFORCED, NOT A SUGGESTION: a scene consisting of only a title fading in over a plain background, with no shape/diagram illustrating the concept, WILL be rejected and regenerated. Every scene needs a real Layer 2 diagram — text alone is never sufficient, no matter how well-animated the text itself is.
 
-VISUAL CONTINUITY: reuse the header's palette/motif/helpers by NAME — never invent your own colors or redeclare a name the header already declares. Render Layer 3 text through the header's Label helper (not a hand-styled <div>), and use the header's Panel/Glow helper wherever this scene would otherwise hand-roll a text backing or ambient touch. This is what makes 12+ independently-generated scenes read as one designed lesson instead of unrelated clips.
+VISUAL CONTINUITY: reuse the header's palette/motif/helpers by NAME — never invent your own colors or redeclare a name the header already declares. Render Layer 3 text through the header's Label helper (not a hand-styled <div>), and use the header's Panel/Glow helper wherever this scene would otherwise hand-roll a text backing or ambient touch. Position that text using ZONES.title/ZONES.caption, and center Layer 2 on ZONES.stage — reusing the SAME zones every other scene in this lesson reuses is what makes 12+ independently-generated scenes read as one designed lesson instead of unrelated clips, each with its content sitting at a slightly different height.
 
 INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
 12. interpolate() ALWAYS needs exactly 3 arguments: interpolate(value, [in...], [out...]).
@@ -1038,22 +1052,27 @@ INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exception
 16. SVG elements (<circle>, <rect>, <line>, <path>, <text>, <g>, <polygon>, <polyline>) ONLY render inside an <svg> tag — placed directly under a <div> or <AbsoluteFill> they render NOTHING (no crash, no warning). Wrap any group of SVG primitives in its own <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}>...</svg>. The header's shared components are already self-contained — you can place THOSE anywhere.
 17. NEVER write comma-separated expressions directly inside JSX curly braces: {a, b} is invalid JSX.
 
-WORKED EXAMPLE — adapted from a scene in that same real, proven-good QR-code lesson (study how the mechanism is staged in clear beats, how EVERY frame still has motion including the last one, how layers work together). Your scene's actual visual must be invented from YOUR concept and the header's palette — do NOT reproduce this QR-decoding look unless your topic genuinely is QR codes/data encoding. Note: CLAMP, SAFE, clampPos, PALETTE, Motif, Backdrop, and Label are NOT redeclared here — they come from the header, exactly like yours will.
+WORKED EXAMPLE — adapted from a scene in that same real, proven-good QR-code lesson (study how the mechanism is staged in clear beats, how EVERY frame still has motion including the last one, how layers work together, and how positions come from ZONES instead of hand-picked numbers). Your scene's actual visual must be invented from YOUR concept and the header's palette — do NOT reproduce this QR-decoding look unless your topic genuinely is QR codes/data encoding. Note: CLAMP, SAFE, clampPos, ZONES, PALETTE, Motif, Backdrop, and Label are NOT redeclared here — they come from the header, exactly like yours will.
 
 \`\`\`tsx
-// (CLAMP, SAFE, clampPos, PALETTE, Motif, Backdrop, Label already exist — from the header, not redeclared here)
+// (CLAMP, SAFE, clampPos, ZONES, PALETTE, Motif, Backdrop, Label already exist — from the header, not redeclared here)
 
 // Mechanism for this scene: starts as a plain grid of modules with nothing
 // selected; ends with three bytes fully decoded into glowing characters on
 // the right. The driver — a selection window sweeping onto each byte in
 // turn, an arrow tracing to the decoded result — IS the thing rule 9 asks
 // for: a concrete, watchable transformation, not a static diagram with a
-// caption bolted on.
+// caption bolted on. Both halves of the diagram are positioned relative to
+// ZONES.stage, not hand-picked numbers — so this diagram can never drift
+// into the title/caption bands, and every other scene in this lesson anchors
+// to the exact same box.
 function DecodingScene() {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const cols = 6, rows = 5, cell = 22;
-  const gridLeft = 300, gridTop = 380;
+  const gridLeft = ZONES.stage.x + 40, gridTop = ZONES.stage.y + 60;
+  const charX = ZONES.stage.x + ZONES.stage.w - 380;
+  const charBaseY = ZONES.stage.y + 140;
 
   const modules = [];
   for (let r = 0; r < rows; r++) {
@@ -1077,6 +1096,7 @@ function DecodingScene() {
     const charScale = spring({ frame: frame - start - 55, fps, config: { damping: 12, stiffness: 90 } });
     // Continuous even after arrival — motion never stops (rule 8).
     const glow = 20 + Math.sin(frame / 10 + col) * 8;
+    const charY = charBaseY + col * 60;
 
     return (
       <>
@@ -1089,14 +1109,14 @@ function DecodingScene() {
           {arrowProgress > 0 && (
             <line
               x1={clampPos(selX + cell, SAFE.xMin, SAFE.xMax)} y1={clampPos(gridTop + cell, SAFE.yMin, SAFE.yMax)}
-              x2={clampPos(1300, SAFE.xMin, SAFE.xMax)} y2={clampPos(460 + col * 60, SAFE.yMin, SAFE.yMax)}
+              x2={clampPos(charX, SAFE.xMin, SAFE.xMax)} y2={clampPos(charY, SAFE.yMin, SAFE.yMax)}
               stroke={PALETTE.accent} strokeWidth={2} strokeDasharray="6 4" opacity={arrowProgress}
             />
           )}
         </svg>
         <div style={{
           position: "absolute",
-          left: clampPos(1300, SAFE.xMin, SAFE.xMax - 40), top: clampPos(430 + col * 60, SAFE.yMin, SAFE.yMax - 60),
+          left: clampPos(charX, SAFE.xMin, SAFE.xMax - 40), top: clampPos(charY - 30, SAFE.yMin, SAFE.yMax - 60),
           color: PALETTE.text, fontSize: 42, fontWeight: 700, fontFamily: "monospace",
           transform: "scale(" + Math.max(0, charScale) + ")",
           textShadow: "0 0 " + glow + "px " + PALETTE.accent,
@@ -1109,7 +1129,7 @@ function DecodingScene() {
     <AbsoluteFill>
       <Backdrop />
       <Motif opacity={0.1} />
-      {/* Layer 2: the concept — the grid being decoded byte by byte */}
+      {/* Layer 2: the concept — the grid being decoded byte by byte, footprint inside ZONES.stage */}
       <svg style={{ position: "absolute", left: 0, top: 0, width: 1920, height: 1080, pointerEvents: "none", overflow: "visible" }}>
         {modules.map((m) => (
           <rect key={m.r * cols + m.c}
@@ -1120,8 +1140,8 @@ function DecodingScene() {
         ))}
       </svg>
       {bytes.map((b) => <DecodedByte key={b.col} col={b.col} char={b.char} start={b.start} />)}
-      {/* Layer 3: text, through the header's Label helper */}
-      <div style={{ position: "absolute", bottom: 160, opacity: interpolate(frame, [0, 25], [0, 1], CLAMP), width: "100%", textAlign: "center" }}>
+      {/* Layer 3: text, through the header's Label helper, anchored to ZONES.caption */}
+      <div style={{ position: "absolute", left: 0, top: clampPos(ZONES.caption.y, SAFE.yMin, SAFE.yMax), width: "100%", textAlign: "center", opacity: interpolate(frame, [0, 25], [0, 1], CLAMP) }}>
         <Label size={36}>Each byte decodes into one character</Label>
       </div>
     </AbsoluteFill>
@@ -1129,7 +1149,7 @@ function DecodingScene() {
 }
 \`\`\`
 
-Three bytes decode in a staggered sequence (rule: shift the VALUE argument for staggering, never put the index inside the array), and every decoded character keeps a soft pulsing glow afterward — nothing goes fully static once its beat is done. Reference PALETTE/Motif/Backdrop/Label/CLAMP/SAFE/clampPos by name exactly as the header declares them; build this scene's OWN concept to this same standard.
+Three bytes decode in a staggered sequence (rule: shift the VALUE argument for staggering, never put the index inside the array), and every decoded character keeps a soft pulsing glow afterward — nothing goes fully static once its beat is done. Reference PALETTE/Motif/Backdrop/Label/CLAMP/SAFE/clampPos/ZONES by name exactly as the header declares them; build this scene's OWN concept to this same standard.
 
 Your entire response is the scene's code, first characters "function", no text or fences around it.
 `;
