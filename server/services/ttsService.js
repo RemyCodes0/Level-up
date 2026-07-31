@@ -189,7 +189,21 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
       // Chunks are independent TTS calls — fire them in parallel (order of
       // the REQUESTS doesn't matter, only the order they're concatenated in
       // afterward, which this preserves via .map's index-preserving results).
-      const chunkResults = await Promise.all(chunks.map((chunk) => generateChunkAudio(chunk)));
+      //
+      // Promise.allSettled, not Promise.all: with several chunk calls in
+      // flight, Promise.all only attaches its own rejection handling to
+      // whichever settles first — if a SECOND chunk also rejects after the
+      // first rejection already resolved the Promise.all, that second
+      // rejection has no handler left anywhere and crashes the whole Node
+      // process with an unhandled rejection (a real incident: a transient
+      // network blip during TTS took down every course building
+      // concurrently, not just the one scene that failed). allSettled
+      // attaches its own handler to EVERY promise regardless of order, so
+      // this can't happen — the retry/throw behavior below is unchanged.
+      const settledChunks = await Promise.allSettled(chunks.map((chunk) => generateChunkAudio(chunk)));
+      const firstRejected = settledChunks.find((s) => s.status === "rejected");
+      if (firstRejected) throw firstRejected.reason;
+      const chunkResults = settledChunks.map((s) => s.value);
       const totalChars = chunks.reduce((sum, c) => sum + c.length, 0);
       recordAiUsage({
         kind: "tts",
@@ -325,6 +339,17 @@ function generateAllSceneAudioPipelined(scenes, onSceneAudioReady, context = {})
     console.log(`  [tts] Audio stage wall-clock: ${((Date.now() - stageStart) / 1000).toFixed(1)}s`);
     return { scenes: enriched, totalFrames };
   });
+  // Callers that pipeline scenePromises directly (buildLesson) never await
+  // donePromise at all — it exists only for generateAllSceneAudio's
+  // back-compat callers and its own logging side-effect above. A promise
+  // nobody ever awaits or attaches a handler to is a THIRD instance of the
+  // same crash this whole file just got fixed for: if even one scene's
+  // audio permanently fails, this Promise.all rejects with no handler
+  // anywhere, and Node kills the whole process. This no-op .catch() marks
+  // donePromise as "handled" for that purpose without affecting the
+  // rejection any real caller (generateAllSceneAudio) sees when THEY await
+  // the same donePromise reference below.
+  donePromise.catch(() => {});
 
   return { scenePromises, donePromise };
 }

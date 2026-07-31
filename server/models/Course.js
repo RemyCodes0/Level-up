@@ -19,10 +19,14 @@ const sceneMetaSchema = new mongoose.Schema(
 // still generating — powers a passive progress filmstrip (real thumbnails
 // appearing in order, no playback) shown before the lesson is ready. Created
 // right after the scene plan resolves (index/label known immediately;
-// durationInFrames/audioReady/codeReady/previewCode fill in as audio then
-// code generation actually complete for that scene). Distinct from
-// sceneMetaSchema above, which is for the FINAL ready lesson's replay
-// analytics — this is purely a mid-generation, disposable progress signal.
+// audioReady/durationInFrames fill in as each scene's audio finishes).
+// codeReady/previewCode are permanently unset: lesson code now generates in
+// ONE call for the whole lesson (see generateLessonCode in claudeService.js),
+// so there's no per-scene code-readiness moment to report mid-generation —
+// only audio progress is visible before the whole lesson lands at once.
+// Distinct from sceneMetaSchema above, which is for the FINAL ready lesson's
+// replay analytics — this is purely a mid-generation, disposable progress
+// signal.
 const sceneProgressSchema = new mongoose.Schema(
   {
     index: Number,

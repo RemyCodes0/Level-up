@@ -1291,10 +1291,119 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
   return code;
 }
 
+// Validates a CHUNK of several scenes generated in one call — identical to
+// validateSceneFragment in every check except the declared-name assertion,
+// which requires all of expectedSceneNames to be present (extra top-level
+// declarations, e.g. a shared data object a later chunk needs to see, are
+// allowed — see the check itself for why) instead of exactly one single
+// name. Every other check below already operates over the whole AST
+// regardless of how many top-level declarations exist, so nothing else
+// changes. `availableNames` should already include the header's exposed
+// names AND every prior chunk's declared names (getHeaderExposedNames is
+// generic — it just parses code and returns its imports + top-level
+// declarations, despite the name — so it works for prior chunk code too).
+function validateChunkFragment(code, expectedSceneNames, { availableNames = [] } = {}) {
+  checkBalancedBraces(code);
+  checkBalancedParens(code);
+  checkHasReturn(code);
+
+  for (const name of expectedSceneNames) {
+    if (!code.includes(`function ${name}`) && !code.includes(`const ${name}`)) {
+      throw new Error(
+        `Chunk is missing scene "${name}" — likely truncated, wrong name, or scenes out of order`
+      );
+    }
+  }
+
+  const ast = parseTsx(code, `Chunk (${expectedSceneNames.join(", ")}) code`);
+
+  checkNoExport(ast);
+  checkNoSeriesOrAudioUsage(ast);
+
+  const importErrors = checkImportRestriction(ast, []);
+  if (importErrors.length > 0) {
+    throw new Error(importErrors.join("\n"));
+  }
+
+  const interpolateErrors = checkInterpolateCalls(ast);
+  if (interpolateErrors.length > 0) {
+    throw new Error(`Invalid interpolate() usage in chunk:\n${interpolateErrors.join("\n")}`);
+  }
+
+  const springErrors = checkSpringFpsCalls(ast);
+  if (springErrors.length > 0) {
+    throw new Error(`Invalid spring() usage in chunk:\n${springErrors.join("\n")}`);
+  }
+
+  // Every requested scene must be declared. Extra top-level declarations ARE
+  // allowed (unlike validateSceneFragment's single-scene case) — a chunk may
+  // legitimately need to declare a shared data object (a graph, an array) as
+  // its own top-level const so LATER chunks can see it too (anything nested
+  // inside a scene's function body is local to that function and invisible
+  // outside it). The only thing NOT allowed is a stray Scene-numbered
+  // declaration that wasn't actually requested — that's a hallucinated or
+  // mislabeled scene, not shared data.
+  const declared = checkTopLevelDeclarationNames(ast);
+  const declaredNames = declared.map((d) => d.name);
+  const expectedSet = new Set(expectedSceneNames);
+
+  const missing = expectedSceneNames.filter((n) => !declaredNames.includes(n));
+  if (missing.length > 0) {
+    throw new Error(
+      `Chunk is missing scene(s) ${missing.join(", ")} (found top-level declarations: ${declaredNames.join(", ") || "none"})`
+    );
+  }
+
+  const strayScene = declaredNames.find((n) => /^Scene\d+$/.test(n) && !expectedSet.has(n));
+  if (strayScene) {
+    throw new Error(
+      `Chunk declares "${strayScene}", which was not one of the requested scenes (${expectedSceneNames.join(", ")}) — only write the exact scenes asked for.`
+    );
+  }
+
+  const undefinedRefs = checkNoUndefinedReferences(ast, new Set([...availableNames, ...JS_GLOBALS]));
+  if (undefinedRefs.length > 0) {
+    throw new Error(`Chunk references undefined identifier(s):\n${undefinedRefs.join("\n")}`);
+  }
+
+  const nonFunctionCalls = checkCalledNonFunctionConst(ast);
+  if (nonFunctionCalls.length > 0) {
+    throw new Error(`Chunk calls a non-function value:\n${nonFunctionCalls.join("\n")}`);
+  }
+
+  const calledComponents = checkCalledRemotionComponent(ast);
+  if (calledComponents.length > 0) {
+    throw new Error(`Chunk calls a Remotion component as a function:\n${calledComponents.join("\n")}`);
+  }
+
+  const usedBeforeDeclared = checkUsedBeforeDeclared(ast);
+  if (usedBeforeDeclared.length > 0) {
+    throw new Error(`Chunk has a temporal-dead-zone violation:\n${usedBeforeDeclared.join("\n")}`);
+  }
+
+  const badHookCalls = checkHooksCalledOutsideFunction(ast);
+  if (badHookCalls.length > 0) {
+    throw new Error(`Chunk calls a hook outside a function:\n${badHookCalls.join("\n")}`);
+  }
+
+  const arrowTargetErrors = checkArrowTargetsAreReferenced(ast);
+  if (arrowTargetErrors.length > 0) {
+    throw new Error(`Chunk has arrow(s) pointing at nothing:\n${arrowTargetErrors.join("\n")}`);
+  }
+
+  const svgContextErrors = checkSvgPrimitivesInHtmlContext(ast);
+  if (svgContextErrors.length > 0) {
+    throw new Error(`Chunk renders SVG element(s) where they cannot display:\n${svgContextErrors.join("\n")}`);
+  }
+
+  return code;
+}
+
 module.exports = {
   validateGeneratedCode,
   validateHeaderFragment,
   validateSceneFragment,
+  validateChunkFragment,
   getHeaderExposedNames,
   compactHeaderForPrompt,
 };

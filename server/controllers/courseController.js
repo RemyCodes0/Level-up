@@ -198,20 +198,20 @@ async function buildLesson(courseId, lesson, userId = null) {
       console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to initialize scene progress (non-fatal):`, progressInitErr.message);
     }
 
-    // Header generation only needs the scene DESCRIPTIONS (visualType/
-    // onScreenText/visualDescription) — never the measured audio durations —
-    // so there's no reason it has to wait behind the entire audio pipeline.
-    // Kick it off here, in parallel with audio, and hand the (probably-
-    // already-resolved-by-the-time-it's-needed) result to generateLessonCode
-    // below instead of letting it start its own header call from scratch.
-    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio + header + code (all overlapping)...`);
+    // Header generation only needs visualType/onScreenText/mechanism/
+    // visualDescription — never durationInFrames/audioUrl — so it doesn't
+    // actually need to wait for scene audio to finish measuring the way the
+    // scene-code chunks do. Kick it off now, concurrently with audio
+    // synthesis below, instead of after Stage 2 finishes; generateLessonCode
+    // picks up this promise for its first attempt (see headerPromise param).
+    // Attach a no-op .catch immediately so a header failure here doesn't
+    // surface as an unhandled rejection before it's actually awaited —
+    // generateLessonCode still sees (and handles) the real rejection when it
+    // awaits this same promise.
     headerPromise = generateLessonHeader(lesson, scenePlan, undefined, { userId, courseId });
-    // Attach a no-op handler immediately so a header failure here doesn't
-    // log as an unhandled rejection before generateLessonCode gets to await
-    // this same promise further down — the real error still surfaces
-    // normally there.
     headerPromise.catch(() => {});
 
+    console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: audio...`);
     ({ scenePromises } = generateAllSceneAudioPipelined(scenePlan, async (index, measuredScene) => {
       try {
         await Course.findByIdAndUpdate(courseId, {
@@ -240,6 +240,45 @@ async function buildLesson(courseId, lesson, userId = null) {
     return;
   }
 
+  // ── Stage 2: wait for every scene's audio ────────────────────────────────
+  // Single-call code generation needs the FULL scene table (every real
+  // duration + audio URL) up front — it writes the whole <Series> in one
+  // response, so it can't start on a partial scene table the way per-scene
+  // generation could. Awaited ONCE, outside the code-gen retry loop below
+  // (scenePromises never changes across retries — retrying can't fix a
+  // scene whose audio itself failed, so an audio failure here is terminal,
+  // not retried).
+  //
+  // Promise.allSettled, not Promise.all: with several scenePromises in
+  // flight, Promise.all only ever attaches its OWN rejection handling to
+  // "whichever settles first" — if a SECOND scene's audio also fails after
+  // the first rejection already resolved the Promise.all, that second
+  // rejection has no handler left anywhere and crashes the whole Node
+  // process with an unhandled rejection, taking down every other course
+  // building concurrently, not just this one. allSettled attaches its own
+  // handler to EVERY promise regardless of order, so this can't happen.
+  const settled = await Promise.allSettled(scenePromises);
+  const firstRejection = settled.find((s) => s.status === "rejected");
+  if (firstRejection) {
+    const err = firstRejection.reason;
+    const stage = err?.stage || "audio";
+    const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
+    console.error(
+      `[${courseId}] Lesson ${lesson.lessonNumber} failed at ${stage} stage (${elapsedMin} min elapsed): ${err?.message}`
+    );
+    await logAttempt({ status: "failed", stage, errorMessage: err?.message, attemptNumber: 1 });
+    await Course.findByIdAndUpdate(courseId, {
+      $set: {
+        [`lessons.${lesson.lessonNumber - 1}.status`]: "failed",
+        [`lessons.${lesson.lessonNumber - 1}.error`]: `Failed at ${stage}: ${err?.message}`,
+      },
+    });
+    return;
+  }
+
+  const measuredScenes = settled.map((s) => s.value);
+  const totalFrames = measuredScenes.reduce((sum, s) => sum + s.durationInFrames, 0);
+
   // ── Stage 3: code generation (already had its own retry loop) ──────────
   let lastError = null;
   let lastAttempt = 0;
@@ -256,52 +295,22 @@ async function buildLesson(courseId, lesson, userId = null) {
       }
 
       console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: code...`);
-      const { code: tsxCode, totalFrames } = await generateLessonCode(
+      // headerPromise only passed on this outer loop's first attempt — a
+      // retry here means Stage 3 already failed once, so a fresh header is
+      // generated the normal way (matches generateLessonCode's own internal
+      // "only attempt 1" rule for the same promise).
+      const { code: tsxCode } = await generateLessonCode(
         lesson,
         componentName,
-        scenePlan,
-        scenePromises,
+        measuredScenes,
+        totalFrames,
         undefined,
-        {
-          // Reuse the header kicked off above (in parallel with audio)
-          // instead of generateLessonCode starting a fresh one from scratch —
-          // only applies to this first buildLesson-level attempt; internal
-          // retries (and a second buildLesson attempt) still regenerate a
-          // fresh header as before.
-          headerPromise,
-          // Fires as EACH scene's code finishes, in whatever order they
-          // actually resolve — lets the frontend's progress filmstrip show a
-          // real thumbnail for that scene well before the rest of the lesson
-          // is done. Independent of, and never touches, the
-          // `code`/`status`/`scenes` fields that the final save below sets —
-          // a progress-write failure here is logged but never affects normal
-          // lesson completion.
-          onSceneCodeReady: async (index, previewCode) => {
-            try {
-              await Course.findByIdAndUpdate(courseId, {
-                $set: {
-                  [`lessons.${lesson.lessonNumber - 1}.sceneProgress.${index}.codeReady`]: true,
-                  [`lessons.${lesson.lessonNumber - 1}.sceneProgress.${index}.previewCode`]: previewCode,
-                },
-              });
-            } catch (progressSaveErr) {
-              console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to save code progress for scene ${index + 1} (non-fatal):`, progressSaveErr.message);
-            }
-          },
-          userId,
-          courseId,
-        }
+        { userId, courseId, headerPromise: attempt === 1 ? headerPromise : null }
       );
 
       // Scene boundaries for replay analytics (Progress model) — computed
       // from the same measured scenes the code generator just used, in the
-      // same order they're laid out in the compiled <Series>. This is the
-      // only place this timing data is available; it's gone once the scenes
-      // array itself isn't kept (only totalFrames survives on the lesson
-      // otherwise). generateLessonCode succeeding guarantees every
-      // scenePromises entry already resolved, so this is instant, not an
-      // extra wait.
-      const measuredScenes = await Promise.all(scenePromises);
+      // same order they're laid out in the compiled <Series>.
       let cursor = 0;
       const sceneMeta = measuredScenes.map((s, i) => {
         const startFrame = cursor;
@@ -362,17 +371,12 @@ async function buildLesson(courseId, lesson, userId = null) {
 // free-trial course after the user buys credits), so this logic only lives
 // in one place.
 //
-// Lesson code generation is split header + per-scene (see
-// generateLessonHeader/generateSceneCode in claudeService.js) — the scene
-// pool (limitLessonSceneCall, default 100 — see claudeService.js) is
-// deliberately sized to cover EVERY lesson's scenes across the whole course
-// at once (6 lessons × ~12 scenes ≈ 70+), not just one lesson's worth, so
-// building lessons concurrently doesn't starve any of them — every scene,
-// from every lesson, starts the instant its own audio is ready and just
-// queues behind the shared pool like any other scene. A lesson that fails
-// doesn't block its siblings — buildLesson handles its own errors internally
-// and never rethrows for a content failure, only Promise.allSettled below
-// needs to know it settled.
+// Lesson code generation is one call per lesson (see generateLessonCode in
+// claudeService.js) — the pool (limitLessonCodeCall, default 6 — see
+// claudeService.js) is sized to let every lesson in a course build at once
+// with no queuing. A lesson that fails doesn't block its siblings —
+// buildLesson handles its own errors internally and never rethrows for a
+// content failure, only Promise.allSettled below needs to know it settled.
 async function buildLessonsConcurrently(courseId, lessons, userId = null) {
   await Promise.allSettled(lessons.map((lesson) => buildLesson(courseId, lesson, userId)));
 }
