@@ -916,40 +916,6 @@ INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exception
 
 WORKED EXAMPLE — a graph-traversal scene using the prebuilt AnimatedGraph instead of hand-written SVG. Study the PATTERN (data via props, revealAt for staging, Layer 1/3 still hand-built) — your own subject/data must come from YOUR scenes:
 
-\`\`\`tsx
-function Scene6() {
-  const frame = useCurrentFrame();
-  // The OTHER SCENES SPEC table showed a scene elsewhere in this lesson
-  // working through this same graph — independently rebuilt as the same
-  // canonical example per CROSS-SCENE DATA CONSISTENCY.
-  const GRAPH_NODES = [{ id: "S" }, { id: "A" }, { id: "B" }, { id: "C" }];
-  const GRAPH_EDGES = [
-    { from: "S", to: "A", weight: 4 },
-    { from: "S", to: "B", weight: 1 },
-    { from: "B", to: "A", weight: 2 },
-    { from: "A", to: "C", weight: 1 },
-  ];
-  const activeNodes = [
-    { id: "S", state: "visited", distance: "0" },
-    { id: "B", state: "active", revealAt: 20, distance: "1" },
-  ];
-  const highlightEdges = [{ from: "S", to: "B", revealAt: 20 }];
-
-  return (
-    <AbsoluteFill>
-      <Backdrop />
-      <AnimatedGraph nodes={GRAPH_NODES} edges={GRAPH_EDGES} activeNodes={activeNodes} highlightEdges={highlightEdges} />
-      <div style={{ position: "absolute", left: 0, top: ZONES.title.y, width: "100%", textAlign: "center", opacity: interpolate(frame, [0, 25], [0, 1], CLAMP) }}>
-        <Label size={44}>Confirming B relaxes its neighbors</Label>
-      </div>
-      <div style={{ position: "absolute", left: 0, top: ZONES.caption.y, width: "100%", textAlign: "center", opacity: interpolate(frame, [40, 65], [0, 1], CLAMP) }}>
-        <Label>The closest unvisited node gets confirmed next</Label>
-      </div>
-    </AbsoluteFill>
-  );
-}
-\`\`\`
-
 Write ONLY the scene functions given to you, in order, back to back — no import, no export, no <Series>/<Series.Sequence>/<Audio>. Your entire response is code, first characters "function", no text or fences around it.
 `;
 
