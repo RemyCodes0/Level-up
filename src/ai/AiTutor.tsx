@@ -37,10 +37,13 @@ import { ReferralCard } from "../components/ReferralCard";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
 import { analytics, resetUser } from "../lib/analytics";
 
-// Download/export requires headless Chrome + 2GB+ RAM — works locally but
-// OOMs on Render's Starter (512MB). Gate it behind an env var so it only
-// shows in local dev. Add VITE_ENABLE_DOWNLOAD=true to your local .env to enable.
+// Server-side export (vertical/square) requires headless Chrome + 2GB+ RAM —
+// works locally but OOMs on Render's Starter (512MB). Gated behind an env
+// var; add VITE_ENABLE_DOWNLOAD=true to your local .env to enable.
 const DOWNLOAD_ENABLED = import.meta.env.VITE_ENABLE_DOWNLOAD === "true";
+// Client-side (WebCodecs) landscape export — no server render, no OOM risk.
+// Add VITE_ENABLE_WEB_DOWNLOAD=true to your local .env to enable.
+const WEB_DOWNLOAD_ENABLED = import.meta.env.VITE_ENABLE_WEB_DOWNLOAD === "true";
 import {
   FileText, Play, CheckCircle, Circle, Lock, Brain, Sparkles,
   ChevronRight, ChevronLeft, Clock, BarChart2, BookOpen, AlertCircle,
@@ -2226,11 +2229,15 @@ export default function AILearningPage() {
                 />
                 <div className="flex items-center justify-between gap-2 pt-2">
                   <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className="text-xs sm:text-sm px-3 sm:px-4 shrink-0"><ChevronLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
-                  {DOWNLOAD_ENABLED && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
+                  {(DOWNLOAD_ENABLED || WEB_DOWNLOAD_ENABLED) && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
                     <DownloadLessonButton
                       courseId={activeHistoryId}
                       lessonNumber={activeLesson + 1}
                       lessonTitle={lessons[activeLesson]?.title}
+                      code={lessons[activeLesson].code as string}
+                      durationInFrames={lessons[activeLesson].totalFrames ?? 3600}
+                      serverFormatsEnabled={DOWNLOAD_ENABLED}
+                      webFormatEnabled={WEB_DOWNLOAD_ENABLED}
                     />
                   )}
                   {activeHistoryId && allLessonsReady && (

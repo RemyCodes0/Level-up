@@ -164,10 +164,12 @@ const DEEPSEEK_COURSE_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "deepseek/deepseek-v4-flash",
   providerName: "deepseek",
-  extraParams: { reasoning: { effort: "max" }, provider: { order: ["deepseek"], allow_fallbacks: true } },
-  // Reasoning tokens are drawn from this SAME budget, on top of the actual
-  // JSON — the reasoning-off floor (a few thousand tokens) has no headroom
-  // left once high-effort reasoning is turned on.
+  // Reasoning OFF — was { effort: "max" }, which drew a significant chunk
+  // of this call's latency (course plan is on the critical path before any
+  // lesson can start building) as invisible reasoning tokens from this same
+  // budget, on top of the actual JSON. Turned off deliberately for speed;
+  // if plan quality regresses, that's the tradeoff to revisit first.
+  extraParams: { reasoning: { enabled: false }, provider: { order: ["deepseek"], allow_fallbacks: true } },
   maxTokens: 40000,
   keyEnv: "OPENROUTER_API_KEY",
 };
@@ -175,8 +177,9 @@ const DEEPSEEK_SCENE_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "deepseek/deepseek-v4-flash",
   providerName: "deepseek",
-  extraParams: { reasoning: { effort: "max" }, provider: { order: ["deepseek"], allow_fallbacks: true } },
-  // Same reasoning-budget note as DEEPSEEK_COURSE_PLAN_PROVIDER above.
+  // Reasoning OFF — see DEEPSEEK_COURSE_PLAN_PROVIDER above. This call in
+  // particular was measured at 113.6s with max-effort reasoning on.
+  extraParams: { reasoning: { enabled: false }, provider: { order: ["deepseek"], allow_fallbacks: true } },
   maxTokens: 40000,
   keyEnv: "OPENROUTER_API_KEY",
 };
@@ -1711,105 +1714,174 @@ function stitchLessonCode({ header, chunkCodes, scenes, componentName }) {
 // used ONLY on the very first attempt (so it overlaps with audio synthesis in
 // the common no-retry case); any retry generates a fresh header as before,
 // since a caller-supplied promise can't be "re-rolled" after the fact.
+// Header is generated ONCE, outside the retry loop below — it has its own
+// internal retry (generateLessonHeader's maxAttempts=2), so a downstream
+// chunk failure is never a reason to pay for a fresh header call too.
+// Similarly, a chunk that already validated successfully is never
+// regenerated again on a later outer attempt just because a SIBLING chunk
+// failed — chunkCodes[i] is filled in exactly once, the first time chunk i
+// succeeds, and every retry only re-requests the chunks still missing.
+// (This replaces an earlier version that discarded the header AND every
+// already-succeeded chunk on ANY single chunk failure, regenerating the
+// whole lesson from scratch — measured to roughly double total code-gen
+// wall-clock time on a lesson where only one chunk out of four needed a
+// second try.)
 async function generateLessonCode(lesson, componentName, scenes, totalFrames, maxAttempts = 3, { userId = null, courseId = null, headerPromise = null } = {}) {
-  let lastError = null;
   const lessonStart = Date.now();
 
+  const generatedHeader = headerPromise
+    ? await headerPromise
+    : await generateLessonHeader(lesson, scenes, undefined, { userId, courseId });
+  // Append the hand-written component library (never LLM-generated) to
+  // the header text AFTER validation, before computing exposed names —
+  // this one splice makes AnimatedGraph/AnimatedArray automatically
+  // visible to every chunk's availableNames AND automatically shown
+  // (signature-only, via compactHeaderForPrompt below) in every chunk's
+  // prompt, with no other plumbing needed.
+  const header = generatedHeader + "\n\n" + LESSON_COMPONENT_LIBRARY_SOURCE;
+  const headerAvailableNames = new Set(getHeaderExposedNames(header));
+
+  // Chunks run IN PARALLEL, not sequentially — the old design awaited
+  // each chunk in turn so the NEXT one could see every prior chunk's
+  // ACTUAL code (byte-for-byte shared data, accumulated availableNames).
+  // That gave perfect cross-scene consistency but made total chunk time
+  // additive (measured ~90% of a lesson's code-gen wall-clock time, at a
+  // fixed ~75 tok/s GLM throughput no amount of re-chunking changes).
+  // Firing every chunk at once cuts that to roughly the SLOWEST single
+  // chunk's time instead of the sum of all of them. The trade: each
+  // chunk only gets the header + a SPEC-only (not code) table of every
+  // OTHER scene (see buildOtherScenesSpecTable / the "chunks generate IN
+  // PARALLEL now" rule in LESSON_CHUNK_RULES) — occasional cross-chunk
+  // data drift (two chunks independently deriving slightly different
+  // values for what's meant to be the same example) is the accepted
+  // cost, per explicit product decision. A same-named top-level const
+  // declared independently by two DIFFERENT chunks (rule 1a is now only
+  // safe WITHIN a chunk) would collide once stitched together — that
+  // surfaces as a real Babel "already been declared" parse error in
+  // validateGeneratedCode below, which triggers the ALL-chunks fallback in
+  // the critic-rejection branch further down (the one case where we can't
+  // attribute the failure to a single chunk).
+  //
+  // Each chunk gets its OWN copy of availableNames (header names only) —
+  // a shared mutable Set across concurrent chunks would be a race (and
+  // semantically wrong: no chunk can actually see another's names at
+  // generation time, so validation must not pretend otherwise).
+  const chunkGroups = [];
+  for (let start = 0; start < scenes.length; start += LESSON_CHUNK_SCENES) {
+    chunkGroups.push({ chunkScenes: scenes.slice(start, start + LESSON_CHUNK_SCENES), start });
+  }
+
+  const chunkCodes = new Array(chunkGroups.length).fill(null);
+  let lastError = null;
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      console.log(`  [code L${lesson.lessonNumber}] Outer attempt ${attempt}/${maxAttempts} for ${componentName} (header + ${scenes.length} scenes in chunks of ${LESSON_CHUNK_SCENES})...`);
+    const pending = chunkGroups
+      .map((group, i) => ({ ...group, i }))
+      .filter(({ i }) => chunkCodes[i] === null);
 
-      const generatedHeader = attempt === 1 && headerPromise
-        ? await headerPromise
-        : await generateLessonHeader(lesson, scenes, undefined, { userId, courseId });
-      // Append the hand-written component library (never LLM-generated) to
-      // the header text AFTER validation, before computing exposed names —
-      // this one splice makes AnimatedGraph/AnimatedArray automatically
-      // visible to every chunk's availableNames AND automatically shown
-      // (signature-only, via compactHeaderForPrompt below) in every chunk's
-      // prompt, with no other plumbing needed.
-      const header = generatedHeader + "\n\n" + LESSON_COMPONENT_LIBRARY_SOURCE;
-      const headerAvailableNames = new Set(getHeaderExposedNames(header));
+    if (pending.length === 0) break;
 
-      // Chunks run IN PARALLEL, not sequentially — the old design awaited
-      // each chunk in turn so the NEXT one could see every prior chunk's
-      // ACTUAL code (byte-for-byte shared data, accumulated availableNames).
-      // That gave perfect cross-scene consistency but made total chunk time
-      // additive (measured ~90% of a lesson's code-gen wall-clock time, at a
-      // fixed ~75 tok/s GLM throughput no amount of re-chunking changes).
-      // Firing every chunk at once cuts that to roughly the SLOWEST single
-      // chunk's time instead of the sum of all of them. The trade: each
-      // chunk only gets the header + a SPEC-only (not code) table of every
-      // OTHER scene (see buildOtherScenesSpecTable / the "chunks generate IN
-      // PARALLEL now" rule in LESSON_CHUNK_RULES) — occasional cross-chunk
-      // data drift (two chunks independently deriving slightly different
-      // values for what's meant to be the same example) is the accepted
-      // cost, per explicit product decision. A same-named top-level const
-      // declared independently by two DIFFERENT chunks (rule 1a is now only
-      // safe WITHIN a chunk) would collide once stitched together — that
-      // surfaces as a real Babel "already been declared" parse error in
-      // validateGeneratedCode below, which the outer attempt loop retries
-      // (regenerating a fresh header + all chunks again) rather than
-      // silently shipping broken code.
-      //
-      // Each chunk gets its OWN copy of availableNames (header names only) —
-      // a shared mutable Set across concurrent chunks would be a race (and
-      // semantically wrong: no chunk can actually see another's names at
-      // generation time, so validation must not pretend otherwise).
-      const chunkGroups = [];
-      for (let start = 0; start < scenes.length; start += LESSON_CHUNK_SCENES) {
-        chunkGroups.push({ chunkScenes: scenes.slice(start, start + LESSON_CHUNK_SCENES), start });
-      }
+    console.log(
+      `  [code L${lesson.lessonNumber}] Outer attempt ${attempt}/${maxAttempts} for ${componentName} — ` +
+      `${pending.length}/${chunkGroups.length} chunk(s) to (re)generate...`
+    );
 
-      const chunkResults = await Promise.allSettled(
-        chunkGroups.map(({ chunkScenes, start }) =>
-          generateSceneChunk(
-            lesson, chunkScenes, start, scenes.length, header, scenes,
-            new Set(headerAvailableNames), componentName, undefined, { userId, courseId }
-          )
+    const results = await Promise.allSettled(
+      pending.map(({ chunkScenes, start }) =>
+        generateSceneChunk(
+          lesson, chunkScenes, start, scenes.length, header, scenes,
+          new Set(headerAvailableNames), componentName, undefined, { userId, courseId }
         )
-      );
+      )
+    );
 
-      const firstFailure = chunkResults.find((r) => r.status === "rejected");
-      if (firstFailure) throw firstFailure.reason;
-
-      const chunkCodes = chunkResults.map((r) => r.value);
-
-      const stitched = stitchLessonCode({ header, chunkCodes, scenes, componentName });
-      const validatedCode = validateGeneratedCode(stitched, componentName, totalFrames);
-
-      const review = await reviewGeneratedCode(validatedCode, lesson);
-      if (!review.skipped && review.ok === false) {
-        throw contentError(
-          `Code critic flagged issues: ${review.issues?.join("; ") || "unspecified"}`
-        );
+    for (let idx = 0; idx < results.length; idx++) {
+      const result = results[idx];
+      const { i } = pending[idx];
+      if (result.status === "fulfilled") {
+        chunkCodes[i] = result.value;
+      } else {
+        lastError = result.reason;
+        if (isNonRetryable(result.reason)) {
+          throw new Error(
+            `Lesson code generation failed with a non-retryable error (check ${LESSON_CODE_PROVIDER_NO_REASONING.keyEnv}): ${describeError(result.reason)}`
+          );
+        }
       }
+    }
 
+    if (chunkCodes.every((c) => c !== null)) break;
+
+    const stillMissing = chunkCodes.filter((c) => c === null).length;
+    console.warn(
+      `  [code L${lesson.lessonNumber}] Outer attempt ${attempt} left ${stillMissing} chunk(s) failed: ${describeError(lastError)}. Retrying only those...`
+    );
+    if (attempt < maxAttempts) await backoffDelay(attempt);
+  }
+
+  if (chunkCodes.some((c) => c === null)) {
+    const elapsedSec = ((Date.now() - lessonStart) / 1000).toFixed(1);
+    const e = new Error(
+      `Failed to generate valid lesson code after ${maxAttempts} attempts (${elapsedSec}s elapsed): ${lastError ? describeError(lastError) : "unknown error"}`
+    );
+    e.stage = lastError?.stage || "code";
+    throw e;
+  }
+
+  // The critic reviews the WHOLE stitched lesson, so a rejection here can't
+  // be attributed to one chunk the way a validation failure can — fall back
+  // to regenerating every chunk (header stays fixed; the same fixed header
+  // was never implicated in a chunk-level failure either).
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const stitched = stitchLessonCode({ header, chunkCodes, scenes, componentName });
+    const validatedCode = validateGeneratedCode(stitched, componentName, totalFrames);
+
+    const review = await reviewGeneratedCode(validatedCode, lesson);
+    if (review.skipped || review.ok !== false) {
       const elapsedSec = ((Date.now() - lessonStart) / 1000).toFixed(1);
       console.log(
         `  [code L${lesson.lessonNumber}] Valid code generated (${validatedCode.length} chars) — took ${elapsedSec}s for ${componentName}`
       );
       return { code: validatedCode, totalFrames };
-    } catch (err) {
-      lastError = err;
+    }
 
-      if (isNonRetryable(err)) {
+    console.warn(
+      `  [code L${lesson.lessonNumber}] Code critic flagged issues on attempt ${attempt}/${maxAttempts}: ${review.issues?.join("; ") || "unspecified"} — regenerating all chunks...`
+    );
+    if (attempt === maxAttempts) {
+      const elapsedSec = ((Date.now() - lessonStart) / 1000).toFixed(1);
+      const e = new Error(
+        `Code critic flagged issues after ${maxAttempts} attempts (${elapsedSec}s elapsed): ${review.issues?.join("; ") || "unspecified"}`
+      );
+      e.stage = "code";
+      throw e;
+    }
+
+    chunkCodes.fill(null);
+    const results = await Promise.allSettled(
+      chunkGroups.map(({ chunkScenes, start }) =>
+        generateSceneChunk(
+          lesson, chunkScenes, start, scenes.length, header, scenes,
+          new Set(headerAvailableNames), componentName, undefined, { userId, courseId }
+        )
+      )
+    );
+    const firstFailure = results.find((r) => r.status === "rejected");
+    if (firstFailure) {
+      if (isNonRetryable(firstFailure.reason)) {
         throw new Error(
-          `Lesson code generation failed with a non-retryable error (check ${LESSON_CODE_PROVIDER_NO_REASONING.keyEnv}): ${describeError(err)}`
+          `Lesson code generation failed with a non-retryable error (check ${LESSON_CODE_PROVIDER_NO_REASONING.keyEnv}): ${describeError(firstFailure.reason)}`
         );
       }
-
-      console.warn(`  [code L${lesson.lessonNumber}] Outer attempt ${attempt} failed: ${describeError(err)}. Retrying...`);
-      if (attempt < maxAttempts) await backoffDelay(attempt);
+      const elapsedSec = ((Date.now() - lessonStart) / 1000).toFixed(1);
+      const e = new Error(
+        `Failed to regenerate chunks after a code critic rejection (${elapsedSec}s elapsed): ${describeError(firstFailure.reason)}`
+      );
+      e.stage = "code";
+      throw e;
     }
+    results.forEach((r, i) => { chunkCodes[i] = r.value; });
   }
-
-  const elapsedSec = ((Date.now() - lessonStart) / 1000).toFixed(1);
-  const e = new Error(
-    `Failed to generate valid lesson code after ${maxAttempts} attempts (${elapsedSec}s elapsed): ${lastError ? describeError(lastError) : "unknown error"}`
-  );
-  e.stage = lastError?.stage || "code";
-  throw e;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -70,8 +70,8 @@ Return ONLY valid JSON, no markdown, exactly this structure:
 }
 
 Rules:
-- Create between 8 and 14 scenes for a roughly 5-minute lesson.
-- Each scene's narration should take 15-35 seconds to speak naturally — roughly 40-90 words at this project's TTS voice's real speaking pace (~150-165 words/minute). EVERY scene needs this, including the intro and the summary — a narration that's just a restated headline (a handful of words) is too short and gets cut off mid-thought when the scene switches, regardless of how it feels while writing it.
+- Create between 8 and 12 scenes for a roughly 3-minute lesson.
+- Each scene's narration should take 15-22 seconds to speak naturally — AT LEAST 35 words, ideally 40-55, at this project's TTS voice's real speaking pace (~150-165 words/minute). NEVER fewer than 32 words under any circumstance, even for a scene that feels simple to write. EVERY scene needs this, including the intro and the summary — a narration that's just a restated headline (a handful of words) is too short and gets cut off mid-thought when the scene switches, regardless of how it feels while writing it.
 - HIT THAT WORD COUNT WITH MORE SHORT SENTENCES, NEVER BY CRAMMING: a scene covers ONE idea — the mechanism given below, said plainly. Do not pack multiple facts, sub-points, or asides into a scene's narration just to reach the floor; a narration with several dense clauses in one breath reads as rushed and hard to follow out loud, even if it fits the word count. If the lesson has more to say than one scene comfortably holds at a natural pace, that's what MORE scenes are for — split it, don't densify it.
 - THE MECHANISM FIELD IS THE CONTRACT: before/after must describe two visibly DIFFERENT states (if they're the same picture, the scene is a slide, not an animation — rewrite it), and the driver must be an action a viewer can watch, not a conclusion ("the sorted order emerges" is a conclusion; "pairs compare and swap one at a time" is a watchable action). The code generator builds EXACTLY what this field says, so vagueness here becomes a boring scene downstream.
 - The visualDescription MUST match what the narration is talking about at that exact moment, and MUST stage the mechanism — never contradict or ignore it.
@@ -85,22 +85,22 @@ Rules:
 }
 
 // A scene whose narration is this short (word count) reads as a restated
-// title/label rather than the real spoken explanation every scene needs —
-// the exact bug that made lessons feel like the narrator gets cut off
-// mid-sentence when a scene switches to the next one (that scene's video
-// duration is derived directly from its OWN measured audio length, so a
-// too-short narration means a too-short scene, not a sync bug).
+// title/label rather than the real spoken explanation every scene needs.
+// That scene's video duration is derived directly from its OWN measured
+// audio length, so a too-short narration means a too-short (but still
+// in-sync) scene — the risk here is perceived quality, not truncation.
 //
 // Calibrated to this project's current TTS voice (Kokoro/af_nova via
 // OpenRouter, chunked in ttsService.js to work around a per-call truncation
-// bug), measured directly: 22-36 word inputs played fully at a natural
-// ~150-165 words/minute. 15 seconds at that rate needs ~38-41 words; this
-// floor sits just under that so a legitimately terse-but-complete scene
-// isn't rejected, while still catching anything that's really just a title
-// in disguise. (NOT the ~330wpm figure from an earlier, mistaken measurement
-// — that number came from measuring TTS audio that was being silently
-// truncated by the same class of bug, not the model's real speaking rate.)
-const MIN_NARRATION_WORDS = 40;
+// bug), measured directly at a natural ~150-165 words/minute. 12 seconds at
+// that rate needs ~30-33 words; this floor sits just above that so a
+// legitimately terse-but-complete scene isn't rejected, while still catching
+// anything that's really just a title in disguise. Deliberately lower than
+// this project's earlier floor (40) — lessons were consistently landing at
+// 4:20-5:20 total with scenes targeting 55-90 words each; this floor (with
+// the matching 40-55-word target above and the 8-12 scene count) is tuned
+// for a ~2:50-4:00 total instead.
+const MIN_NARRATION_WORDS = 32;
 
 // Mechanical check, not a judgment call — see the comment above
 // MIN_NARRATION_WORDS. Rejects the WHOLE plan (not just the short scenes)
@@ -124,7 +124,7 @@ async function generateScenePlan(lesson, maxAttempts = 3, { userId = null, cours
       const userContent =
         buildScenePlanUserContent(lesson) +
         (contentFeedback
-          ? `\n\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:\n"${contentFeedback}"\nRegenerate the full scene list from scratch and make absolutely sure this specific problem does not occur again — every scene needs at least 40 words of narration AND a real mechanism whose before/after states visibly differ.`
+          ? `\n\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:\n"${contentFeedback}"\nRegenerate the full scene list from scratch and make absolutely sure this specific problem does not occur again — every scene needs AT LEAST 35 words of narration (aim for 40-55, the real floor is 32 but you have consistently undershot it before, so leave yourself margin) AND a real mechanism whose before/after states visibly differ.`
           : "");
 
       const { text, stopReason, usage } = await streamCodeCompletion({
@@ -174,7 +174,7 @@ async function generateScenePlan(lesson, maxAttempts = 3, { userId = null, cours
           .map((s) => `scene ${s.index + 1} ("${parsed.scenes[s.index].onScreenText}") has only ${s.words} words`)
           .join("; ");
         throw new Error(
-          `${shortScenes.length}/${parsed.scenes.length} scene(s) have under-length narration — need at least 40 words each: ${detail}`
+          `${shortScenes.length}/${parsed.scenes.length} scene(s) have under-length narration — need at least ${MIN_NARRATION_WORDS} words each: ${detail}`
         );
       }
 

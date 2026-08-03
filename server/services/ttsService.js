@@ -232,15 +232,22 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
 
       const fileName = `${uuidv4()}.wav`;
       const audioFilePath = path.join(AUDIO_DIR, fileName);
-      fs.writeFileSync(audioFilePath, buffer);
+      // ASYNC write, not writeFileSync — with every scene's audio now
+      // starting concurrently (see generateAllSceneAudioPipelined below, no
+      // longer gated behind a small scene-level batch), a sync write blocks
+      // the ENTIRE event loop for its duration, serializing what should be
+      // concurrent I/O and worsening exactly the contention this was meant
+      // to avoid. The async version hands the actual write off to libuv's
+      // thread pool instead of blocking Node's single JS thread.
+      await fs.promises.writeFile(audioFilePath, buffer);
 
       // Verify the file actually landed on disk with the right size.
-      // On constrained hosts (Starter, 0.5 CPU), concurrent writeFileSync
-      // calls occasionally produce zero-byte or truncated files due to I/O
+      // On constrained hosts (Starter, 0.5 CPU), concurrent writes can still
+      // occasionally produce zero-byte or truncated files under I/O
       // contention — this catches that silently before it becomes a 404.
-      const written = fs.statSync(audioFilePath).size;
+      const written = (await fs.promises.stat(audioFilePath)).size;
       if (written < buffer.length * 0.9) {
-        fs.unlinkSync(audioFilePath);
+        await fs.promises.unlink(audioFilePath);
         throw new Error(`File write incomplete: wrote ${written} bytes, expected ~${buffer.length}`);
       }
 
@@ -274,20 +281,18 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
   }
 }
 
-// Bounds how many scenes can be actively generating audio (and writing
-// files) at once — separate from TTS_CHUNK_MAX_CONCURRENT above, which
-// bounds actual TTS API calls. This one exists because fully parallel
-// writeFileSync calls across 13+ scenes cause I/O contention on constrained
-// hosts (truncated/zero-byte files). A real rolling semaphore, NOT a
-// fixed-size batch loop (fire N, wait for ALL N, fire the next N) — the
-// batch-loop version had the exact same problem the scene code-gen batching
-// was found to have (see claudeService.js's generateLessonCode): one slow
-// scene in a group holds back every scene queued behind that whole group,
-// even ones that could've started the instant an earlier group-mate
-// finished. A plain semaphore lets the next scene start the moment any
-// slot frees up.
-const SCENE_AUDIO_MAX_CONCURRENT = Number(process.env.SCENE_AUDIO_MAX_CONCURRENT) || 6;
-const limitSceneAudioCall = createLimiter(SCENE_AUDIO_MAX_CONCURRENT);
+// Used to bound how many scenes could be actively generating audio at once,
+// separate from TTS_CHUNK_MAX_CONCURRENT above (which bounds actual TTS API
+// calls) — removed. Once a lesson's scene plan is ready, every scene now
+// starts its audio immediately instead of queueing behind a small batch;
+// TTS_CHUNK_MAX_CONCURRENT is still the real gate on outbound network
+// concurrency to the TTS provider. This existed because fully parallel
+// writeFileSync calls caused disk I/O contention on constrained hosts
+// (zero-byte/truncated files) — generateSceneAudio now writes with the async
+// fs.promises.writeFile instead of the blocking sync version, which was the
+// actual cause of that contention (a sync write blocks the whole event loop
+// for its duration; the async version hands it to libuv's thread pool), so
+// removing this cap no longer reintroduces the bug it was added for.
 
 // Kicks off audio generation for every scene immediately and returns
 // synchronously (no await) — `scenePromises[i]` is a real Promise for EVERY
@@ -312,10 +317,10 @@ const limitSceneAudioCall = createLimiter(SCENE_AUDIO_MAX_CONCURRENT);
 // aggregate result.
 function generateAllSceneAudioPipelined(scenes, onSceneAudioReady, context = {}) {
   const stageStart = Date.now();
-  console.log(`  [tts] Generating ${scenes.length} audio clips (max ${SCENE_AUDIO_MAX_CONCURRENT} scenes concurrent, max ${TTS_CHUNK_MAX_CONCURRENT} chunk requests concurrent)...`);
+  console.log(`  [tts] Generating ${scenes.length} audio clips, all scenes concurrent (max ${TTS_CHUNK_MAX_CONCURRENT} chunk requests concurrent)...`);
 
   const scenePromises = scenes.map((scene, index) =>
-    limitSceneAudioCall(() => generateSceneAudio(scene, 3, context)).then((result) => {
+    generateSceneAudio(scene, 3, context).then((result) => {
       // Never let a progress-notification failure take down real audio
       // generation — same non-fatal philosophy as the rest of this
       // pipeline's optional progress callbacks.
