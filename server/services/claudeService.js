@@ -64,8 +64,15 @@ const CODE_PROVIDERS = {
     client: openRouterClient,
     model: "z-ai/glm-5.2",
     providerName: "glm",
-    // `provider: { order: ["z-ai"] }` — see the CLIENTS comment above for why
-    // this pin is load-bearing, not cosmetic.
+    // Deliberately UNPINNED (no `provider: { order: [...] }`) — a pin to
+    // z-ai's own hosting was tried (see git history) on the theory that a
+    // third-party rehost (CoreWeave/Together, confirmed live via
+    // OpenRouter's activity log) risked a quantized backend. In practice,
+    // the unpinned CoreWeave/Together-routed traffic produced the cleanest
+    // observed run (5/5 codegen calls "stop", no retries) — better than the
+    // pinned z-ai theory predicted, so left open to OpenRouter's own
+    // price/speed routing. Revisit only with real evidence unpinned routing
+    // is causing failures, not on the strength of this comment alone.
     extraParams: { reasoning: { enabled: false }},
     maxTokens: 100000,
     keyEnv: "OPENROUTER_API_KEY",
@@ -97,11 +104,77 @@ const CODE_PROVIDERS = {
     maxTokens: 100000,
     keyEnv: "ANTHROPIC_API_KEY",
   },
+  // Model-quality spike (see LESSON_CODE_MODEL=deepseek / AD_CODE_MODEL=
+  // deepseek): DeepSeek V4 Flash 0731 — a distinct, newer dated snapshot
+  // from the plain "deepseek/deepseek-v4-flash" used for course/scene plan
+  // (that alias currently resolves to the older 0423 snapshot). Reasoning
+  // off per the same rule as GLM above (see withReasoningOff — LESSON_CODE_
+  // PROVIDER_NO_REASONING enforces this regardless of what's set here; set
+  // explicitly here too since AD_CODE_PROVIDER's extraParams are used as-is,
+  // with no equivalent reasoning-off derivation on the ad path).
+  deepseek: {
+    client: openRouterClient,
+    model: "deepseek/deepseek-v4-flash-0731",
+    providerName: "deepseek",
+    extraParams: { reasoning: { enabled: false }, provider: { order: ["deepseek"], allow_fallbacks: true } },
+    maxTokens: 100000,
+    keyEnv: "OPENROUTER_API_KEY",
+  },
+  // Model-quality spike (see LESSON_CODE_MODEL=minimax / AD_CODE_MODEL=
+  // minimax): MiniMax M3, 1M context, multiple third-party hosts on
+  // OpenRouter. No `provider: { order: [...] }` pin (unlike glm/deepseek
+  // above) — no confirmed evidence yet of a quantized-backend issue on this
+  // model the way there was for GLM, so not guessing at a specific host
+  // name. No reasoning field either: unconfirmed whether M3 uses OpenRouter's
+  // unified `reasoning` field or a different shape, and getting that wrong
+  // errors rather than no-ops — left to OpenRouter's default. Lesson-code
+  // path still gets reasoning stripped regardless via LESSON_CODE_PROVIDER_
+  // NO_REASONING/withReasoningOff; the ad-code path (no such wrapper) may
+  // not be, worth checking output for hidden-reasoning latency on that path.
+  minimax: {
+    client: openRouterClient,
+    model: "minimax/minimax-m3",
+    providerName: "minimax",
+    extraParams: {},
+    maxTokens: 100000,
+    keyEnv: "OPENROUTER_API_KEY",
+  },
+  // Model-quality spike (see LESSON_CODE_MODEL=gpt56 / AD_CODE_MODEL=gpt56):
+  // GPT-5.6 Sol, OpenAI's own flagship reasoning model, single-sourced from
+  // OpenAI itself via OpenRouter — no third-party rehost quantization risk
+  // the way an open-weight model (GLM, MiniMax) has, so no provider order
+  // pin needed. Reasoning off via OpenRouter's unified field, same as glm/
+  // deepseek above. MUCH pricier than every other entry here ($5/$30 per 1M
+  // in/out vs cents for GLM/DeepSeek) — a deliberate quality-comparison
+  // spike, not something to leave as the lesson-code default.
+  gpt56: {
+    client: openRouterClient,
+    model: "openai/gpt-5.6-sol",
+    providerName: "gpt56",
+    extraParams: { reasoning: { enabled: false } },
+    maxTokens: 128000,
+    keyEnv: "OPENROUTER_API_KEY",
+  },
+  // Model-quality spike (see LESSON_CODE_MODEL=mimo / AD_CODE_MODEL=mimo):
+  // Xiaomi MiMo-V2.5, 131K max output, explicitly reasoning-capable via
+  // OpenRouter's standard reasoning-tokens abstraction — same `reasoning:
+  // {enabled: false}` convention as glm/deepseek above. No provider order
+  // pin: multiple third-party hosts exist (DeepInfra among them) but no
+  // confirmed quantized-backend incident on this one yet, same reasoning
+  // as minimax above for leaving it unpinned.
+  mimo: {
+    client: openRouterClient,
+    model: "xiaomi/mimo-v2.5",
+    providerName: "mimo",
+    extraParams: { reasoning: { enabled: false } },
+    maxTokens: 131072,
+    keyEnv: "OPENROUTER_API_KEY",
+  },
 };
 
 function resolveProvider(envVar, defaultKey) {
   const requested = process.env[envVar];
-  const provider = CODE_PROVIDERS[["fable", "glm", "claude"].includes(requested) ? requested : defaultKey];
+  const provider = CODE_PROVIDERS[["fable", "glm", "claude", "deepseek", "minimax", "gpt56", "mimo"].includes(requested) ? requested : defaultKey];
   if (!process.env[provider.keyEnv]) {
     console.warn(`[codegen] WARNING: ${provider.keyEnv} is not set — ${envVar} generation will fail with an auth error.`);
   }
@@ -229,8 +302,8 @@ const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 1
 const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 
 console.log(
-  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude to switch) | ` +
-  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude to switch)`
+  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo to switch) | ` +
+  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo to switch)`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -826,7 +899,8 @@ SANDBOX API — violate and the build fails:
    • NEVER shadow a JS built-in (Math, Array, Object, String, Number, Date, JSON, Boolean, Map, Set).
    • NEVER declare a top-level name matching /^Scene\\d+$/ — those are reserved for scenes.
 4. Do NOT render <Series>, <Series.Sequence>, or <Audio> anywhere — there is no scene content here to sequence.
-5. SVG elements (<circle>, <rect>, <line>, <path>, <text>, <g>, <polygon>, <polyline>) ONLY render inside an <svg> tag — a shared helper that returns bare SVG shapes renders NOTHING once a scene drops it into a <div>/<AbsoluteFill> (no crash, no warning — it just silently doesn't exist). Every shared visual helper must be SELF-CONTAINED: either plain HTML (<div>/<AbsoluteFill>) or its OWN full-frame <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}> with the shapes inside.
+5. SVG elements (<circle>, <rect>, <line>, <path>, <text>, <g>, <polygon>, <polyline>) ONLY render inside an <svg> tag — a shared helper that returns bare SVG shapes renders NOTHING once a scene drops it into a <div>/<AbsoluteFill> (no crash, no warning — it just silently doesn't exist). Every shared visual helper must be SELF-CONTAINED: either plain HTML (<div>/<AbsoluteFill>) or its OWN full-frame <svg style={SVG_FRAME}> (defined below) with the shapes inside.
+   • ⚠️ SVG_FRAME MUST be applied as style={SVG_FRAME} — NEVER spread as <svg {...SVG_FRAME}>. position/left/top/pointerEvents are not real SVG/HTML attributes; spread as bare props they silently no-op (the browser's computed position stays "static", NOT "absolute") and the <svg> falls into normal document flow instead of overlaying at (0,0). A scene calling Nucleus/BondLine/AngleArc/etc. more than once then stacks each one sequentially in flow — pushing every one after the first thousands of pixels outside the visible frame, invisible, with no error and no warning. This is a real, previously-shipped bug: verified live in a production lesson via computed-style inspection (attribute position="absolute" present, computed position: "static"), which silently blanked most scenes of the lesson while Backdrop and audio kept working. style={SVG_FRAME} is the only correct usage.
    • Any helper (like Label/Panel) that wraps content MUST accept and render {children} ({ children } — NO type annotation; "React" is NOT imported, so "React.X" crashes with "React is not defined").
 6. Any helper using useCurrentFrame() resets to 0 every time the scene that mounts it starts — design its motion (Math.sin(frame/k)) so it looks right from frame 0.
 
@@ -835,6 +909,8 @@ FRAME-BOUNDARY SAFETY — every scene will rely on these exact consts, define th
     const FRAME = { w: 1920, h: 1080 };
     const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
     const clampPos = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+    const SVG_FRAME = { position: "absolute" as const, left: 0, top: 0, width: 1920, height: 1080, pointerEvents: "none" as const, overflow: "visible" as const };
+SVG_FRAME exists ONLY to be applied as style={SVG_FRAME} on a full-frame overlay <svg> (see rule 5 above) — every scene reuses this exact name/shape so there is never a reason to hand-roll a second version of it.
 If this lesson's subject involves direction, vectors, forces, or angles (physics, math, engineering, navigation), also build shared Arrow({from,to,color,width}) and AngleArc({vertex,angle1,angle2,radius,color}) helpers here, computing direction with Math.atan2(dy,dx).
 
 LAYOUT ZONES — copy this EXACT const, verbatim, unchanged:
@@ -914,10 +990,9 @@ INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exception
 13. NEVER produce NaN in any SVG attribute — guard all division (v/(d||1)) and array access; filter NaN out of polygon/polyline points.
 14. CLAMP entrance/exit animations with the header's CLAMP constant. Continuous Math.sin/cos motion doesn't need CLAMP.
 15. THE 1920x1080 FRAME IS A HARD BOUNDARY. Route every final x/y/cx/cy/top/left value through the header's clampPos() to SAFE as its LAST step.
-16. SVG elements ONLY render inside an <svg> tag — wrap any group of SVG primitives in its own full-frame <svg style={{position:"absolute",left:0,top:0,width:1920,height:1080,pointerEvents:"none",overflow:"visible"}}>.
+16. SVG elements ONLY render inside an <svg> tag — wrap any group of SVG primitives in its own full-frame <svg style={SVG_FRAME}> (the header's SVG_FRAME const — reuse it by name, never redeclare it). ⚠️ ALWAYS style={SVG_FRAME}, NEVER <svg {...SVG_FRAME}> — spreading it as bare props silently drops the positioning (computed position stays "static" instead of "absolute"), so any scene calling Nucleus/BondLine/AngleArc/etc. more than once stacks them in normal document flow instead of overlaying at (0,0), pushing everything after the first element thousands of pixels off-screen — no crash, no warning, just a blank scene. This exact mistake has shipped to production before.
 17. NEVER write comma-separated expressions directly inside JSX curly braces: {a, b} is invalid JSX.
 
-WORKED EXAMPLE — a graph-traversal scene using the prebuilt AnimatedGraph instead of hand-written SVG. Study the PATTERN (data via props, revealAt for staging, Layer 1/3 still hand-built) — your own subject/data must come from YOUR scenes:
 
 Write ONLY the scene functions given to you, in order, back to back — no import, no export, no <Series>/<Series.Sequence>/<Audio>. Your entire response is code, first characters "function", no text or fences around it.
 `;
