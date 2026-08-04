@@ -37,12 +37,10 @@ import { ReferralCard } from "../components/ReferralCard";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
 import { analytics, resetUser } from "../lib/analytics";
 
-// Server-side export (vertical/square) requires headless Chrome + 2GB+ RAM —
-// works locally but OOMs on Render's Starter (512MB). Gated behind an env
-// var; add VITE_ENABLE_DOWNLOAD=true to your local .env to enable.
-const DOWNLOAD_ENABLED = import.meta.env.VITE_ENABLE_DOWNLOAD === "true";
-// Client-side (WebCodecs) landscape export — no server render, no OOM risk.
-// Add VITE_ENABLE_WEB_DOWNLOAD=true to your local .env to enable.
+// Client-side (WebCodecs) landscape export — the only download format now
+// (vertical/square, which needed a server-side headless-Chrome render, were
+// removed entirely). No server render, no OOM risk. Add
+// VITE_ENABLE_WEB_DOWNLOAD=true to your local .env to enable.
 const WEB_DOWNLOAD_ENABLED = import.meta.env.VITE_ENABLE_WEB_DOWNLOAD === "true";
 import {
   FileText, Play, CheckCircle, Circle, Lock, Brain, Sparkles,
@@ -937,31 +935,36 @@ function VideoPlayer({
             onRetry={onRetry}
             retrying={retrying}
             onFrameUpdate={handleFrameUpdate}
+            // Passed through as DynamicPlayer's `overlay` prop (rendered
+            // INSIDE its fullscreened container) instead of a sibling div
+            // here — a sibling only shows up in the non-fullscreen view,
+            // since the browser's Fullscreen API renders just the
+            // fullscreened element and its descendants.
+            overlay={showUpNext && (
+              <div className="absolute bottom-4 right-4 z-10 bg-slate-900/95 backdrop-blur rounded-xl shadow-xl border border-white/10 p-3 flex items-center gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="min-w-0">
+                  <p className="text-[11px] text-slate-400 font-medium">Up next</p>
+                  <p className="text-sm text-white font-semibold truncate max-w-[180px]">{nextLessonTitle}</p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => { setDismissed(true); setShowUpNext(false); }}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+                    aria-label="Dismiss"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={playNext}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors"
+                  >
+                    <Play className="h-3 w-3 fill-white" /> Play next
+                  </button>
+                </div>
+              </div>
+            )}
           />
         </PlayerErrorBoundary>
-        {showUpNext && (
-          <div className="absolute bottom-4 right-4 z-10 bg-slate-900/95 backdrop-blur rounded-xl shadow-xl border border-white/10 p-3 flex items-center gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <div className="min-w-0">
-              <p className="text-[11px] text-slate-400 font-medium">Up next</p>
-              <p className="text-sm text-white font-semibold truncate max-w-[180px]">{nextLessonTitle}</p>
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                onClick={() => { setDismissed(true); setShowUpNext(false); }}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
-                aria-label="Dismiss"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-              <button
-                onClick={playNext}
-                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors"
-              >
-                <Play className="h-3 w-3 fill-white" /> Play next
-              </button>
-            </div>
-          </div>
-        )}
       </div>
       <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
         <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
@@ -1650,6 +1653,29 @@ export default function AILearningPage() {
     };
   };
 
+  // Fills in server-side watched/quiz state onto an entry that mapCourseToEntry
+  // just built — mapCourseToEntry alone always starts every lesson "not
+  // watched" and every quiz "not done" (it has no server data to draw from),
+  // which is exactly why that state used to reset on every refresh. TWO
+  // separate places construct a HistoryEntry (the sidebar history-list loader
+  // below, and the direct-URL-load effect further down for a fresh page load/
+  // refresh/pasted link) — both need this same enrichment, not just one of
+  // them, or whichever path skips it shows stale defaults regardless of what
+  // the OTHER path's `history` state has already correctly restored.
+  const enrichEntryWithProgress = async (entry: HistoryEntry): Promise<HistoryEntry> => {
+    const [progress, attempt] = await Promise.all([
+      getProgress(entry.id).catch(() => null),
+      getLatestAttempt(entry.id).catch(() => null),
+    ]);
+    if (!progress?.lessons.length && !attempt) return entry;
+    const lessons = progress?.lessons.length
+      ? entry.lessons.map((l) => ({ ...l, completed: !!progress!.lessons.find((p) => p.lessonNumber === l.id)?.watched }))
+      : entry.lessons;
+    return attempt
+      ? { ...entry, lessons, quizDone: true, quizScore: attempt.pct, serverQuizResult: attempt }
+      : { ...entry, lessons };
+  };
+
   const loadMoreHistory = async () => {
     if (loadingMoreHistory || !historyHasMore) return;
     setLoadingMoreHistory(true);
@@ -1688,20 +1714,9 @@ export default function AILearningPage() {
         // scratch — the raw per-question answers aren't sent back down for
         // an already-graded attempt, only the graded result.
         entries.forEach((entry) => {
-          Promise.all([
-            getProgress(entry.id).catch(() => null),
-            getLatestAttempt(entry.id).catch(() => null),
-          ]).then(([progress, attempt]) => {
-            if (cancelled || (!progress?.lessons.length && !attempt)) return;
-            setHistory((prev) => prev.map((e) => {
-              if (e.id !== entry.id) return e;
-              const lessons = progress?.lessons.length
-                ? e.lessons.map((l) => ({ ...l, completed: !!progress!.lessons.find((p) => p.lessonNumber === l.id)?.watched }))
-                : e.lessons;
-              return attempt
-                ? { ...e, lessons, quizDone: true, quizScore: attempt.pct, serverQuizResult: attempt }
-                : { ...e, lessons };
-            }));
+          enrichEntryWithProgress(entry).then((enriched) => {
+            if (cancelled || enriched === entry) return;
+            setHistory((prev) => prev.map((e) => (e.id === entry.id ? enriched : e)));
           });
         });
 
@@ -2004,7 +2019,8 @@ export default function AILearningPage() {
     // THIS fetch, so restoreEntry's own lazy-fetch branch won't re-set it.
     setCourseDetailsLoading(true);
     getCourseStatus(urlCourseId)
-      .then((course) => restoreEntry(mapCourseToEntry(course)))
+      .then((course) => enrichEntryWithProgress(mapCourseToEntry(course)))
+      .then((entry) => restoreEntry(entry))
       .catch((err) => {
         console.error(`Failed to load course ${urlCourseId} from URL:`, err);
         setCourseDetailsLoading(false);
@@ -2263,15 +2279,11 @@ export default function AILearningPage() {
                 />
                 <div className="flex items-center justify-between gap-2 pt-2">
                   <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className="text-xs sm:text-sm px-3 sm:px-4 shrink-0"><ChevronLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
-                  {(DOWNLOAD_ENABLED || WEB_DOWNLOAD_ENABLED) && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
+                  {WEB_DOWNLOAD_ENABLED && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
                     <DownloadLessonButton
-                      courseId={activeHistoryId}
-                      lessonNumber={activeLesson + 1}
                       lessonTitle={lessons[activeLesson]?.title}
                       code={lessons[activeLesson].code as string}
                       durationInFrames={lessons[activeLesson].totalFrames ?? 3600}
-                      serverFormatsEnabled={DOWNLOAD_ENABLED}
-                      webFormatEnabled={WEB_DOWNLOAD_ENABLED}
                     />
                   )}
                   {activeHistoryId && allLessonsReady && (

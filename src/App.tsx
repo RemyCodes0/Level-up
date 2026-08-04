@@ -1,9 +1,11 @@
 import './App.css'
+import { useEffect, useState } from 'react'
 import Landing from './landing/Landing'
 import DashboardPage from './dashboard/Dashboard'
 import { BrowserRouter } from "react-router-dom"
-import {Routes, Route} from "react-router-dom"
+import {Routes, Route, useLocation} from "react-router-dom"
 import {AuthProvider} from "@/lib/auth-context"
+import MaintenancePage from './maintenance/MaintenancePage'
 import LoginPage from './login/Login'
 import ForgotPasswordPage from './login/ForgotPassword'
 import ResetPasswordPage from './login/ResetPassword'
@@ -44,6 +46,38 @@ import CreateCollabRoom from './collab/CreateCollabRoom'
 import CollabRoomPage from './collab/CollabRoomPage'
 import JoinCollabRoom from './collab/JoinCollabRoom'
 import { CookieConsent } from './lib/CookieConsent'
+
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
+
+// Paths that must keep working even while maintenance mode is active — the
+// whole admin dashboard (so an admin can turn it back off) and every auth
+// page (so an admin who isn't currently logged in can still log in, or
+// someone mid-signup/reset isn't stranded). RequireAdmin (inside AdminLayout)
+// still separately gates WHO can actually see /admin content — this list
+// only decides which paths bypass the maintenance blackout entirely.
+const MAINTENANCE_EXEMPT_PATHS = ["/admin", "/login", "/signup", "/forgot-password", "/reset-password", "/verify-email"];
+
+// Checked once per navigation (not polled continuously) — same cadence as a
+// typical maintenance-mode implementation; an admin toggling it mid-session
+// takes effect on that user's next page load/route change, not instantly.
+function MaintenanceGate({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+  const [status, setStatus] = useState<{ active: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    fetch(`${API}/api/maintenance`)
+      .then((r) => r.json())
+      .then(setStatus)
+      .catch(() => setStatus({ active: false, message: "" }));
+  }, []);
+
+  const exempt = MAINTENANCE_EXEMPT_PATHS.some((p) => location.pathname.startsWith(p));
+  if (status?.active && !exempt) {
+    return <MaintenancePage message={status.message} />;
+  }
+  return <>{children}</>;
+}
+
 function App() {
 
 
@@ -53,6 +87,7 @@ function App() {
     <CookieConsent />
     <Analytics />
     <AuthProvider>
+    <MaintenanceGate>
     <Routes>
       <Route path="/" element={<Landing/>}/>
       <Route path="/dashboard" element={<DashboardPage/>}/>
@@ -102,6 +137,7 @@ function App() {
       <Route path="/apply" element={<ApplyTutorPage/>}/>
       
     </Routes>
+    </MaintenanceGate>
   </AuthProvider>
   </BrowserRouter>
     

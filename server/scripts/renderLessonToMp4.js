@@ -1,9 +1,12 @@
 // scripts/renderLessonToMp4.js
 //
 // CLI wrapper around renderService.renderLessonToFile — pulls a lesson's
-// code from MongoDB and renders it to a real .mp4 file. The actual
-// rendering logic lives in services/renderService.js so it can be shared
-// with the download-button endpoint (controllers/exportController.js).
+// code from MongoDB and renders it to a real .mp4 file. This is now the
+// ONLY caller of renderService.js's server-side (headless Chrome + ffmpeg)
+// render path — the web "Download video" button used to share it too (via
+// controllers/exportController.js, for vertical/square formats) but that
+// endpoint was removed entirely; the button is client-side-only now
+// (landscape, via useWebExport.ts/WebCodecs).
 //
 // ── One-time setup ───────────────────────────────────────────────────────
 //   REMOTION_VERSION=$(node -p "require('./node_modules/remotion/package.json').version")

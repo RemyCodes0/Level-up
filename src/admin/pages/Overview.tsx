@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Users, BookOpen, TrendingUp, CreditCard, DollarSign, Eye, Activity, RefreshCw } from "lucide-react";
+import { Users, BookOpen, TrendingUp, CreditCard, DollarSign, Eye, Activity, RefreshCw, Wrench, Loader2 } from "lucide-react";
 import { adminApi } from "../adminApi";
 import { PageHeader, StatCard, LoadingBlock, ErrorBlock, StatusBadge, fmtDate, fmtUsd } from "../components";
 import { Link } from "react-router-dom";
@@ -74,6 +74,8 @@ export default function Overview() {
         }
       />
 
+      <MaintenanceModeCard />
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon={<Users className="h-5 w-5" />} accent="text-blue-500" label="Users" value={overview.users.total}
           sub={`${overview.users.verified} verified · ${overview.users.newThisWeek} new this week`} />
@@ -130,6 +132,112 @@ export default function Overview() {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+interface MaintenanceConfig {
+  active: boolean;
+  message: string;
+}
+
+// Toggle for the site-wide maintenance mode (see App.tsx's MaintenanceGate
+// and the server-side gate in app.js). Loads/saves independently of the rest
+// of the Overview page's data so a slow /overview call never delays this.
+function MaintenanceModeCard() {
+  const [config, setConfig] = useState<MaintenanceConfig | null>(null);
+  const [draftMessage, setDraftMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    adminApi
+      .get<MaintenanceConfig>("/api/admin/maintenance")
+      .then((c) => { setConfig(c); setDraftMessage(c.message); })
+      .catch((err) => setError(err.message || "Failed to load maintenance status."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async (next: Partial<MaintenanceConfig>) => {
+    if (!config) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await adminApi.put<MaintenanceConfig>("/api/admin/maintenance", {
+        active: next.active ?? config.active,
+        message: next.message ?? draftMessage,
+      });
+      setConfig(updated);
+      setDraftMessage(updated.message);
+    } catch (err: any) {
+      setError(err.message || "Failed to save.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="mb-6 h-16 rounded-xl border border-slate-200 bg-white animate-pulse" />;
+  }
+  if (error && !config) {
+    return <div className="mb-6"><ErrorBlock message={error} /></div>;
+  }
+  if (!config) return null;
+
+  return (
+    <div
+      className={`mb-6 rounded-xl border p-5 transition-colors ${
+        config.active ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 ${config.active ? "bg-amber-100" : "bg-slate-100"}`}>
+            <Wrench className={`h-4 w-4 ${config.active ? "text-amber-600" : "text-slate-400"}`} />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-slate-800">
+              Maintenance mode {config.active && <span className="text-amber-700">— ACTIVE</span>}
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {config.active
+                ? "Everyone except admins sees the maintenance page. Course generation and other activity are blocked."
+                : "Site is running normally."}
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={() => save({ active: !config.active })}
+          disabled={saving}
+          className={`shrink-0 relative inline-flex h-7 w-12 items-center rounded-full transition-colors disabled:opacity-50 ${
+            config.active ? "bg-amber-500" : "bg-slate-200"
+          }`}
+        >
+          <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${config.active ? "translate-x-6" : "translate-x-1"}`} />
+        </button>
+      </div>
+
+      <div className="mt-4 flex items-end gap-2">
+        <div className="flex-1">
+          <label className="text-xs font-medium text-slate-500 mb-1 block">Message shown to users</label>
+          <textarea
+            value={draftMessage}
+            onChange={(e) => setDraftMessage(e.target.value)}
+            rows={2}
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-amber-200"
+          />
+        </div>
+        <button
+          onClick={() => save({ message: draftMessage })}
+          disabled={saving || draftMessage === config.message}
+          className="shrink-0 px-4 py-2 rounded-lg text-sm font-medium bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 flex items-center gap-2"
+        >
+          {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Save message
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
     </div>
   );
 }

@@ -96,3 +96,21 @@ export function fmtDate(d: string) {
 export function fmtUsd(n: number) {
   return `$${n.toFixed(n < 1 ? 4 : 2)}`;
 }
+
+// Lessons are always 30fps (see remotion/DynamicPlayer.tsx and the render
+// pipeline) — shared here so every admin surface showing playback position
+// (Users.tsx's progress modal, Courses.tsx's per-lesson progress) agrees.
+const PROGRESS_FPS = 30;
+
+export function fmtMMSS(frames: number): string {
+  const totalSeconds = Math.max(0, Math.floor(frames / PROGRESS_FPS));
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+export function fmtPosition(lastFrame: number, totalFrames: number | null): string {
+  if (!totalFrames) return fmtMMSS(lastFrame);
+  const pct = Math.round((Math.min(lastFrame, totalFrames) / totalFrames) * 100);
+  return `${fmtMMSS(lastFrame)} / ${fmtMMSS(totalFrames)} (${pct}%)`;
+}

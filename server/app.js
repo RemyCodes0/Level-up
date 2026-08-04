@@ -12,7 +12,6 @@ const reviewRoutes = require("./routes/review");
 const courseRoutes = require('./routes/course');
 const paymentRoutes = require('./routes/payment');
 const feedbackRoutes = require('./routes/feedback')
-const exportRoutes = require('./routes/export')
 const checkoutRouter = require('./routes/checkout.js');
 
 const Tutor = require('./models/Tutor');
@@ -47,13 +46,54 @@ app.use('/api/payment', paymentRoutes);
 
 app.use(express.json());
 
+// ──────────────────────────────────────────────────────────────────────────
+// Maintenance mode gate — blocks non-exempt traffic with a 503 when an admin
+// has flipped the toggle on the Overview page. This is DEFENSE IN DEPTH
+// alongside the frontend's own gate (App.tsx) — it protects "activities" even
+// if something calls the API directly instead of going through the app.
+//
+// Exempt prefixes:
+//   /api/admin      — an admin must always be able to manage the site,
+//                      including turning maintenance mode back OFF.
+//   /api/auth       — login must keep working, or an admin who isn't
+//                      currently logged in could lock themselves out.
+//   /api/maintenance — the status check itself (frontend polls this to know
+//                      whether to show the maintenance page at all).
+//   /audio, /uploads — static asset serving, not "activity"; blocking it would
+//                      just break already-loaded playback/previews for no
+//                      benefit (this is registered further down, but the
+//                      prefix is listed here for one central allowlist).
+//
+// Payment webhooks (paymentRoutes, mounted above at line 46, before
+// express.json()) are NOT behind this gate at all — they run earlier in the
+// middleware chain, which is deliberate: an external payment provider's
+// webhook must always be processed, maintenance mode or not, or a customer
+// could pay and never get credited.
+const MAINTENANCE_EXEMPT_PREFIXES = ["/api/admin", "/api/auth", "/api/maintenance", "/audio", "/uploads"];
+app.use(async (req, res, next) => {
+  if (MAINTENANCE_EXEMPT_PREFIXES.some((p) => req.path.startsWith(p))) return next();
+  try {
+    const { getMaintenanceConfig } = require("./services/maintenanceConfigService");
+    const config = await getMaintenanceConfig();
+    if (config.active) {
+      return res.status(503).json({ error: "maintenance", message: config.message });
+    }
+  } catch (err) {
+    // Fail OPEN — a broken maintenance check must never itself take the site
+    // down.
+    console.error("[maintenance] gate check failed, allowing request through:", err.message);
+  }
+  next();
+});
+
+app.use('/api/maintenance', require('./routes/maintenance'));
+
 app.use('/api/auth', authRoutes);
 app.use('/api/tutor', tutorRoutes);
 app.use('/api/book/', bookRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/course', courseRoutes);
 app.use('/api/feedback', feedbackRoutes);
-app.use('/api/export', exportRoutes)
 app.use('/api/assessment', require('./routes/assessment'))
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/admin/email', require('./routes/adminEmail'));

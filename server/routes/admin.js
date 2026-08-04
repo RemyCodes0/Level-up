@@ -14,6 +14,10 @@ const {
   getAdminPricingConfig,
   updateAdminPricingConfig,
 } = require("../controllers/pricingConfigController");
+const {
+  getAdminMaintenanceConfig,
+  updateAdminMaintenanceConfig,
+} = require("../controllers/maintenanceController");
 const { protect } = require("../middleware/authMiddleware");
 const { requireAdmin } = require("../middleware/requireAdmin");
 
@@ -35,6 +39,9 @@ router.get("/users/:userId/progress", getUserProgress);
 // pricingConfigService.js's cache, invalidated on every PUT here).
 router.get("/pricing-config", getAdminPricingConfig);
 router.put("/pricing-config", updateAdminPricingConfig);
+
+router.get("/maintenance", getAdminMaintenanceConfig);
+router.put("/maintenance", updateAdminMaintenanceConfig);
 
 module.exports = router;
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Search, Trash2, Pencil, X, Loader2, Activity, CheckCircle2, Circle } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, fmtDate } from "../components";
+import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, fmtDate, fmtPosition } from "../components";
 
 interface User {
   _id: string;
@@ -152,20 +152,6 @@ interface CourseProgressRow {
   lessons: LessonProgressRow[];
 }
 
-const PROGRESS_FPS = 30;
-
-function fmtMMSS(frames: number): string {
-  const totalSeconds = Math.max(0, Math.floor(frames / PROGRESS_FPS));
-  const m = Math.floor(totalSeconds / 60);
-  const s = totalSeconds % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-function fmtPosition(lastFrame: number, totalFrames: number | null): string {
-  if (!totalFrames) return fmtMMSS(lastFrame);
-  const pct = Math.round((Math.min(lastFrame, totalFrames) / totalFrames) * 100);
-  return `${fmtMMSS(lastFrame)} / ${fmtMMSS(totalFrames)} (${pct}%)`;
-}
 
 function UserProgressModal({ userId, userName, onClose }: { userId: string; userName: string; onClose: () => void }) {
   const [courses, setCourses] = useState<CourseProgressRow[] | null>(null);

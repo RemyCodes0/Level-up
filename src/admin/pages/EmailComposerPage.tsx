@@ -13,6 +13,27 @@ type Job = {
 const API = import.meta.env.VITE_API_URL;
 const PREVIEW_NAME = "Alex"; // sample value for {{name}} in the preview
 
+// The Body field accepts either hand-authored HTML or plain text. Plain text
+// typed with Enter for paragraph breaks was being sent to the browser/email
+// client as literal "\n\n" inside the HTML body — and HTML collapses
+// whitespace by default, so every paragraph rendered as one continuous line.
+// This converts blank-line-separated plain text into real <p>/<br> markup so
+// Enter actually produces visible breaks. If the admin already typed real
+// HTML (starts with/contains a block-level tag), it's trusted as-is and
+// passed through untouched — this field has always doubled as a raw-HTML
+// input for anyone who wants full control.
+function toEmailHtml(raw: string): string {
+  const trimmed = raw.trim();
+  if (/<(p|div|h[1-6]|ul|ol|li|table|br|blockquote)[\s>]/i.test(trimmed)) {
+    return raw;
+  }
+  const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return trimmed
+    .split(/\n\s*\n/)
+    .map((para) => `<p>${escapeHtml(para.trim()).replace(/\n/g, "<br>")}</p>`)
+    .join("\n");
+}
+
 export default function EmailComposerPage() {
   const token = localStorage.getItem("token");
   const auth = { headers: { Authorization: `Bearer ${token}` } };
@@ -44,7 +65,7 @@ export default function EmailComposerPage() {
   // rendered inside a sandboxed iframe so the email's own CSS can't leak into
   // the admin UI, and so the preview matches a real mail client's isolation.
   const previewDoc = useMemo(() => {
-    const filled = (body || "<p style='color:#94a3b8'>Your email preview will appear here…</p>")
+    const filled = (body ? toEmailHtml(body) : "<p style='color:#94a3b8'>Your email preview will appear here…</p>")
       .replace(/\{\{\s*name\s*\}\}/g, PREVIEW_NAME);
     const footer = mode === "broadcast"
       ? `<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">
@@ -93,7 +114,7 @@ export default function EmailComposerPage() {
     setSending(true);
     try {
       const payload: Record<string, unknown> = {
-        mode: sendMode, subject, html: body, text: body.replace(/<[^>]+>/g, ""),
+        mode: sendMode, subject, html: toEmailHtml(body), text: body.replace(/<[^>]+>/g, ""),
       };
       if (sendMode === "individual") payload.to = to;
       if (sendMode === "broadcast") payload.audience = audience;
@@ -193,10 +214,10 @@ export default function EmailComposerPage() {
             <div>
               <div className="flex items-baseline justify-between mb-1.5">
                 <label className="text-xs font-medium text-slate-400">Body</label>
-                <span className="text-[11px] text-slate-600">HTML · {"{{name}}"} → recipient's name</span>
+                <span className="text-[11px] text-slate-600">Plain text or HTML · blank line = new paragraph · {"{{name}}"} → recipient's name</span>
               </div>
               <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12}
-                placeholder={"<h1>Hey {{name}}</h1>\n<p>We just shipped something new…</p>"}
+                placeholder={"Hey {{name}},\n\nWe just shipped something new…"}
                 className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3.5 py-3 text-[13px] leading-relaxed outline-none transition-colors focus:border-indigo-500/60 font-mono resize-y" />
             </div>
 

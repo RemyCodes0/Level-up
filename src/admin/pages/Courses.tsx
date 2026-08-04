@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { CheckCircle, XCircle, Clock, Loader2, Play, X, Trash2, DollarSign } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, StatusBadge, Pagination, fmtDate, fmtUsd } from "../components";
+import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, StatusBadge, Pagination, fmtDate, fmtUsd, fmtPosition } from "../components";
 import { DynamicPlayer } from "../../remotion/DynamicPlayer";
 
 interface ActivityItem {
@@ -96,21 +96,47 @@ export default function Courses() {
   );
 }
 
+interface LessonProgressInfo {
+  lessonNumber: number;
+  watched: boolean;
+  watchedAt: string | null;
+  lastPositionFrame: number;
+  totalFrames: number | null;
+}
+
 function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string; onClose: () => void; onDeleted: () => void }) {
   const [course, setCourse] = useState<any | null>(null);
   const [costs, setCosts] = useState<{ totalUsd: number; byKind: { kind: string; totalUsd: number; calls: number }[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [previewLesson, setPreviewLesson] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Keyed by lessonNumber — this course's owner's watch/position state for
+  // each lesson. A course belongs to exactly one userId (see Course.js), so
+  // this reuses the same GET /api/admin/users/:userId/progress endpoint
+  // built for the Users page rather than a second, course-scoped one.
+  const [progressByLesson, setProgressByLesson] = useState<Map<number, LessonProgressInfo> | null>(null);
 
   useEffect(() => {
     setLoading(true);
     setPreviewLesson(null);
+    setProgressByLesson(null);
     Promise.all([
       adminApi.get<{ course: any }>(`/api/admin/courses/${courseId}`),
       adminApi.get<{ totalUsd: number; byKind: any[] }>(`/api/admin/courses/${courseId}/costs`),
     ])
-      .then(([c, costData]) => { setCourse(c.course); setCosts(costData); })
+      .then(([c, costData]) => {
+        setCourse(c.course);
+        setCosts(costData);
+        const ownerId = c.course?.userId?._id;
+        if (!ownerId) return;
+        adminApi
+          .get<{ courses: { courseId: string; lessons: LessonProgressInfo[] }[] }>(`/api/admin/users/${ownerId}/progress`)
+          .then((res) => {
+            const match = res.courses.find((cs) => cs.courseId === courseId);
+            setProgressByLesson(new Map((match?.lessons || []).map((l) => [l.lessonNumber, l])));
+          })
+          .catch((err) => console.error("Failed to load lesson progress:", err));
+      })
       .catch((err) => console.error(err))
       .finally(() => setLoading(false));
   }, [courseId]);
@@ -173,7 +199,9 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {course.lessons.map((l: any, i: number) => (
+                  {course.lessons.map((l: any, i: number) => {
+                    const progress = progressByLesson?.get(i + 1);
+                    return (
                     <div key={i} className="flex items-center gap-3 p-3 rounded-lg border border-slate-100">
                       <div className="shrink-0">
                         {l.status === "ready" ? <CheckCircle className="h-4 w-4 text-emerald-500" /> :
@@ -185,13 +213,28 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
                         <p className="text-sm font-medium text-slate-700 truncate">{i + 1}. {l.title}</p>
                         {l.status === "failed" && l.error && <p className="text-xs text-red-400 truncate">{l.error}</p>}
                       </div>
+                      {progress && (
+                        <div className="shrink-0 text-xs text-right">
+                          {progress.watched ? (
+                            <span className="text-emerald-600 font-medium">Watched</span>
+                          ) : progress.lastPositionFrame > 0 ? (
+                            <span className="text-amber-600 font-medium">In progress</span>
+                          ) : (
+                            <span className="text-slate-300">Not started</span>
+                          )}
+                          {progress.lastPositionFrame > 0 && (
+                            <p className="text-slate-400">{fmtPosition(progress.lastPositionFrame, progress.totalFrames)}</p>
+                          )}
+                        </div>
+                      )}
                       {l.status === "ready" && l.code && (
                         <button onClick={() => setPreviewLesson(i)} className="shrink-0 flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800 bg-blue-50 px-3 py-1.5 rounded-lg">
                           <Play className="h-3 w-3" /> Preview
                         </button>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

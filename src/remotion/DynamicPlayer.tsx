@@ -27,6 +27,15 @@ interface DynamicPlayerProps {
   // by callers that need to react to playback position, e.g. showing an
   // "Up next" prompt a few seconds before the lesson ends.
   onFrameUpdate?: (frame: number) => void;
+  // Caller-supplied overlay UI (e.g. an "Up next" prompt), rendered as a
+  // DESCENDANT of containerRef — the same element that actually gets
+  // requestFullscreen()'d — instead of a sibling outside this component.
+  // This is the exact same fix VideoControls below already needed: an
+  // overlay rendered outside the fullscreened element simply isn't part of
+  // it, so it vanishes the moment the player goes fullscreen. Passing it in
+  // here instead of the caller rendering its own absolutely-positioned div
+  // next to <DynamicPlayer/> keeps it visible in both states.
+  overlay?: ReactNode;
 }
 
 const FPS = 30;
@@ -325,6 +334,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   retrying,
   onSeekBack,
   onFrameUpdate,
+  overlay,
 }) => {
   const playerRef = useRef<PlayerRef>(null);
   // Wraps BOTH the Player and the controls overlay — this is the element we
@@ -650,6 +660,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
       />
+      {overlay}
     </div>
   );
 };
