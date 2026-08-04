@@ -20,6 +20,12 @@ const lessonProgressSchema = new mongoose.Schema(
     // again) — distinct from scene-level seek-backward replays below.
     replayCount: { type: Number, default: 0 },
     sceneReplays: [sceneReplaySchema],
+    // Last frame reported by the player's periodic position ping (see
+    // progressController.js's logPosition) — raw, not monotonic-clamped, so
+    // a user who scrubs back before closing the tab has that reflected
+    // honestly rather than pinned to their furthest-ever point.
+    lastPositionFrame: { type: Number, default: 0 },
+    lastPlayedAt: { type: Date, default: null },
   },
   { _id: false }
 );

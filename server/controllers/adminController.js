@@ -14,6 +14,7 @@ const User = require("../models/User");
 const Course = require("../models/Course");
 const AiUsageLog = require("../models/AiUsageLog");
 const PageView = require("../models/PageView");
+const Progress = require("../models/Progress");
 
 // GET /api/admin/overview
 // Returns the headline numbers + breakdowns for the dashboard, in one call.
@@ -360,6 +361,63 @@ exports.getCourseDetail = async (req, res) => {
   } catch (err) {
     console.error("admin getCourseDetail error:", err);
     res.status(500).json({ error: "Failed to load course detail" });
+  }
+};
+
+// GET /api/admin/users/:userId/progress
+// Every course a user has touched, with per-lesson watched-state AND their
+// last-reported playback position (see Progress.js's lastPositionFrame) —
+// lets an admin see not just "watched Y/N" but exactly where a user left
+// off in a lesson they haven't finished. Course lookup is explicitly
+// projected to topic/lessons.lessonNumber/lessons.title/lessons.totalFrames
+// — never lessons.code, which is a multi-KB generated TSX string with no
+// use here.
+exports.getUserProgress = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const [user, progressDocs] = await Promise.all([
+      User.findById(userId).select("name email").lean(),
+      Progress.find({ userId }).lean(),
+    ]);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const courseIds = progressDocs.map((p) => p.courseId);
+    const courses = await Course.find({ _id: { $in: courseIds } })
+      .select("topic lessons.lessonNumber lessons.title lessons.totalFrames")
+      .lean();
+    const courseById = new Map(courses.map((c) => [String(c._id), c]));
+
+    const result = progressDocs.map((progress) => {
+      const course = courseById.get(String(progress.courseId));
+      const lessonMetaByNumber = new Map(
+        (course?.lessons || []).map((l) => [l.lessonNumber, l])
+      );
+
+      return {
+        courseId: progress.courseId,
+        topic: course?.topic || "(deleted course)",
+        completedAt: progress.completedAt,
+        lessons: progress.lessons.map((l) => {
+          const meta = lessonMetaByNumber.get(l.lessonNumber);
+          return {
+            lessonNumber: l.lessonNumber,
+            title: meta?.title || `Lesson ${l.lessonNumber}`,
+            totalFrames: meta?.totalFrames ?? null,
+            watched: l.watched,
+            watchedAt: l.watchedAt,
+            replayCount: l.replayCount,
+            lastPositionFrame: l.lastPositionFrame || 0,
+            lastPlayedAt: l.lastPlayedAt,
+          };
+        }),
+      };
+    });
+
+    res.json({ user, courses: result });
+  } catch (err) {
+    console.error("admin getUserProgress error:", err);
+    res.status(500).json({ error: "Failed to load user progress" });
   }
 };
 

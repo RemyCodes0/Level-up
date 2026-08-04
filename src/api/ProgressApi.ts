@@ -16,6 +16,8 @@ export interface LessonProgress {
   watchedAt: string | null;
   replayCount: number;
   sceneReplays: SceneReplay[];
+  lastPositionFrame: number;
+  lastPlayedAt: string | null;
 }
 
 export interface CourseProgress {
@@ -50,4 +52,22 @@ export async function logSceneReplay(courseId: string, lessonNumber: number, sce
   });
   if (!res.ok) throw new Error("Failed to log replay");
   return res.json();
+}
+
+// Periodic best-effort ping reporting the player's current frame — throttled
+// by the caller (see AiTutor.tsx), not on every frameupdate. keepalive lets
+// the request survive a page-teardown flush (pagehide/unmount) that a normal
+// fetch would otherwise get cancelled mid-flight.
+export async function logPosition(
+  courseId: string,
+  lessonNumber: number,
+  frame: number,
+  opts?: { keepalive?: boolean }
+): Promise<void> {
+  await fetch(`${BASE_URL}/api/progress/${courseId}/lesson/${lessonNumber}/position`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ frame }),
+    keepalive: !!opts?.keepalive,
+  });
 }

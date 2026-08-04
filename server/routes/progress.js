@@ -1,6 +1,6 @@
 const { Router } = require("express");
 const { protect } = require("../middleware/authMiddleware");
-const { getProgress, markWatched, logReplay } = require("../controllers/progressController");
+const { getProgress, markWatched, logReplay, logPosition } = require("../controllers/progressController");
 
 const router = Router();
 
@@ -9,5 +9,6 @@ const router = Router();
 router.get("/:courseId", protect, getProgress);
 router.post("/:courseId/lesson/:lessonNumber/watched", protect, markWatched);
 router.post("/:courseId/lesson/:lessonNumber/replay", protect, logReplay);
+router.post("/:courseId/lesson/:lessonNumber/position", protect, logPosition);
 
 module.exports = router;

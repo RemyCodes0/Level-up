@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Search, Trash2, Pencil, X, Loader2 } from "lucide-react";
+import { Search, Trash2, Pencil, X, Loader2, Activity, CheckCircle2, Circle } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, LoadingBlock, ErrorBlock, EmptyState } from "../components";
+import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, fmtDate } from "../components";
 
 interface User {
   _id: string;
@@ -21,6 +21,7 @@ export default function Users() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<User | null>(null);
+  const [viewingProgress, setViewingProgress] = useState<User | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -92,6 +93,9 @@ export default function Users() {
                     <td className="px-5 py-3 text-slate-600">{u.courseCredits ?? 0}</td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-1 justify-end">
+                        <button onClick={() => setViewingProgress(u)} className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg" title="View course progress">
+                          <Activity className="h-3.5 w-3.5" />
+                        </button>
                         <button onClick={() => setEditing(u)} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg">
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
@@ -118,6 +122,129 @@ export default function Users() {
           }}
         />
       )}
+
+      {viewingProgress && (
+        <UserProgressModal
+          userId={viewingProgress._id}
+          userName={viewingProgress.name}
+          onClose={() => setViewingProgress(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface LessonProgressRow {
+  lessonNumber: number;
+  title: string;
+  totalFrames: number | null;
+  watched: boolean;
+  watchedAt: string | null;
+  replayCount: number;
+  lastPositionFrame: number;
+  lastPlayedAt: string | null;
+}
+
+interface CourseProgressRow {
+  courseId: string;
+  topic: string;
+  completedAt: string | null;
+  lessons: LessonProgressRow[];
+}
+
+const PROGRESS_FPS = 30;
+
+function fmtMMSS(frames: number): string {
+  const totalSeconds = Math.max(0, Math.floor(frames / PROGRESS_FPS));
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function fmtPosition(lastFrame: number, totalFrames: number | null): string {
+  if (!totalFrames) return fmtMMSS(lastFrame);
+  const pct = Math.round((Math.min(lastFrame, totalFrames) / totalFrames) * 100);
+  return `${fmtMMSS(lastFrame)} / ${fmtMMSS(totalFrames)} (${pct}%)`;
+}
+
+function UserProgressModal({ userId, userName, onClose }: { userId: string; userName: string; onClose: () => void }) {
+  const [courses, setCourses] = useState<CourseProgressRow[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    adminApi
+      .get<{ user: { _id: string; name: string; email: string }; courses: CourseProgressRow[] }>(
+        `/api/admin/users/${userId}/progress`
+      )
+      .then((res) => setCourses(res.courses))
+      .catch((err) => setError(err.message || "Failed to load progress."))
+      .finally(() => setLoading(false));
+  }, [userId]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-white flex items-center justify-between px-6 py-4 border-b border-slate-100">
+          <h2 className="text-lg font-bold text-slate-900">{userName}'s progress</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+        </div>
+
+        <div className="p-6">
+          {loading ? (
+            <LoadingBlock />
+          ) : error ? (
+            <ErrorBlock message={error} />
+          ) : !courses || courses.length === 0 ? (
+            <EmptyState label="courses" />
+          ) : (
+            <div className="space-y-6">
+              {courses.map((c) => (
+                <div key={c.courseId} className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                    <span className="font-medium text-slate-800 text-sm">{c.topic}</span>
+                    {c.completedAt && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                        Completed {fmtDate(c.completedAt)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="divide-y divide-slate-50">
+                    {c.lessons
+                      .slice()
+                      .sort((a, b) => a.lessonNumber - b.lessonNumber)
+                      .map((l) => (
+                        <div key={l.lessonNumber} className="px-4 py-2.5 flex items-center justify-between text-sm">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {l.watched ? (
+                              <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                            ) : (
+                              <Circle className="h-4 w-4 text-slate-300 shrink-0" />
+                            )}
+                            <span className="text-slate-700 truncate">
+                              Lesson {l.lessonNumber}: {l.title}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0 text-xs text-slate-400">
+                            {l.watchedAt && <span>watched {fmtDate(l.watchedAt)}</span>}
+                            {l.lastPositionFrame > 0 && (
+                              <span className="text-slate-500 font-medium">{fmtPosition(l.lastPositionFrame, l.totalFrames)}</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

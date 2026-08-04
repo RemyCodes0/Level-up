@@ -26,7 +26,7 @@ import {
   getPricingConfig,
 } from "../api/CourseApi";
 import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, CourseTier, CreditPack } from "../api/CourseApi";
-import { getProgress, markLessonWatched } from "../api/ProgressApi";
+import { getProgress, markLessonWatched, logPosition } from "../api/ProgressApi";
 import { submitQuiz as submitQuizApi, getLatestAttempt } from "../api/QuizApi";
 import type { QuizResult } from "../api/QuizApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
@@ -827,6 +827,10 @@ function SceneGenerationFilmstrip({ sceneProgress }: { sceneProgress: SceneProgr
 // instead of waiting for playback to finish naturally.
 const UP_NEXT_THRESHOLD_SEC = 5;
 const FPS = 30;
+// Reporting a position ping on every frameupdate tick would hammer the API
+// (frameupdate fires far more often than this) — 5s is frequent enough to
+// know "where did they leave off" without being chatty.
+const POSITION_REPORT_INTERVAL_MS = 5000;
 
 function VideoPlayer({
   lesson, onComplete, onRetry, retrying, courseId, lessonNumber,
@@ -843,7 +847,37 @@ function VideoPlayer({
   // dismissed forever from a previous lesson.
   useEffect(() => { setShowUpNext(false); setDismissed(false); }, [lessonNumber]);
 
+  // lastFrameRef updates on every frameupdate tick (cheap, no network) so a
+  // flush always has an up-to-date value to send; lastSentAtRef gates the
+  // actual POST to once per POSITION_REPORT_INTERVAL_MS.
+  const lastFrameRef = useRef(0);
+  const lastSentAtRef = useRef(0);
+
+  // Best-effort flush on lesson switch/unmount — otherwise a user who leaves
+  // mid-lesson could lose up to POSITION_REPORT_INTERVAL_MS of granularity.
+  useEffect(() => {
+    return () => {
+      if (courseId) logPosition(courseId, lessonNumber, lastFrameRef.current, { keepalive: true }).catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseId, lessonNumber]);
+
+  // Same flush on tab hide/close — pagehide (not beforeunload) survives
+  // bfcache and reliably fires on mobile Safari's tab-switch-as-close too.
+  useEffect(() => {
+    if (!courseId) return;
+    const flush = () => { logPosition(courseId, lessonNumber, lastFrameRef.current, { keepalive: true }).catch(() => {}); };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [courseId, lessonNumber]);
+
   const handleFrameUpdate = (frame: number) => {
+    lastFrameRef.current = frame;
+    if (courseId && Date.now() - lastSentAtRef.current >= POSITION_REPORT_INTERVAL_MS) {
+      lastSentAtRef.current = Date.now();
+      logPosition(courseId, lessonNumber, frame).catch(() => {});
+    }
+
     if (!lesson.totalFrames || !nextLessonTitle || !nextLessonReady || dismissed) return;
     const secondsRemaining = (lesson.totalFrames - frame) / FPS;
     setShowUpNext(secondsRemaining > 0 && secondsRemaining <= UP_NEXT_THRESHOLD_SEC);
