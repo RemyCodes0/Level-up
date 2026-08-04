@@ -743,35 +743,47 @@ function GeneratingLessonPreview() {
 // once this scene's own previewCode is set, and stays keyed by scene index
 // so React never re-invokes it for a sibling scene's update.
 function SceneThumbnailBox({ scene }: { scene: SceneProgressItem }) {
+  // previewCode is never actually populated by the current chunked codegen
+  // pipeline (chunks generate several scenes' code together, not one scene
+  // at a time, so there's no single-scene source to extract a real preview
+  // from) — codeReady alone is the real, live "this scene's chunk landed"
+  // signal now. hasThumbnail stays as a graceful upgrade path: if previewCode
+  // is ever populated again, a real Thumbnail renders instead of the plain
+  // checkmark, with no other change needed here.
   const { Component } = useCompilation(scene.previewCode ?? "");
-  const ready = scene.codeReady && !!scene.previewCode && !!Component;
+  const ready = scene.codeReady;
+  const hasThumbnail = ready && !!scene.previewCode && !!Component;
 
   return (
     <div
       className={`relative h-12 sm:h-16 rounded-md overflow-hidden border transition-colors duration-500 ${
-        ready ? "border-blue-500/50 bg-slate-900" : "border-slate-700/60 bg-slate-800"
+        ready ? "border-emerald-500/50 bg-emerald-950/30" : "border-slate-700/60 bg-slate-800"
       }`}
       style={{ flexGrow: scene.durationInFrames ?? 1, flexBasis: 0, flexShrink: 0 }}
       title={scene.label}
     >
-      {ready ? (
-        <Thumbnail
-          component={Component!}
-          frameToDisplay={Math.min(30, Math.max(1, Math.floor((scene.durationInFrames ?? 60) / 2)))}
-          durationInFrames={scene.durationInFrames ?? 1}
-          compositionWidth={1920}
-          compositionHeight={1080}
-          fps={30}
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-        />
+      {hasThumbnail ? (
+        <>
+          <Thumbnail
+            component={Component!}
+            frameToDisplay={Math.min(30, Math.max(1, Math.floor((scene.durationInFrames ?? 60) / 2)))}
+            durationInFrames={scene.durationInFrames ?? 1}
+            compositionWidth={1920}
+            compositionHeight={1080}
+            fps={30}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+          <div className="absolute top-1 right-1 bg-emerald-500 rounded-full p-0.5 shadow-md animate-in zoom-in fade-in duration-300">
+            <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />
+          </div>
+        </>
+      ) : ready ? (
+        <div className="absolute inset-0 flex items-center justify-center animate-in zoom-in fade-in duration-300">
+          <Check className="h-4 w-4 sm:h-5 sm:w-5 text-emerald-400" strokeWidth={3} />
+        </div>
       ) : (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="h-1.5 w-1.5 rounded-full bg-slate-500 animate-pulse" />
-        </div>
-      )}
-      {ready && (
-        <div className="absolute top-1 right-1 bg-emerald-500 rounded-full p-0.5 shadow-md animate-in zoom-in fade-in duration-300">
-          <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />
         </div>
       )}
     </div>
@@ -2169,13 +2181,18 @@ export default function AILearningPage() {
               const isLockedStatus = status === "locked";
               const isWaiting = isGenerating && lessonStatuses.findIndex((s) => s === "generating") !== i;
               const isActive = activeSection === "video" && activeLesson === i;
-              // Disabled while generating OR while locked behind the free trial
-              const isDisabled = isGenerating || isLockedStatus;
+              // Only actually disabled while locked behind the free trial —
+              // a still-generating lesson is clickable so the user can watch
+              // ITS OWN filmstrip/progress (see SceneGenerationFilmstrip),
+              // not just whichever lesson happens to be active. All 6 lessons
+              // build concurrently, so there's no reason to trap the user on
+              // one lesson while others finish in the background unseen.
+              const isDisabled = isLockedStatus;
               const progress = lessonProgresses[i] ?? 0;
               return (
                 <button key={lesson.id} disabled={isDisabled}
                   onClick={() => { if (!isDisabled) { analytics.lessonViewed({ lesson: i + 1 }); setActiveLesson(i); setActiveSection("video"); if (isMobile) setCourseSidebarOpen(false); } }}
-                  className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${isActive ? "bg-blue-50 border-r-2 border-blue-600" : isFailed ? "opacity-70 hover:bg-red-50/50" : isLockedStatus ? "opacity-70 cursor-not-allowed" : isDisabled ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50"}`}
+                  className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${isActive ? "bg-blue-50 border-r-2 border-blue-600" : isFailed ? "opacity-70 hover:bg-red-50/50" : isLockedStatus ? "opacity-70 cursor-not-allowed" : "hover:bg-slate-50"}`}
                 >
                   <div className="mt-0.5 shrink-0">
                     <LessonStatusIcon status={status} completed={lesson.completed} isActive={isActive} />

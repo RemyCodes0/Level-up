@@ -1801,7 +1801,7 @@ function stitchLessonCode({ header, chunkCodes, scenes, componentName }) {
 // whole lesson from scratch — measured to roughly double total code-gen
 // wall-clock time on a lesson where only one chunk out of four needed a
 // second try.)
-async function generateLessonCode(lesson, componentName, scenes, totalFrames, maxAttempts = 3, { userId = null, courseId = null, headerPromise = null } = {}) {
+async function generateLessonCode(lesson, componentName, scenes, totalFrames, maxAttempts = 3, { userId = null, courseId = null, headerPromise = null, onChunkReady = null } = {}) {
   const lessonStart = Date.now();
 
   const generatedHeader = headerPromise
@@ -1872,9 +1872,18 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
 
     for (let idx = 0; idx < results.length; idx++) {
       const result = results[idx];
-      const { i } = pending[idx];
+      const { i, start, chunkScenes } = pending[idx];
       if (result.status === "fulfilled") {
         chunkCodes[i] = result.value;
+        // Fire-and-forget — a progress-UI write failing must never fail the
+        // actual code generation it's just reporting on. Fires the instant
+        // THIS chunk's raw generation succeeds, not after the whole lesson's
+        // later critic review — see the onChunkReady call in the
+        // critic-rejection retry loop below for why that's an accepted,
+        // deliberate trade (a rare re-fire, not a correctness issue).
+        if (onChunkReady) {
+          try { onChunkReady(start, chunkScenes.length); } catch (_) {}
+        }
       } else {
         lastError = result.reason;
         if (isNonRetryable(result.reason)) {
@@ -1955,7 +1964,12 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
       e.stage = "code";
       throw e;
     }
-    results.forEach((r, i) => { chunkCodes[i] = r.value; });
+    results.forEach((r, i) => {
+      chunkCodes[i] = r.value;
+      if (onChunkReady) {
+        try { onChunkReady(chunkGroups[i].start, chunkGroups[i].chunkScenes.length); } catch (_) {}
+      }
+    });
   }
 }
 

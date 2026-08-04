@@ -305,7 +305,24 @@ async function buildLesson(courseId, lesson, userId = null) {
         measuredScenes,
         totalFrames,
         undefined,
-        { userId, courseId, headerPromise: attempt === 1 ? headerPromise : null }
+        {
+          userId, courseId, headerPromise: attempt === 1 ? headerPromise : null,
+          // Fires the instant a chunk of scenes (start..start+count-1) lands
+          // — lets the filmstrip show a green check per scene as chunks
+          // finish, instead of everything jumping from 0 to "ready" only
+          // once the WHOLE lesson's code is done. Best-effort: a failed
+          // write here shouldn't fail code generation, just leaves those
+          // scenes showing "not ready yet" a little longer than reality.
+          onChunkReady: (start, count) => {
+            const update = {};
+            for (let i = start; i < start + count; i++) {
+              update[`lessons.${lesson.lessonNumber - 1}.sceneProgress.${i}.codeReady`] = true;
+            }
+            Course.findByIdAndUpdate(courseId, { $set: update }).catch((progressErr) => {
+              console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to save code progress for scenes ${start + 1}-${start + count} (non-fatal):`, progressErr.message);
+            });
+          },
+        }
       );
 
       // Scene boundaries for replay analytics (Progress model) — computed
