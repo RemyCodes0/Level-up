@@ -11,7 +11,7 @@ function readinessLabel(pct) {
   if (pct >= READY_PCT) return "Exam Ready";
   if (pct >= ALMOST_PCT) return "Almost Ready";
   if (pct >= REVIEW_PCT) return "Needs Review";
-  return "Needs Tutoring";
+  return "Needs Practice";
 }
 
 // Server-side scoring — the client sends only { questionId, selected }, never

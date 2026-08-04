@@ -7,7 +7,7 @@ import { PageMeta } from "@/components/PageMeta";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Coins, Gift, ShoppingCart, RefreshCcw, ArrowDownCircle, ArrowUpCircle, Clock } from "lucide-react";
+import { Loader2, Coins, Gift, ShoppingCart, RefreshCcw, ArrowDownCircle, ArrowUpCircle, Clock, MessageSquare } from "lucide-react";
 import { getCreditsBalance, getTransactions } from "../api/CourseApi";
 import type { CreditsBalance, CreditTransactionEntry } from "../api/CourseApi";
 import { ReferralCard } from "../components/ReferralCard";
@@ -18,6 +18,7 @@ const SOURCE_LABEL: Record<CreditTransactionEntry["source"], string> = {
   purchase: "Credit pack purchase",
   course_generation: "Course generated",
   refund: "Refund (generation failed)",
+  feedback: "Feedback reward",
 };
 
 const SOURCE_ICON: Record<CreditTransactionEntry["source"], React.ReactNode> = {
@@ -26,6 +27,7 @@ const SOURCE_ICON: Record<CreditTransactionEntry["source"], React.ReactNode> = {
   purchase: <ShoppingCart className="h-4 w-4 text-emerald-500" />,
   course_generation: <ArrowDownCircle className="h-4 w-4 text-slate-400" />,
   refund: <RefreshCcw className="h-4 w-4 text-amber-500" />,
+  feedback: <MessageSquare className="h-4 w-4 text-blue-500" />,
 };
 
 function formatDate(iso: string) {

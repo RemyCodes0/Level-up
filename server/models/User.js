@@ -28,6 +28,10 @@ const UserSchema = new mongoose.Schema({
   referralRewardGranted: { type: Boolean, default: false },
   referralCount:         { type: Number, default: 0 },
   referralCreditsEarned: { type: Number, default: 0 },
+  // One-time 20-credit reward for submitting the feedback form — see
+  // feedbackController.js's createFeedback. Same race-safe "set before
+  // granting" pattern as referralRewardGranted above.
+  feedbackCreditGranted: { type: Boolean, default: false },
 
   // ── AI Course Credits ──────────────────────────────────────────────────────
   courseCredits: { type: Number, default: 0 },      // non-expiring credits (referral, purchase)

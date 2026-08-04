@@ -911,7 +911,9 @@ FRAME-BOUNDARY SAFETY — every scene will rely on these exact consts, define th
     const clampPos = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
     const SVG_FRAME = { position: "absolute" as const, left: 0, top: 0, width: 1920, height: 1080, pointerEvents: "none" as const, overflow: "visible" as const };
 SVG_FRAME exists ONLY to be applied as style={SVG_FRAME} on a full-frame overlay <svg> (see rule 5 above) — every scene reuses this exact name/shape so there is never a reason to hand-roll a second version of it.
-If this lesson's subject involves direction, vectors, forces, or angles (physics, math, engineering, navigation), also build shared Arrow({from,to,color,width}) and AngleArc({vertex,angle1,angle2,radius,color}) helpers here, computing direction with Math.atan2(dy,dx).
+If this lesson's subject involves direction, vectors, forces, or angles (physics, math, engineering, navigation), also build shared Arrow({from,to,color,width}) and AngleArc({vertex,angle1,angle2,radius,color}) helpers here, computing direction with Math.atan2(dy,dx). Every point argument (from/to/vertex) is a plain {x, y} object — NEVER an array, NEVER {cx, cy}. Destructure it as const {x, y} = point inside the helper itself, and every scene that calls Arrow/AngleArc must pass that same {x, y} shape — this helper and its callers are generated separately and never see each other's code, so an inconsistent shape here (an array, a {cx,cy} pair, or a missing point) is a real crash that has shipped to production before ("X is not iterable" / "Cannot read properties of undefined (reading 'cx')").
+
+INTERPOLATE SAFETY (applies to Backdrop and every helper here that animates): interpolate() and interpolateColors() ALWAYS need exactly 3 arguments (or 4 with an options object). The 2nd/3rd arguments MUST be array literals of plain number literals, and MUST be the SAME LENGTH as each other — a real production crash came from exactly this: an inputRange/outputRange length mismatch inside Backdrop. inputRange strictly increasing, no repeats.
 
 LAYOUT ZONES — copy this EXACT const, verbatim, unchanged:
     const ZONES = {
@@ -986,7 +988,7 @@ VISUAL CONTINUITY: reuse the header's palette/motif/helpers/ZONES by NAME — ne
 PREBUILT COMPONENTS — the header/library code below also already declares AnimatedGraph({nodes,edges,activeNodes,highlightEdges,area}) and AnimatedArray({values,highlightIndices,area}) (hand-built, tested, not something you write). If a scene's domainSkill is "algorithm-trace" — a graph/tree/network being traversed, or an array/list being sorted/searched/manipulated — STRONGLY PREFER calling one of these with data instead of hand-writing the diagram's SVG yourself: pass nodes/edges (or values/highlightIndices) as plain data objects/arrays, using each entry's revealAt (a frame number) to stage when it appears. Do not redeclare AnimatedGraph/AnimatedArray, and do not hand-roll an equivalent from raw <svg> when one of these already fits — that's exactly the free-form code this exists to replace. For scenes that don't fit either shape, build Layer 2 by hand as usual.
 
 INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
-12. interpolate() ALWAYS needs exactly 3 arguments. The 2nd/3rd arguments MUST be array literals — [0, 20] — plain number literals only, no variables/expressions inside. inputRange strictly increasing, no repeats. For hold-at-final-value: 2 values + CLAMP.
+12. interpolate() AND interpolateColors() ALWAYS need exactly 3 arguments. The 2nd/3rd arguments MUST be array literals — [0, 20] — plain number literals only, no variables/expressions inside, and MUST be the SAME LENGTH as each other (e.g. [0, 30, 60] needs exactly 3 output values, not 2 and not 17 — a mismatched length crashes immediately). inputRange strictly increasing, no repeats. For hold-at-final-value: 2 values + CLAMP.
 13. NEVER produce NaN in any SVG attribute — guard all division (v/(d||1)) and array access; filter NaN out of polygon/polyline points.
 14. CLAMP entrance/exit animations with the header's CLAMP constant. Continuous Math.sin/cos motion doesn't need CLAMP.
 15. THE 1920x1080 FRAME IS A HARD BOUNDARY. Route every final x/y/cx/cy/top/left value through the header's clampPos() to SAFE as its LAST step.
@@ -1866,24 +1868,32 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
         generateSceneChunk(
           lesson, chunkScenes, start, scenes.length, header, scenes,
           new Set(headerAvailableNames), componentName, undefined, { userId, courseId }
-        )
+        ).then((value) => {
+          // Fire-and-forget, attached to THIS chunk's own promise — not
+          // after the surrounding Promise.allSettled resolves. allSettled
+          // only resolves once EVERY chunk in the batch has settled, so
+          // firing there means a fast chunk's tick waits on the slowest
+          // sibling in the same batch instead of appearing the instant IT
+          // validates — exactly the bug this fixes. A progress-UI write
+          // failing must never fail the actual code generation it's just
+          // reporting on, hence the try/catch. Fires on raw generation
+          // success, not the whole lesson's later critic review — see the
+          // onChunkReady call in the critic-rejection retry loop below for
+          // why that's an accepted, deliberate trade (a rare re-fire, not a
+          // correctness issue).
+          if (onChunkReady) {
+            try { onChunkReady(start, chunkScenes.length); } catch (_) {}
+          }
+          return value;
+        })
       )
     );
 
     for (let idx = 0; idx < results.length; idx++) {
       const result = results[idx];
-      const { i, start, chunkScenes } = pending[idx];
+      const { i } = pending[idx];
       if (result.status === "fulfilled") {
         chunkCodes[i] = result.value;
-        // Fire-and-forget — a progress-UI write failing must never fail the
-        // actual code generation it's just reporting on. Fires the instant
-        // THIS chunk's raw generation succeeds, not after the whole lesson's
-        // later critic review — see the onChunkReady call in the
-        // critic-rejection retry loop below for why that's an accepted,
-        // deliberate trade (a rare re-fire, not a correctness issue).
-        if (onChunkReady) {
-          try { onChunkReady(start, chunkScenes.length); } catch (_) {}
-        }
       } else {
         lastError = result.reason;
         if (isNonRetryable(result.reason)) {
@@ -1947,7 +1957,15 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
         generateSceneChunk(
           lesson, chunkScenes, start, scenes.length, header, scenes,
           new Set(headerAvailableNames), componentName, undefined, { userId, courseId }
-        )
+        ).then((value) => {
+          // Same fix as the pending-chunks loop above — attached to THIS
+          // chunk's own promise so it fires the instant IT validates, not
+          // after every chunk in the regeneration batch has settled.
+          if (onChunkReady) {
+            try { onChunkReady(start, chunkScenes.length); } catch (_) {}
+          }
+          return value;
+        })
       )
     );
     const firstFailure = results.find((r) => r.status === "rejected");
@@ -1964,12 +1982,7 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
       e.stage = "code";
       throw e;
     }
-    results.forEach((r, i) => {
-      chunkCodes[i] = r.value;
-      if (onChunkReady) {
-        try { onChunkReady(chunkGroups[i].start, chunkGroups[i].chunkScenes.length); } catch (_) {}
-      }
-    });
+    results.forEach((r, i) => { chunkCodes[i] = r.value; });
   }
 }
 

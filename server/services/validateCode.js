@@ -160,22 +160,30 @@ function checkInterpolateCalls(ast) {
   traverse(ast, {
     CallExpression(path) {
       const { node } = path;
-      if (node.callee.type !== "Identifier" || node.callee.name !== "interpolate") return;
+      // interpolateColors() shares interpolate()'s exact argument shape
+      // (frame, inputRange, outputRange, options?) and the exact same crash
+      // class — a real production crash ("outputRange can not be undefined")
+      // came from an interpolateColors() call this function used to skip
+      // entirely, since it only ever matched the name "interpolate". Every
+      // check below is name-agnostic (uses fnName in messages) so this one
+      // addition covers both.
+      const fnName = node.callee.type === "Identifier" ? node.callee.name : null;
+      if (fnName !== "interpolate" && fnName !== "interpolateColors") return;
 
       const loc = node.loc ? ` (line ${node.loc.start.line})` : "";
 
-      // interpolate() requires 3 args minimum, and Remotion supports a
-      // legitimate optional 4th argument: an options object like
-      // { extrapolateLeft: "clamp", extrapolateRight: "clamp" }. That object
-      // can be written inline OR passed as a variable/constant (a very common
-      // pattern when the same clamp options are reused many times, e.g.
-      // `const clamp = {...}; interpolate(f, [0,1], [0,1], clamp)`). Accept
-      // an inline object, an identifier, or a member expression (e.g.
-      // OPTS.clamp). Only reject things that clearly can't be an options
-      // object, like a number or string literal.
+      // interpolate()/interpolateColors() require 3 args minimum, and
+      // Remotion supports a legitimate optional 4th argument: an options
+      // object like { extrapolateLeft: "clamp", extrapolateRight: "clamp" }.
+      // That object can be written inline OR passed as a variable/constant
+      // (a very common pattern when the same clamp options are reused many
+      // times, e.g. `const clamp = {...}; interpolate(f, [0,1], [0,1],
+      // clamp)`). Accept an inline object, an identifier, or a member
+      // expression (e.g. OPTS.clamp). Only reject things that clearly can't
+      // be an options object, like a number or string literal.
       if (node.arguments.length < 3 || node.arguments.length > 4) {
         errors.push(
-          `interpolate() called with ${node.arguments.length} argument(s) — expected 3, or 4 with an options object${loc}`
+          `${fnName}() called with ${node.arguments.length} argument(s) — expected 3, or 4 with an options object${loc}`
         );
         return;
       }
@@ -184,7 +192,7 @@ function checkInterpolateCalls(ast) {
         const okFourthArgTypes = ["ObjectExpression", "Identifier", "MemberExpression"];
         if (!okFourthArgTypes.includes(fourth.type)) {
           errors.push(
-            `interpolate()'s 4th argument must be an options object (e.g. { extrapolateLeft: "clamp" }) or a variable holding one${loc}`
+            `${fnName}()'s 4th argument must be an options object (e.g. { extrapolateLeft: "clamp" }) or a variable holding one${loc}`
           );
           return;
         }
@@ -193,13 +201,13 @@ function checkInterpolateCalls(ast) {
       const [, inputRange, outputRange] = node.arguments;
       if (inputRange.type !== "ArrayExpression" || outputRange.type !== "ArrayExpression") {
         errors.push(
-          `interpolate()'s 2nd/3rd arguments must be literal arrays, not variables${loc}`
+          `${fnName}()'s 2nd/3rd arguments must be literal arrays, not variables${loc}`
         );
         return;
       }
       if (inputRange.elements.length !== outputRange.elements.length) {
         errors.push(
-          `interpolate()'s inputRange and outputRange have different lengths (${inputRange.elements.length} vs ${outputRange.elements.length})${loc}`
+          `${fnName}()'s inputRange and outputRange have different lengths (${inputRange.elements.length} vs ${outputRange.elements.length})${loc}`
         );
       }
 
@@ -218,13 +226,13 @@ function checkInterpolateCalls(ast) {
       if (inputValues.every((v) => v !== null)) {
         if (inputValues.some((v) => !Number.isFinite(v))) {
           errors.push(
-            `interpolate()'s inputRange resolves to a non-finite value ([${inputValues.join(", ")}])${loc} — this throws "inputRange must contain only finite numbers" at runtime`
+            `${fnName}()'s inputRange resolves to a non-finite value ([${inputValues.join(", ")}])${loc} — this throws "inputRange must contain only finite numbers" at runtime`
           );
         } else {
           for (let i = 1; i < inputValues.length; i++) {
             if (inputValues[i] <= inputValues[i - 1]) {
               errors.push(
-                `interpolate()'s inputRange must be strictly increasing but resolves to [${inputValues.join(", ")}]${loc} — this throws "inputRange must be strictly monotonically increasing" at runtime`
+                `${fnName}()'s inputRange must be strictly increasing but resolves to [${inputValues.join(", ")}]${loc} — this throws "inputRange must be strictly monotonically increasing" at runtime`
               );
               break;
             }

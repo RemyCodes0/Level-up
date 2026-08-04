@@ -33,10 +33,23 @@ async function sendCourseReadyEmail(courseId, userId) {
   if (!userId) return;
   try {
     const [course, user] = await Promise.all([
-      Course.findById(courseId).select("topic lessonCount"),
+      Course.findById(courseId).select("topic lessonCount lessons.status"),
       User.findById(userId).select("email name"),
     ]);
     if (!course || !user?.email) return;
+
+    // course.status "ready" only means "not actively generating anymore" —
+    // it does NOT mean every lesson succeeded (see retryLessonHandler's own
+    // comment on the same distinction). A lesson can still be sitting at
+    // status "failed" with a retry button in the UI. Sending "all N lessons
+    // are ready to watch" in that case is simply false, so skip the email
+    // entirely rather than mislead the user — they'll see the failed lesson
+    // (and retry option) in-app regardless.
+    const hasFailedLesson = course.lessons?.some((l) => l.status === "failed");
+    if (hasFailedLesson) {
+      console.log(`[${courseId}] Skipping course-ready email — at least one lesson failed.`);
+      return;
+    }
 
     const title = course.topic || "Your course";
     const lessonWord = course.lessonCount === 1 ? "lesson" : "lessons";

@@ -193,7 +193,7 @@ export interface CreditTransactionEntry {
   _id: string;
   amount: number;
   balanceAfter: number;
-  source: "signup_bonus" | "referral" | "purchase" | "course_generation" | "refund";
+  source: "signup_bonus" | "referral" | "purchase" | "course_generation" | "refund" | "feedback";
   meta?: Record<string, unknown>;
   createdAt: string;
 }

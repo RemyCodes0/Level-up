@@ -5,7 +5,7 @@ const mongoose = require("mongoose");
 // these — the ledger creditService.js reads from for the credits dashboard,
 // and the only place "why did this user's balance change" can be answered
 // from after the fact.
-const CREDIT_SOURCES = ["signup_bonus", "referral", "purchase", "course_generation", "refund"];
+const CREDIT_SOURCES = ["signup_bonus", "referral", "purchase", "course_generation", "refund", "feedback"];
 
 const creditTransactionSchema = new mongoose.Schema(
   {

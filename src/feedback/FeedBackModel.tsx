@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Star, Loader2, CheckCircle, MessageSquare } from "lucide-react";
+import { X, Star, Loader2, CheckCircle, MessageSquare, Coins } from "lucide-react";
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
@@ -7,14 +7,20 @@ interface FeedbackModalProps {
   onClose: () => void;
   courseId?: string | null;
   courseName?: string | null;
+  // Called once the backend confirms the submission — creditsAwarded is 0
+  // when no reward was granted (already claimed before, or not logged in).
+  // Lets the parent (e.g. AiTutor's sidebar credit counter) refresh its own
+  // balance without this modal needing to know how that's stored.
+  onSuccess?: (creditsAwarded: number) => void;
 }
 
-export function FeedbackModal({ onClose, courseId, courseName }: FeedbackModalProps) {
+export function FeedbackModal({ onClose, courseId, courseName, onSuccess }: FeedbackModalProps) {
   const [rating, setRating] = useState(0);
   const [hoveredStar, setHoveredStar] = useState(0);
   const [message, setMessage] = useState("");
   const [status, setStatus] = useState<"form" | "submitting" | "success" | "error">("form");
   const [errorMsg, setErrorMsg] = useState("");
+  const [creditsAwarded, setCreditsAwarded] = useState(0);
 
   const handleSubmit = async () => {
     if (rating === 0 || !message.trim()) return;
@@ -34,10 +40,13 @@ export function FeedbackModal({ onClose, courseId, courseName }: FeedbackModalPr
           courseName: courseName || null,
         }),
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
+        const awarded = data.creditsAwarded || 0;
+        setCreditsAwarded(awarded);
         setStatus("success");
+        onSuccess?.(awarded);
       } else {
-        const data = await res.json();
         setErrorMsg(data.message || "Failed to submit");
         setStatus("error");
       }
@@ -67,6 +76,12 @@ export function FeedbackModal({ onClose, courseId, courseName }: FeedbackModalPr
             </div>
             <h3 className="text-xl font-bold text-slate-900 mb-2">Thanks for your feedback!</h3>
             <p className="text-sm text-slate-500 mb-5">Your input helps us improve Level Up.</p>
+            {creditsAwarded > 0 && (
+              <div className="flex items-center justify-center gap-2 mb-5 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-700">
+                <Coins className="h-4 w-4" />
+                <span className="text-sm font-semibold">+{creditsAwarded} credits added to your account!</span>
+              </div>
+            )}
             <button
               onClick={onClose}
               className="px-6 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200 transition-colors"

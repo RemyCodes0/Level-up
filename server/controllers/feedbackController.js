@@ -1,7 +1,10 @@
 const Feedback = require("../models/Feedback");
+const User = require("../models/User");
+const { grantCredits } = require("../services/creditService");
 const sendEmail = require("../services/emailService");
 
 const FEEDBACK_RECIPIENT = process.env.FEEDBACK_EMAIL || "tuyishimechristophe84@gmail.com";
+const FEEDBACK_CREDIT_REWARD = 20;
 
 exports.createFeedback = async (req, res) => {
   const { rating, message, courseId, courseName } = req.body;
@@ -27,6 +30,23 @@ exports.createFeedback = async (req, res) => {
       rating,
       message,
     });
+
+    // One-time 20-credit reward for logged-in users who submit feedback.
+    // Flag is set BEFORE granting (same ordering as referralController's
+    // completeReferral) to close the double-submit race — a crash between
+    // the two loses the reward rather than double-granting it. Wrapped so a
+    // credit-grant failure never fails the feedback submission itself, same
+    // "never fail on a side effect" tolerance as the email send below.
+    let creditGranted = false;
+    if (req.user && !req.user.feedbackCreditGranted) {
+      try {
+        await User.findByIdAndUpdate(req.user._id, { feedbackCreditGranted: true });
+        await grantCredits(req.user._id, FEEDBACK_CREDIT_REWARD, "feedback", { feedbackId: feedback._id });
+        creditGranted = true;
+      } catch (creditErr) {
+        console.error("Failed to grant feedback credit reward:", creditErr.message);
+      }
+    }
 
     // Send email notification (non-blocking — don't fail the request if email fails)
     const stars = "★".repeat(rating) + "☆".repeat(5 - rating);
@@ -64,7 +84,11 @@ exports.createFeedback = async (req, res) => {
       `,
     }).catch((err) => console.error("Failed to send feedback email:", err));
 
-    res.status(201).json({ message: "Thank you for your feedback!" });
+    res.status(201).json({
+      message: "Thank you for your feedback!",
+      creditGranted,
+      creditsAwarded: creditGranted ? FEEDBACK_CREDIT_REWARD : 0,
+    });
   } catch (err) {
     console.error("createFeedback error:", err);
     res.status(500).json({ message: "Failed to submit feedback" });
