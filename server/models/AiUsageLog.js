@@ -13,6 +13,10 @@ const aiUsageLogSchema = new mongoose.Schema(
       type: String,
       enum: [
         "course-plan",
+        // Quiz generation moved out of "course-plan" into its own call,
+        // made AFTER every lesson builds so it can ground questions in each
+        // lesson's real narration — see generateCourseQuiz (claudeService.js).
+        "course-quiz",
         "scene-plan",
         // "lesson-code" is the old single-call kind — kept in the enum so
         // historical rows written under that pipeline still validate/query

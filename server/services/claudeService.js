@@ -170,11 +170,37 @@ const CODE_PROVIDERS = {
     maxTokens: 131072,
     keyEnv: "OPENROUTER_API_KEY",
   },
+  // Model-quality spike (see AD_CODE_MODEL=fusion — same allow-list as
+  // every entry above, so LESSON_CODE_MODEL=fusion technically works too,
+  // but is NOT the recommended use, see why below): OpenRouter Fusion, a
+  // multi-model ensemble — fans one call out to a panel of
+  // several models in parallel, then a judge model synthesizes their
+  // outputs into a single response, billed as the sum of every panel call
+  // plus the judge (roughly 4-6x one plain model call's tokens). Left off
+  // the lesson-code path deliberately: that path is high-volume (6+ calls
+  // per course) and latency-sensitive (streamCodeCompletion's idle
+  // watchdog aborts a call after 90s of no streamed chunk — Fusion's own
+  // docs don't confirm incremental streaming during the panel+judge phase,
+  // so a slow panel could trip that watchdog instead of ever completing).
+  // Ad code is the opposite profile — one call per user action, already
+  // paying premium Fable pricing for quality — where that cost/latency
+  // tradeoff is worth an actual trial. extraParams intentionally minimal
+  // (no plugins/panel override) — omitting the `plugins` config uses
+  // OpenRouter's own "Quality" preset defaults; tune from there once
+  // there's real output to react to, not before.
+  fusion: {
+    client: openRouterClient,
+    model: "openrouter/fusion",
+    providerName: "fusion",
+    extraParams: {},
+    maxTokens: 32000,
+    keyEnv: "OPENROUTER_API_KEY",
+  },
 };
 
 function resolveProvider(envVar, defaultKey) {
   const requested = process.env[envVar];
-  const provider = CODE_PROVIDERS[["fable", "glm", "claude", "deepseek", "minimax", "gpt56", "mimo"].includes(requested) ? requested : defaultKey];
+  const provider = CODE_PROVIDERS[["fable", "glm", "claude", "deepseek", "minimax", "gpt56", "mimo", "fusion"].includes(requested) ? requested : defaultKey];
   if (!process.env[provider.keyEnv]) {
     console.warn(`[codegen] WARNING: ${provider.keyEnv} is not set — ${envVar} generation will fail with an auth error.`);
   }
@@ -302,8 +328,8 @@ const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 1
 const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 
 console.log(
-  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo to switch) | ` +
-  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo to switch)`
+  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion to switch) | ` +
+  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion to switch)`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -530,7 +556,7 @@ async function generateJson({ label, maxAttempts, maxTokens, buildMessages, vali
 // ═══════════════════════════════════════════════════════════════════════════
 // COURSE PLAN
 // ═══════════════════════════════════════════════════════════════════════════
-function validateCoursePlan(plan, expectedLessonCount = 6, expectedMcqCount = 20) {
+function validateCoursePlan(plan, expectedLessonCount = 6) {
   const errors = [];
 
   if (!plan || typeof plan !== "object") {
@@ -556,28 +582,40 @@ function validateCoursePlan(plan, expectedLessonCount = 6, expectedMcqCount = 20
     });
   }
 
-  if (!Array.isArray(plan.questions) || plan.questions.length !== expectedMcqCount) {
-    errors.push(`Expected ${expectedMcqCount} questions, got ${plan.questions?.length ?? "none"}`);
-  } else {
-    plan.questions.forEach((q, i) => {
-      if (!q.question || typeof q.question !== "string") {
-        errors.push(`Question ${i + 1}: missing/invalid question text`);
-      }
-      if (!Array.isArray(q.options) || q.options.length !== 4) {
-        errors.push(`Question ${i + 1}: expected 4 options`);
-      } else if (q.options.some((o) => typeof o !== "string" || !o.trim())) {
-        errors.push(`Question ${i + 1}: options must all be non-empty strings`);
-      }
-      if (
-        typeof q.correct !== "number" ||
-        q.correct < 0 ||
-        q.correct > 3 ||
-        !Number.isInteger(q.correct)
-      ) {
-        errors.push(`Question ${i + 1}: "correct" must be an integer 0-3`);
-      }
-    });
+  return { ok: errors.length === 0, errors };
+}
+
+// Shared by generateCourseQuiz below — questions used to be generated
+// bundled into the course plan itself (see git history / validateCoursePlan
+// above, which used to validate a `questions` array too); this is that same
+// shape-validation logic, now standalone since quiz generation is its own
+// call.
+function validateQuizQuestions(questions, expectedMcqCount) {
+  const errors = [];
+
+  if (!Array.isArray(questions) || questions.length !== expectedMcqCount) {
+    errors.push(`Expected ${expectedMcqCount} questions, got ${questions?.length ?? "none"}`);
+    return { ok: false, errors };
   }
+
+  questions.forEach((q, i) => {
+    if (!q.question || typeof q.question !== "string") {
+      errors.push(`Question ${i + 1}: missing/invalid question text`);
+    }
+    if (!Array.isArray(q.options) || q.options.length !== 4) {
+      errors.push(`Question ${i + 1}: expected 4 options`);
+    } else if (q.options.some((o) => typeof o !== "string" || !o.trim())) {
+      errors.push(`Question ${i + 1}: options must all be non-empty strings`);
+    }
+    if (
+      typeof q.correct !== "number" ||
+      q.correct < 0 ||
+      q.correct > 3 ||
+      !Number.isInteger(q.correct)
+    ) {
+      errors.push(`Question ${i + 1}: "correct" must be an integer 0-3`);
+    }
+  });
 
   return { ok: errors.length === 0, errors };
 }
@@ -638,7 +676,7 @@ function isPptxFile(fileName) {
   return typeof fileName === "string" && fileName.toLowerCase().endsWith(".pptx");
 }
 
-async function generateCoursePlan(topic, pdfText, pdfBuffer, sourceFileName, level = null, maxAttempts = 3, lessonCount = 6, mcqCount = 20, { userId = null, courseId = null } = {}) {
+async function generateCoursePlan(topic, pdfText, pdfBuffer, sourceFileName, level = null, maxAttempts = 3, lessonCount = 6, { userId = null, courseId = null } = {}) {
   const jsonSchema = `
 {
   "lessons": [
@@ -648,26 +686,24 @@ async function generateCoursePlan(topic, pdfText, pdfBuffer, sourceFileName, lev
       "description": "string (2-3 sentences)",
       "keyPoints": ["string", "string", "string", "string"]
     }
-  ],
-  "questions": [
-    {
-      "id": 1,
-      "question": "string",
-      "options": ["string", "string", "string", "string"],
-      "correct": 0,
-      "topic": "string"
-    }
   ]
 }`;
 
   const levelGuidance = buildLevelGuidance(level);
 
+  // Quiz questions used to be generated bundled into this same call/schema
+  // — moved to a separate generateCourseQuiz call, made AFTER every lesson
+  // actually finishes building (see courseController.js's processCourse).
+  // Two wins from splitting it out: (1) the quiz can be grounded in each
+  // lesson's REAL narration script instead of just this plan's title/
+  // description/keyPoints, and (2) this call — the one thing on the
+  // critical path before ANY lesson can start building — no longer also
+  // has to produce N structured MCQs before lessons.building can begin,
+  // shortening time-to-first-lesson.
   const rules = `
 Rules:
 - All content specific to the topic, never generic
 - Exactly 4 keyPoints per lesson
-- ${mcqCount} questions distributed across the ${lessonCount} lessons
-- "correct" is the 0-based index
 - Pure JSON only, no backticks${levelGuidance}
 - CRITICAL: Respond with ONLY the JSON object. No commentary, no acknowledgment, no clarifying questions — even if the input is unusually long, looks like a document rather than a short topic, or seems ambiguous. If the input is long or document-like, identify its single most central subject and build the course plan around that. Never refuse and never ask a follow-up question — always produce the JSON.`;
 
@@ -700,7 +736,7 @@ You are an expert educational content designer.
 
 ${context}
 
-Generate a ${lessonCount}-lesson course plan and a ${mcqCount}-question assessment.
+Generate a ${lessonCount}-lesson course plan.
 
 Return ONLY valid JSON, no markdown, exactly this structure:
 ${jsonSchema}
@@ -712,16 +748,19 @@ ${rules}
     maxAttempts,
     provider: DEEPSEEK_COURSE_PLAN_PROVIDER,
     limiter: limitDeepSeekCall,
-    // FIX: was a flat 8000, which a large tier (e.g. 10 lessons / 40 MCQs from
+    // FIX: was a flat 8000, which a large tier (e.g. 10 lessons from
     // courseController's tier-priced path) could genuinely exceed — scale the
     // budget with the requested shape instead. Floor raised from 3000 to
     // 12000: with high-effort thinking ON, reasoning tokens draw from this
     // SAME max_tokens budget before the actual JSON is written, so the
-    // reasoning-off floor left no room once thinking was turned on.
-    maxTokens: Math.min(40000, 12000 + lessonCount * 500 + mcqCount * 200),
+    // reasoning-off floor left no room once thinking was turned on. No
+    // longer scales with mcqCount — quiz generation moved to its own call
+    // (see generateCourseQuiz below), so this budget only ever needs to
+    // cover lessons now, hence the lower ceiling too (was 40000).
+    maxTokens: Math.min(24000, 12000 + lessonCount * 500),
     buildMessages: (feedback) => [{ role: "user", content: basePrompt + feedbackSuffix(feedback) }],
     validate: (parsed, raw) => {
-      const { ok, errors } = validateCoursePlan(parsed, lessonCount, mcqCount);
+      const { ok, errors } = validateCoursePlan(parsed, lessonCount);
       if (!ok) {
         // Include a snippet of the RAW response so a failure log shows
         // whether the model wrapped the plan in an envelope key, returned
@@ -746,6 +785,85 @@ ${rules}
 
   if (truncated) plan.__truncatedInput = true;
   return plan;
+}
+
+// ── Course quiz (generated AFTER every lesson is built) ─────────────────────
+// Grounded in each lesson's REAL narration script (see courseController.js's
+// buildLesson, which now persists lessons.N.narrationScript from the
+// measured scene plan) instead of just the pre-generation plan's title/
+// description/keyPoints — questions can test what the course actually SAID,
+// not just what it was outlined to cover. `lessons` here is the BUILT
+// course's lesson array — only `title` and `narrationScript` are read; a
+// lesson that failed to build (no narrationScript) still gets a `topic`
+// bucket via its title alone, so a partial course still gets a usable quiz.
+const MAX_NARRATION_CHARS_PER_LESSON = 6000;
+
+async function generateCourseQuiz(topic, lessons, mcqCount = 20, maxAttempts = 3, { userId = null, courseId = null } = {}) {
+  const lessonContext = lessons
+    .map((l, i) => {
+      const narration = (l.narrationScript || "").slice(0, MAX_NARRATION_CHARS_PER_LESSON);
+      return `LESSON ${i + 1}: ${l.title}\n${narration || "(no narration available — this lesson may have failed to generate; write questions for it from its title alone, or skip it in favor of the other lessons if that reads better)"}`;
+    })
+    .join("\n\n");
+
+  const jsonSchema = `
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "string",
+      "options": ["string", "string", "string", "string"],
+      "correct": 0,
+      "topic": "string"
+    }
+  ]
+}`;
+
+  const basePrompt = `
+You are an expert educational assessment designer. Below is the FULL narrated content of every lesson in a course called "${topic}" — the actual script spoken in each lesson's video, not just an outline.
+
+${lessonContext}
+
+Generate a ${mcqCount}-question multiple-choice assessment testing comprehension of what these lessons ACTUALLY teach — ground each question in a specific fact, mechanism, or explanation that appears in the narration above, not generic knowledge about the topic. Distribute questions across all ${lessons.length} lessons (roughly evenly, weighted toward lessons with more content). Each question's "topic" field must be the EXACT title of the lesson it's drawn from (copy it character-for-character from "LESSON N: <title>" above), so results can be grouped back to the right lesson.
+
+Return ONLY valid JSON, no markdown, exactly this structure:
+${jsonSchema}
+
+Rules:
+- "correct" is the 0-based index into "options"
+- Exactly 4 options per question, one correct
+- Pure JSON only, no backticks
+- CRITICAL: Respond with ONLY the JSON object. No commentary, no acknowledgment. Never refuse and never ask a follow-up question — always produce the JSON.`;
+
+  const result = await generateJson({
+    label: `quiz`,
+    maxAttempts,
+    provider: DEEPSEEK_COURSE_PLAN_PROVIDER,
+    limiter: limitDeepSeekCall,
+    maxTokens: Math.min(40000, 8000 + mcqCount * 250),
+    buildMessages: (feedback) => [{ role: "user", content: basePrompt + feedbackSuffix(feedback) }],
+    validate: (parsed, raw) => {
+      const { ok, errors } = validateQuizQuestions(parsed?.questions, mcqCount);
+      if (!ok) {
+        throw contentError(
+          `Quiz generation failed shape validation: ${errors.join("; ")}. Raw response (first 500 chars): ${raw.slice(0, 500)}`
+        );
+      }
+      return parsed.questions;
+    },
+    onUsage: (usage) => recordAiUsage({
+      kind: "course-quiz",
+      provider: DEEPSEEK_COURSE_PLAN_PROVIDER.providerName,
+      model: DEEPSEEK_COURSE_PLAN_PROVIDER.model,
+      userId,
+      courseId,
+      promptTokens: usage.prompt_tokens,
+      completionTokens: usage.completion_tokens,
+      cachedTokens: usage.prompt_cache_hit_tokens || 0,
+    }),
+  });
+
+  return result;
 }
 
 // ── Remedial lesson plan (collaborative courses) ────────────────────────────
@@ -915,6 +1033,8 @@ If this lesson's subject involves direction, vectors, forces, or angles (physics
 
 INTERPOLATE SAFETY (applies to Backdrop and every helper here that animates): interpolate() and interpolateColors() ALWAYS need exactly 3 arguments (or 4 with an options object). The 2nd/3rd arguments MUST be array literals of plain number literals, and MUST be the SAME LENGTH as each other — a real production crash came from exactly this: an inputRange/outputRange length mismatch inside Backdrop. inputRange strictly increasing, no repeats.
 
+SHARED EXAMPLE DATA — read the SCENES table below carefully for this: if several scenes are clearly walking through the SAME concrete worked example (the same algorithm run on the same graph, the same array being sorted, the same dataset, the same numeric example carried across steps — recognizable because their onScreenText/mechanism/visualDescription describe progressive states of ONE example, e.g. several "algorithm-trace" domainSkill scenes in a row), declare that example's actual DATA here as its own named top-level const (e.g. const DIJKSTRA_GRAPH = { nodes: [...], edges: [...] };, or const SORT_ARRAY = [...];) — not just a rendering helper, the literal data itself, sized/shaped to support every state those scenes individually need to show (every node, every edge, every value any of those scenes will highlight or change). Every scene chunk is generated separately and in PARALLEL with no visibility into each other's code, but EVERY chunk sees this header verbatim — so a graph/array declared here by name is the ONLY way parallel scenes are guaranteed to reference the exact same example instead of each independently inventing its own (this was a real reported bug: a multi-scene Dijkstra's algorithm walkthrough where every scene showed a different graph). If no scenes share a concrete example, skip this — don't invent shared data nothing needs.
+
 LAYOUT ZONES — copy this EXACT const, verbatim, unchanged:
     const ZONES = {
       title:   { x: 120, y: 120, w: 1680, h: 130, cx: 960 },
@@ -934,13 +1054,17 @@ Begin with imports, then CLAMP/FRAME/SAFE/clampPos/ZONES (verbatim), then your p
 
 function buildHeaderUserContent(lesson, scenes) {
   const sceneTable = scenes
-    .map(
-      (s, i) =>
-        `Scene ${i + 1}: visualType: ${s.visualType}
-   onScreenText: ${s.onScreenText}${s.mechanism?.driver ? `
-   driver: ${s.mechanism.driver}` : ""}
-   visualDescription: ${s.visualDescription}`
-    )
+    .map((s, i) => {
+      const m = s.mechanism;
+      const mechanismBlock =
+        m && m.before && m.after && m.driver
+          ? `mechanism: starts at "${m.before}", ends at "${m.after}", driven by "${m.driver}"`
+          : "";
+      return `Scene ${i + 1}: visualType: ${s.visualType}${s.domainSkill && s.domainSkill !== "none" ? `, domainSkill: ${s.domainSkill}` : ""}
+   onScreenText: ${s.onScreenText}${mechanismBlock ? `
+   ${mechanismBlock}` : ""}
+   visualDescription: ${s.visualDescription}`;
+    })
     .join("\n\n");
 
   return `
@@ -949,7 +1073,7 @@ ${lesson.description ? "LESSON SUMMARY: " + lesson.description + "\n" : ""}TOTAL
 
 Derive ONE lesson-wide VISUAL IDENTITY (palette + motif) from "${lesson.title}" that will suit ALL ${scenes.length} scenes below. Do not write any scene's content — just the shared imports, palette/motif consts, and reusable helper components.
 
-SCENES (context only, so your palette/motif choice suits all of them — do not build these):
+SCENES (context only, so your palette/motif choice suits all of them, AND so you can spot scenes that share one concrete example — see SHARED EXAMPLE DATA below — do not build these):
 
 ${sceneTable}
 `;
@@ -973,7 +1097,7 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 6. FRAME NUMBERS ARE PER-SCENE. useCurrentFrame() resets to 0 at the start of EACH of your scenes — never offset a timing as if another scene's duration applies. Entrances live near [0, 30]; exits near [thisSceneDuration - 30, thisSceneDuration], written as literals of THAT scene's own duration.
 7. Aim for roughly 300-400 lines PER SCENE — rich, detailed animation, but concise: every extra line is extra generation time. Extract any local helper once near the top of that scene's function and reuse it within that scene.
 
-CROSS-SCENE DATA CONSISTENCY — chunks generate IN PARALLEL now, so you cannot copy another chunk's exact code byte-for-byte the way you could in the old sequential pipeline. If the OTHER SCENES SPEC table below shows a scene outside your chunk working through what looks like the SAME concrete example (same graph, same array, same dataset, described in its visualDescription/mechanism), independently build the SAME canonical version of that example from the shared subject matter — the standard/obvious textbook instance of it, not an arbitrary one you invent — so two independent derivations are likely to land on the same values even without seeing each other's code. Perfect byte-for-byte match is no longer guaranteed; a close, recognizable match is the realistic goal. Within YOUR OWN chunk, scenes CAN and should share exact values via rule 1a.
+CROSS-SCENE DATA CONSISTENCY — chunks generate IN PARALLEL now, so you cannot copy another chunk's exact code byte-for-byte the way you could in the old sequential pipeline. FIRST check the HEADER CODE below: if your scene is part of a worked example that spans multiple scenes (an algorithm walkthrough, a sort/search trace, a running numeric example), the header may have ALREADY declared that example's exact data as a named top-level const (e.g. DIJKSTRA_GRAPH, SORT_ARRAY) specifically so every scene uses the identical example — if it's there, you MUST reference it by that exact name, never redeclare or invent your own version. Only if the header did NOT declare it (the example wasn't flagged as shared, or you're genuinely the only scene using it) do you fall back to independently building the SAME canonical version of that example from the shared subject matter — the standard/obvious textbook instance of it, not an arbitrary one you invent — so two independent derivations are likely to land on the same values even without seeing each other's code. Within YOUR OWN chunk, scenes CAN and should share exact values via rule 1a.
 
 ANIMATION QUALITY — THE MOST CRITICAL REQUIREMENT. A boring animation is a failed animation.
 8. CONTINUOUS MOTION IS NON-NEGOTIABLE. At frame 0, things move. At the midpoint, things move. At the final frame, things move. Use Math.sin(frame/k), Math.cos(frame/k), and (frame*speed)%360 to guarantee perpetual motion on every element.
@@ -986,7 +1110,7 @@ ANIMATION QUALITY — THE MOST CRITICAL REQUIREMENT. A boring animation is a fai
 
 VISUAL CONTINUITY: reuse the header's palette/motif/helpers/ZONES by NAME — never invent your own colors or redeclare a name already declared. Render text through the header's Label helper, not a hand-styled <div>.
 
-PREBUILT COMPONENTS — the header/library code below also already declares AnimatedGraph({nodes,edges,activeNodes,highlightEdges,area}) and AnimatedArray({values,highlightIndices,area}) (hand-built, tested, not something you write). If a scene's domainSkill is "algorithm-trace" — a graph/tree/network being traversed, or an array/list being sorted/searched/manipulated — STRONGLY PREFER calling one of these with data instead of hand-writing the diagram's SVG yourself: pass nodes/edges (or values/highlightIndices) as plain data objects/arrays, using each entry's revealAt (a frame number) to stage when it appears. Do not redeclare AnimatedGraph/AnimatedArray, and do not hand-roll an equivalent from raw <svg> when one of these already fits — that's exactly the free-form code this exists to replace. For scenes that don't fit either shape, build Layer 2 by hand as usual.
+PREBUILT COMPONENTS — the header/library code below also already declares AnimatedGraph({nodes,edges,activeNodes,highlightEdges,area}) and AnimatedArray({values,highlightIndices,area}) (hand-built, tested, not something you write). If a scene's domainSkill is "algorithm-trace" — a graph/tree/network being traversed, or an array/list being sorted/searched/manipulated — STRONGLY PREFER calling one of these with data instead of hand-writing the diagram's SVG yourself: pass nodes/edges (or values/highlightIndices) as plain data objects/arrays, using each entry's revealAt (a frame number) to stage when it appears. If the header declared a shared example const for this exact algorithm/dataset (see CROSS-SCENE DATA CONSISTENCY above), pass ITS nodes/edges/values into AnimatedGraph/AnimatedArray — don't invent a parallel, different dataset just because you're also free to pass "plain data objects". Do not redeclare AnimatedGraph/AnimatedArray, and do not hand-roll an equivalent from raw <svg> when one of these already fits — that's exactly the free-form code this exists to replace. For scenes that don't fit either shape, build Layer 2 by hand as usual.
 
 INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
 12. interpolate() AND interpolateColors() ALWAYS need exactly 3 arguments. The 2nd/3rd arguments MUST be array literals — [0, 20] — plain number literals only, no variables/expressions inside, and MUST be the SAME LENGTH as each other (e.g. [0, 30, 60] needs exactly 3 output values, not 2 and not 17 — a mismatched length crashes immediately). inputRange strictly increasing, no repeats. For hold-at-final-value: 2 values + CLAMP.
@@ -2117,6 +2241,7 @@ async function generateAdCode(ad, componentName, scenes, totalFrames, maxAttempt
 
 module.exports = {
   generateCoursePlan,
+  generateCourseQuiz,
   generateLessonCode,
   // Exposed so buildLesson (courseController.js) can kick off header
   // generation concurrently with scene audio synthesis instead of after it —

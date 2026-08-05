@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const {
   generateCoursePlan,
+  generateCourseQuiz,
   generateLessonCode,
   generateLessonHeader,
   generateNextCourseSuggestions,
@@ -348,10 +349,21 @@ async function buildLesson(courseId, lesson, userId = null) {
         return { index: i, startFrame, endFrame: cursor, label: s.onScreenText || `Scene ${i + 1}` };
       });
 
+      // measuredScenes still carries each scene's full spoken `.narration`
+      // (generateSceneAudio spreads the original scenePlan entry, see
+      // ttsService.js) — everything ELSE about a scene (visualDescription,
+      // mechanism) is discarded after code generation, but this is worth
+      // keeping: it's the actual rich educational content that ends up in
+      // the video, and generateCourseQuiz (claudeService.js) reads it back
+      // from here to ground the quiz in what the course actually teaches,
+      // instead of just the pre-generation plan's title/description.
+      const narrationScript = measuredScenes.map((s) => s.narration).filter(Boolean).join(" ");
+
       await Course.findByIdAndUpdate(courseId, {
         $set: {
           [`lessons.${lesson.lessonNumber - 1}.code`]: tsxCode,
           [`lessons.${lesson.lessonNumber - 1}.totalFrames`]: totalFrames,
+          [`lessons.${lesson.lessonNumber - 1}.narrationScript`]: narrationScript,
           [`lessons.${lesson.lessonNumber - 1}.scenes`]: sceneMeta,
           [`lessons.${lesson.lessonNumber - 1}.status`]: "ready",
           [`lessons.${lesson.lessonNumber - 1}.error`]: null,
@@ -437,7 +449,15 @@ async function processCourse(
   const courseStart = Date.now();
   try {
     console.log(`[${courseId}] Generating course plan...`);
-    const { lessons, questions } = await generateCoursePlan(
+    // Quiz questions are NOT generated here anymore — generateCoursePlan
+    // only produces the lesson outline now (see its own comment in
+    // claudeService.js). This call used to also have to produce mcqCount
+    // structured MCQs before ANY lesson could start building; dropping that
+    // shortens time-to-first-lesson. The quiz itself is generated further
+    // down, AFTER buildLessonsConcurrently, so it can be grounded in what
+    // the lessons actually say (their real narration) instead of just this
+    // plan's title/description/keyPoints.
+    const { lessons } = await generateCoursePlan(
       topic,
       null,
       pdfBuffer,
@@ -445,7 +465,6 @@ async function processCourse(
       level,
       3,
       lessonCount,
-      mcqCount,
       { userId, courseId }
     );
 
@@ -457,13 +476,27 @@ async function processCourse(
         code: null,
         totalFrames: null,
       })),
-      questions,
     });
 
     // Build all of this course's lessons one at a time, regardless of trial
     // status — how many that is now depends on the selected tier (or the
     // free trial's fixed 6), not a hardcoded count.
     await buildLessonsConcurrently(courseId, lessons, userId);
+
+    // Quiz generation, now that every lesson has (attempted to) build and
+    // narrationScript is populated for whichever ones succeeded. Wrapped so
+    // a quiz-generation failure never fails the whole course — the lessons
+    // are already built and watchable regardless; the frontend's QuizSection
+    // already renders an empty/pending state when questions.length === 0
+    // (see AiTutor.tsx), so a course landing without a quiz degrades
+    // gracefully instead of erroring the user's whole course out.
+    try {
+      const builtCourse = await Course.findById(courseId).select("lessons.title lessons.narrationScript");
+      const questions = await generateCourseQuiz(topic, builtCourse.lessons, mcqCount, undefined, { userId, courseId });
+      await Course.findByIdAndUpdate(courseId, { questions });
+    } catch (quizErr) {
+      console.error(`[${courseId}] Quiz generation failed (course still usable without it):`, quizErr.message);
+    }
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
     const totalMin = ((Date.now() - courseStart) / 60000).toFixed(1);
