@@ -64,16 +64,20 @@ const CODE_PROVIDERS = {
     client: openRouterClient,
     model: "z-ai/glm-5.2",
     providerName: "glm",
-    // Deliberately UNPINNED (no `provider: { order: [...] }`) — a pin to
-    // z-ai's own hosting was tried (see git history) on the theory that a
-    // third-party rehost (CoreWeave/Together, confirmed live via
-    // OpenRouter's activity log) risked a quantized backend. In practice,
-    // the unpinned CoreWeave/Together-routed traffic produced the cleanest
-    // observed run (5/5 codegen calls "stop", no retries) — better than the
-    // pinned z-ai theory predicted, so left open to OpenRouter's own
-    // price/speed routing. Revisit only with real evidence unpinned routing
-    // is causing failures, not on the strength of this comment alone.
-    extraParams: { reasoning: { enabled: false }},
+    // Pinned to Decart specifically, by deliberate choice (2026-08-06),
+    // superseding an earlier UNPINNED period: a pin to z-ai's own hosting was
+    // tried first (see git history) on the theory that a third-party rehost
+    // (CoreWeave/Together, confirmed live via OpenRouter's activity log)
+    // risked a quantized backend, then reverted — the unpinned traffic
+    // produced the cleanest observed run at the time (5/5 codegen calls
+    // "stop", no retries), better than the pinned-z-ai theory predicted.
+    // allow_fallbacks is FALSE here — deliberately, not the allow_fallbacks:
+    // true safety-net pattern every other `provider.order` pin in this file
+    // uses (see SCENE_PLAN_PROVIDER, DEEPSEEK_*_PLAN_PROVIDER below): if
+    // Decart has downtime or hits capacity, lesson/ad code generation should
+    // hard-fail rather than silently route to a different (possibly
+    // quantized) host. Revisit only with real evidence, same bar as before.
+    extraParams: { reasoning: { enabled: false }, provider: { order: ["decart"], allow_fallbacks: false } },
     maxTokens: 100000,
     keyEnv: "OPENROUTER_API_KEY",
   },
@@ -251,7 +255,11 @@ const SCENE_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "z-ai/glm-5.2",
   providerName: "glm",
-  extraParams: { reasoning: { enabled: false }, provider: { order: ["z-ai"], allow_fallbacks: true } },
+  // Pinned to Decart, same deliberate choice (and same hard-fail-over-
+  // fallback reasoning) as CODE_PROVIDERS.glm above — every GLM 5.2 call
+  // site in this file should route the same way, not just the lesson-code
+  // path.
+  extraParams: { reasoning: { enabled: false }, provider: { order: ["decart"], allow_fallbacks: false } },
   maxTokens: 40000,
   keyEnv: "OPENROUTER_API_KEY",
 };

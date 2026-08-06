@@ -24,6 +24,12 @@ const QuizAttempt = require("../models/QuizAttempt");
 const { grantCredits } = require("../services/creditService");
 const sendEmail = require("../services/emailService");
 
+// Same fallback/env-var convention as authController.js's
+// ADMIN_NOTIFICATION_EMAIL and referralController.js's ADMIN_EMAIL — one
+// inbox, reused across every "notify the owner" email in the app rather than
+// introducing a course-specific one.
+const ADMIN_NOTIFICATION_EMAIL = process.env.ADMIN_EMAIL || "tuyishimechristophe84@gmail.com";
+
 // Audio dir — for cleanup when a course is deleted
 const AUDIO_DIR = path.resolve(__dirname, "../../remotion-render/public/audio");
 
@@ -77,6 +83,42 @@ async function sendCourseReadyEmail(courseId, userId) {
           <a href="${courseUrl}"
              style="display: inline-block; margin: 24px 0; padding: 12px 28px; background: linear-gradient(135deg, #3b82f6, #6366f1); color: #fff; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 15px;">
             Watch it now
+          </a>
+        </div>
+      `,
+    });
+
+    // Owner's own copy — same "a course just finished" event, same
+    // ADMIN_NOTIFICATION_EMAIL inbox every other admin notification in this
+    // app (signups, logins, feedback, referrals) already goes to. A separate
+    // send with its own subject/content rather than adding a second `to`
+    // address on the email above — the admin inbox shouldn't be exposed to
+    // the user's own copy, or vice versa.
+    await sendEmail({
+      to: ADMIN_NOTIFICATION_EMAIL,
+      subject: `New course generated: "${title}"`,
+      text: [
+        `A course just finished generating.`,
+        ``,
+        `Title: ${title}`,
+        `User: ${user.name || "Unknown"} (${user.email})`,
+        `Lessons: ${course.lessonCount || ""}`,
+        `Course ID: ${courseId}`,
+        `Time: ${new Date().toISOString()}`,
+        ``,
+        `${process.env.CLIENT_URL}/admin/courses/${courseId}`,
+      ].join("\n"),
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+          <h2 style="color: #1e293b; margin: 0 0 16px;">New course generated</h2>
+          <table style="width: 100%; font-size: 14px; color: #334155; border-collapse: collapse;">
+            <tr><td style="padding: 6px 0; color: #94a3b8; width: 80px;">Title</td><td style="padding: 6px 0; font-weight: 600;">${escapeHtml(title)}</td></tr>
+            <tr><td style="padding: 6px 0; color: #94a3b8;">User</td><td style="padding: 6px 0;">${escapeHtml(user.name || "Unknown")} (${escapeHtml(user.email)})</td></tr>
+            <tr><td style="padding: 6px 0; color: #94a3b8;">Lessons</td><td style="padding: 6px 0;">${course.lessonCount || ""}</td></tr>
+          </table>
+          <a href="${process.env.CLIENT_URL}/admin/courses/${courseId}"
+             style="display: inline-block; margin-top: 16px; padding: 10px 20px; background: #1e293b; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">
+            View in admin
           </a>
         </div>
       `,

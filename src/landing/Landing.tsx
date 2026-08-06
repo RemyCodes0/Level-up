@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import {
   Sparkles, ArrowRight, Check, Play, Upload, Wand2, Trophy,
-  X, Quote, Plus, Minus, Clock, Zap, ChevronRight,
+  X, Quote, Plus, Minus, Zap,
 } from "lucide-react";
 import ShowcaseVideoGrid from "../components/ShowcaseVideoGrid";
 import VideoShowcaseSection from "./VideoShowcaseSection";
@@ -33,111 +33,6 @@ function useInView<T extends HTMLElement>(threshold = 0.15) {
   }, [threshold]);
   return { ref, seen };
 }
-function usePrefersReducedMotion() {
-  const [reduce, setReduce] = useState(false);
-  useEffect(() => { setReduce(window.matchMedia("(prefers-reduced-motion: reduce)").matches); }, []);
-  return reduce;
-}
-
-function InteractiveDemo() {
-  const [topic, setTopic] = useState("");
-  const [building, setBuilding] = useState(false);
-  const [builtFor, setBuiltFor] = useState<string | null>(null);
-  const reduce = usePrefersReducedMotion();
-
-  const lessonTitles = (t: string) => [
-    `What ${t} actually means`,
-    `The core mechanics of ${t}`,
-    `${t} in the real world`,
-    `Common mistakes with ${t}`,
-    `Working through ${t} problems`,
-    `Putting ${t} together`,
-  ];
-
-  const run = () => {
-    const t = topic.trim();
-    if (!t) return;
-    setBuilding(true);
-    setBuiltFor(null);
-    setTimeout(() => { setBuilding(false); setBuiltFor(t); }, reduce ? 0 : 1100);
-  };
-
-  const examples = ["Photosynthesis", "The French Revolution", "Neural networks", "Supply & demand"];
-  const shown = builtFor || (building ? topic.trim() : "");
-
-  return (
-    <div className="rounded-2xl border overflow-hidden w-full" style={{ borderColor: HAIR, backgroundColor: STAGE_2 }}>
-      <div className="p-4 sm:p-6 border-b" style={{ borderColor: HAIR }}>
-        <div className="flex items-center gap-2 mb-4">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: "rgba(255,92,73,0.15)", color: CORAL }}>
-            <Wand2 className="h-3.5 w-3.5" />
-          </div>
-          <span className="text-xs font-medium uppercase tracking-widest" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>Try it — no signup</span>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-2">
-          <input
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") run(); }}
-            placeholder="Type anything you want to learn…"
-            className="flex-1 min-w-0 px-4 h-12 rounded-xl text-sm outline-none border"
-            style={{ backgroundColor: STAGE, borderColor: HAIR, color: BEAM }}
-          />
-          <button
-            onClick={run}
-            disabled={!topic.trim() || building}
-            className="h-12 px-5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-transform hover:scale-[1.02] disabled:opacity-40 shrink-0"
-            style={{ backgroundColor: CORAL, color: "#fff" }}
-          >
-            {building ? "Building…" : <><span>Build my course</span> <ChevronRight className="h-4 w-4" /></>}
-          </button>
-        </div>
-        {!topic && !builtFor && (
-          <div className="flex flex-wrap gap-2 mt-3">
-            {examples.map((ex) => (
-              <button key={ex} onClick={() => setTopic(ex)} className="text-xs px-3 py-1.5 rounded-full border transition-colors" style={{ borderColor: HAIR, color: MUTE }}>
-                {ex}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {shown && (
-        <div className="p-4 sm:p-6">
-          <p className="text-xs mb-4" style={{ color: MUTE, fontFamily: "'JetBrains Mono', monospace" }}>
-            {building ? "// assembling 6 lessons…" : `// course outline for "${shown}"`}
-          </p>
-          <div className="space-y-2">
-            {lessonTitles(shown).map((title, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-3 p-3 rounded-lg border transition-all"
-                style={{ borderColor: HAIR, backgroundColor: STAGE, opacity: building ? 0.35 : 1, transitionDelay: reduce ? "0ms" : `${i * 90}ms` }}
-              >
-                <span className="text-xs w-6 shrink-0" style={{ fontFamily: "'JetBrains Mono', monospace", color: i === 0 ? PHOSPHOR : MUTE }}>
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <span className="text-sm flex-1 min-w-0 truncate" style={{ color: BEAM }}>{title}</span>
-                {i === 0 ? (
-                  <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: "rgba(61,224,160,0.15)", color: PHOSPHOR }}>free</span>
-                ) : (
-                  <Clock className="h-3.5 w-3.5 shrink-0" style={{ color: MUTE }} />
-                )}
-              </div>
-            ))}
-          </div>
-          {builtFor && (
-            <p className="text-xs mt-4 text-center" style={{ color: MUTE }}>
-              This is just the outline. The real thing animates and narrates every lesson.
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function FaqItem({ q, a }: { q: string; a: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -154,7 +49,6 @@ function FaqItem({ q, a }: { q: string; a: string }) {
 export default function LandingPage() {
   const navigate = useNavigate();
   const hero = useInView<HTMLDivElement>();
-  const demo = useInView<HTMLDivElement>();
 
   const [courseTiers, setCourseTiers] = useState<CourseTier[]>([]);
   const [creditPacks, setCreditPacks] = useState<CreditPack[]>([]);
@@ -422,18 +316,6 @@ export default function LandingPage() {
               </div>
             ))}
           </div>
-        </div>
-      </section>
-
-      {/* Interactive demo */}
-      <section id="demo" ref={demo.ref} className="w-full max-w-3xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
-        <div className="text-center mb-10">
-          <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: CORAL, fontFamily: "'JetBrains Mono', monospace" }}>Live demo</p>
-          <h2 className="text-2xl sm:text-4xl font-bold mb-3" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>See what you'd get.</h2>
-          <p className="text-sm" style={{ color: MUTE }}>Type a topic and watch the course outline assemble — no account needed.</p>
-        </div>
-        <div className={`transition-all duration-700 ${demo.seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
-          <InteractiveDemo />
         </div>
       </section>
 
