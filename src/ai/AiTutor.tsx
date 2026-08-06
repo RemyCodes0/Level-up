@@ -173,11 +173,39 @@ const PROGRESS_DURATION_MS = 6 * 60 * 1000;
 const PROGRESS_TICK_MS = 300;
 const PROGRESS_MAX = 99;
 
-function useLessonProgress(statuses: LessonStatus[]): number[] {
+// The real thing, not a guess: a lesson's generation is exactly two stages
+// — every scene's audio synthesized, then its code generated (in chunks —
+// see onChunkReady in courseController.js) — and sceneProgress already
+// tracks both per-scene, live, via audioReady/codeReady flags written to the
+// DB the instant each one actually lands. Splitting the bar into two equal
+// halves and crediting each scene's slice of ITS half the moment that flag
+// flips gives an accurate percentage for free, no timer or curve involved.
+// Returns null (not 0) when there's nothing to compute yet — the brief
+// window between a lesson entering "generating" and its scene plan actually
+// resolving (see buildLesson's initialProgress write in courseController.js)
+// — so the caller knows to fall back to something else for just that window,
+// not report a real-looking 0% when there simply isn't data yet.
+function computeRealLessonProgress(sceneProgress: SceneProgressItem[] | undefined): number | null {
+  if (!sceneProgress || sceneProgress.length === 0) return null;
+  const total = sceneProgress.length;
+  const audioReadyCount = sceneProgress.filter((s) => s.audioReady).length;
+  const codeReadyCount = sceneProgress.filter((s) => s.codeReady).length;
+  return (audioReadyCount / total) * 50 + (codeReadyCount / total) * 50;
+}
+
+function useLessonProgress(statuses: LessonStatus[], sceneProgresses: (SceneProgressItem[] | undefined)[]): number[] {
   const [progresses, setProgresses] = useState<number[]>(statuses.map(() => 0));
   const startTimesRef = useRef<(number | null)[]>(statuses.map(() => null));
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusKey = statuses.join(",");
+  // Recomputing only needs to happen when the actual READY COUNTS change —
+  // keying on the raw sceneProgress arrays instead would re-run this effect
+  // (and restart the fallback timer's interval) on every poll tick regardless
+  // of whether anything in them actually changed, since pollCourse always
+  // hands back fresh array references.
+  const sceneProgressKey = sceneProgresses
+    .map((sp) => (sp ? `${sp.filter((s) => s.audioReady).length}:${sp.filter((s) => s.codeReady).length}` : "-"))
+    .join(",");
 
   useEffect(() => {
     if (tickRef.current) clearInterval(tickRef.current);
@@ -186,11 +214,23 @@ function useLessonProgress(statuses: LessonStatus[]): number[] {
       statuses.forEach((s, i) => {
         if (s === "ready") next[i] = 100;
         if (s === "failed") { next[i] = 0; startTimesRef.current[i] = null; }
+        if (s === "generating") {
+          const real = computeRealLessonProgress(sceneProgresses[i]);
+          if (real !== null) next[i] = real;
+        }
       });
       return next;
     });
+
+    // The simulated timer below exists ONLY for the brief pre-scene-plan
+    // window on whichever lesson is first in line — real sceneProgress data
+    // (now applied to EVERY concurrently-generating lesson above, not just
+    // one) covers everything past that. If real data already exists for the
+    // first generating lesson, there's nothing left for the timer to do.
     const activeIdx = statuses.findIndex((s) => s === "generating");
     if (activeIdx === -1) return;
+    if (computeRealLessonProgress(sceneProgresses[activeIdx]) !== null) return;
+
     if (startTimesRef.current[activeIdx] === null) {
       startTimesRef.current[activeIdx] = Date.now();
     }
@@ -208,7 +248,7 @@ function useLessonProgress(statuses: LessonStatus[]): number[] {
       });
     }, PROGRESS_TICK_MS);
     return () => { if (tickRef.current) clearInterval(tickRef.current); };
-  }, [statusKey]);
+  }, [statusKey, sceneProgressKey]);
 
   return progresses;
 }
@@ -1618,7 +1658,7 @@ export default function AILearningPage() {
   // an await would only ever see the value from when the closure was created.
   const activeHistoryIdRef = useRef<string | null>(null);
   useEffect(() => { activeHistoryIdRef.current = activeHistoryId; }, [activeHistoryId]);
-  const lessonProgresses = useLessonProgress(lessonStatuses);
+  const lessonProgresses = useLessonProgress(lessonStatuses, lessons.map((l) => l.sceneProgress));
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -2240,7 +2280,6 @@ export default function AILearningPage() {
               const isGenerating = status === "generating";
               const isFailed = status === "failed";
               const isLockedStatus = status === "locked";
-              const isWaiting = isGenerating && lessonStatuses.findIndex((s) => s === "generating") !== i;
               const isActive = activeSection === "video" && activeLesson === i;
               // Only actually disabled while locked behind the free trial —
               // a still-generating lesson is clickable so the user can watch
@@ -2267,13 +2306,11 @@ export default function AILearningPage() {
                     ) : isGenerating ? (
                       <div className="mt-1.5">
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-blue-400">{isWaiting ? "waiting…" : "generating…"}</span>
-                          <span className="text-xs font-semibold text-blue-500">{isWaiting ? "—" : `${Math.round(progress)}%`}</span>
+                          <span className="text-xs text-blue-400">generating…</span>
+                          <span className="text-xs font-semibold text-blue-500">{Math.round(progress)}%</span>
                         </div>
                         <div className="w-full bg-slate-100 rounded-full h-1 overflow-hidden">
-                          {isWaiting ? <div className="h-1 w-0" /> : (
-                            <div className="h-1 rounded-full bg-gradient-to-r from-blue-400 to-indigo-400 transition-all duration-500" style={{ width: `${progress}%` }} />
-                          )}
+                          <div className="h-1 rounded-full bg-gradient-to-r from-blue-400 to-indigo-400 transition-all duration-500" style={{ width: `${progress}%` }} />
                         </div>
                       </div>
                     ) : isFailed ? (
