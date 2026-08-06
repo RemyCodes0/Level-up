@@ -360,10 +360,24 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
     if (!el) return;
     if (document.fullscreenElement === el) {
       document.exitFullscreen();
+      // Best-effort — unsupported (notably iOS Safari) or already unlocked
+      // just no-ops. See the lock attempt below for why this can fail.
+      (screen.orientation as any)?.unlock?.();
     } else {
-      el.requestFullscreen().catch((err) => {
-        console.error("Failed to enter fullscreen:", err);
-      });
+      el.requestFullscreen()
+        .then(() => {
+          // Rotates the SCREEN to match the video instead of the video
+          // having to squeeze into whatever orientation the phone happened
+          // to be held in — the same thing YouTube/Netflix do on mobile
+          // fullscreen. Android supports this; iOS Safari has no Screen
+          // Orientation Lock API at all (confirmed no workaround exists),
+          // so this silently no-ops there — the coverSize fallback below
+          // covers that case instead.
+          (screen.orientation as any)?.lock?.("landscape")?.catch?.(() => {});
+        })
+        .catch((err) => {
+          console.error("Failed to enter fullscreen:", err);
+        });
     }
   }, []);
 
@@ -378,6 +392,19 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   // does for a plain <video>. Only active in fullscreen; the normal inline
   // player is already exactly 16:9 sized (via the aspectRatio style below),
   // so there's nothing to cover there.
+  //
+  // Cover only makes sense for a LANDSCAPE-ish viewport — a modest aspect
+  // mismatch (a monitor that's a bit wider/narrower than 16:9) only trims a
+  // sliver off the edges. A PORTRAIT viewport (a phone held normally,
+  // fullscreen requested without the orientation lock above taking effect —
+  // iOS, or the user declined rotation) is a fundamentally different
+  // situation: "covering" a 1920x1080 frame into a narrow tall box means
+  // scaling up until the HEIGHT fits, which crops away most of the WIDTH —
+  // the video turns into an unrecognisable zoomed-in vertical strip, not a
+  // filled screen. Falling back to the letterboxed default (coverSize null)
+  // there keeps the whole picture visible, just with bars — the right
+  // tradeoff when there's no way to fill a portrait box with a landscape
+  // video without destroying it.
   const [coverSize, setCoverSize] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
     if (!isFullscreen) {
@@ -389,6 +416,10 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
     const recompute = () => {
       const { width, height } = el.getBoundingClientRect();
       if (!width || !height) return;
+      if (width < height) {
+        setCoverSize(null);
+        return;
+      }
       const scale = Math.max(width / 1920, height / 1080);
       setCoverSize({ width: 1920 * scale, height: 1080 * scale });
     };
