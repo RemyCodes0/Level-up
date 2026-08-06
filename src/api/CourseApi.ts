@@ -256,12 +256,17 @@ export async function retryLesson(courseId: string, lessonIndex: number): Promis
   if (!res.ok) throw new Error("Failed to retry lesson");
 }
 
-// ── Fix just the ONE scene that crashed, not the whole lesson ───────────────
-// Synchronous (unlike retryLesson's fire-and-forget-then-poll) — one scene is
-// a single small LLM call, fast enough to just await. Throws a RetrySceneError
-// with `fallbackToFullRetry: true` when the backend couldn't confidently
-// isolate which scene broke (e.g. an old lesson generated before scene
-// boundaries were tracked) — the caller should fall back to retryLesson.
+// ── Fix just the ONE scene (or the shared header) that crashed, not the
+// whole lesson ───────────────────────────────────────────────────────────
+// Synchronous (unlike retryLesson's fire-and-forget-then-poll) — one patch is
+// a single small LLM call, fast enough to just await. `target` tells you
+// which: "scene" for a single scene's own code, "header" for the shared
+// imports/constants/components every scene in the lesson calls into (a bug
+// there can't be fixed by touching any one scene, since the bug isn't in
+// it). Throws a RetrySceneError with `fallbackToFullRetry: true` when the
+// backend couldn't confidently isolate either (e.g. an old lesson generated
+// before scene boundaries were tracked) — the caller should fall back to
+// retryLesson.
 export class RetrySceneError extends Error {
   fallbackToFullRetry: boolean;
   constructor(message: string, fallbackToFullRetry: boolean) {
@@ -274,7 +279,10 @@ export async function retryScene(
   courseId: string,
   lessonIndex: number,
   info: { crashFrame: number | null; errorMessage: string }
-): Promise<{ sceneNumber: number; code: string }> {
+): Promise<
+  | { target: "scene"; sceneNumber: number; code: string }
+  | { target: "header"; code: string }
+> {
   const res = await fetch(`${BASE_URL}/api/course/${courseId}/retry-scene/${lessonIndex}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -283,7 +291,7 @@ export async function retryScene(
   handleUnauthorized(res);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new RetrySceneError(data.error || "Failed to patch scene", Boolean(data.fallbackToFullRetry));
+    throw new RetrySceneError(data.error || "Failed to patch lesson", Boolean(data.fallbackToFullRetry));
   }
   return data;
 }

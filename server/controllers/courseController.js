@@ -8,8 +8,12 @@ const {
   generateLessonHeader,
   generateNextCourseSuggestions,
   patchSceneFromRuntimeError,
+  patchHeaderFromRuntimeError,
+  locateErrorIsInHeader,
   extractErrorLine,
   locateSceneIndexAtLineInFullCode,
+  extractUndefinedIdentifier,
+  locateIdentifierScope,
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
 const { generateAllSceneAudioPipelined } = require("../services/ttsService");
@@ -950,20 +954,23 @@ async function retryLessonHandler(req, res) {
   }
 }
 
-// ── Fix ONE scene, not the whole lesson ─────────────────────────────────────
+// ── Fix ONE scene — or the shared header — not the whole lesson ─────────────
 // Called when a real user hits a crash watching an already-finished lesson
 // (see DynamicPlayer.tsx's onRetry) — the far more common case than a broken
 // lesson slipping past generation-time validation entirely. Regenerating the
-// whole lesson for a one-scene bug is wasteful (a full lesson is 6-14 scenes
-// + narration audio); this patches just the scene that broke, using the
-// lesson's OWN saved code as context (see patchSceneFromRuntimeError's own
-// comment for why no separately-stored scene spec is needed).
+// whole lesson for a one-scene (or one-header-line) bug is wasteful (a full
+// lesson is 6-14 scenes + narration audio); this patches just whatever
+// actually broke, using the lesson's OWN saved code as context (see
+// patchSceneFromRuntimeError's own comment for why no separately-stored
+// scene spec is needed). A bug can live in either place: a single scene's
+// own code, or the header every scene shares (PALETTE, Backdrop, Arrow,
+// etc.) — see locateErrorIsInHeader below for how those are told apart.
 //
-// Synchronous, unlike retryLessonHandler's fire-and-forget: one scene is one
+// Synchronous, unlike retryLessonHandler's fire-and-forget: one patch is one
 // small LLM call, fast enough to just await and return the result — no
 // course.status flip, no polling. The frontend shows its own lightweight
-// "Fixing scene N…" state around this single request instead of the full
-// lesson-generating skeleton.
+// "Fixing the part that broke…" state around this single request instead of
+// the full lesson-generating skeleton.
 async function retrySceneHandler(req, res) {
   try {
     const { courseId, lessonIndex } = req.params;
@@ -981,38 +988,69 @@ async function retrySceneHandler(req, res) {
     const lesson = course.lessons[idx];
     if (!lesson.code) return res.status(400).json({ error: "Lesson has no code to patch" });
 
-    // Resolve WHICH scene, in priority order: the crash frame (most reliable
-    // — exactly which <Series.Sequence> was on screen when it broke) against
-    // the lesson's own saved scene boundaries, then the error's own line
-    // number (a compile error caught before playback ever started, so there
-    // is no frame) against the saved code directly. If neither resolves,
-    // there's nothing to target a scene-only fix at.
-    let sceneIndex = null;
-    if (typeof crashFrame === "number" && lesson.scenes?.length) {
-      const scene = lesson.scenes.find((s) => crashFrame >= s.startFrame && crashFrame < s.endFrame);
-      if (scene) sceneIndex = scene.index;
-    }
-    if (sceneIndex === null) {
-      const line = extractErrorLine(errorMessage);
-      sceneIndex = locateSceneIndexAtLineInFullCode(lesson.code, line);
-    }
-
-    if (sceneIndex === null) {
-      return res.status(422).json({
-        error: "Could not isolate which scene failed",
-        fallbackToFullRetry: true,
-      });
-    }
-
     const componentName = lesson.code.match(/export const (\w+) =/)?.[1];
     if (!componentName) {
       return res.status(422).json({ error: "Could not identify lesson component name", fallbackToFullRetry: true });
     }
 
-    const patchedCode = await patchSceneFromRuntimeError(
-      lesson, componentName, lesson.code, sceneIndex, errorMessage,
-      { userId: req.user._id, courseId }
-    );
+    // Resolve WHERE the bug actually is, in priority order:
+    //   1. A compile error's own line number, if it lands in the HEADER —
+    //      the shared imports/constants/components every scene calls into
+    //      (a broken PALETTE value, a buggy Backdrop) — fixing a SCENE
+    //      wouldn't find anything wrong, since the bug isn't there.
+    //   2. The crash frame (most reliable when available — exactly which
+    //      <Series.Sequence> was on screen when it broke) against the
+    //      lesson's own saved scene boundaries.
+    //   3. The error's own line number against the saved code directly (a
+    //      compile error caught before playback ever started, so there's no
+    //      frame) — landing in a scene this time, not the header.
+    //   4. The IDENTIFIER named in the error, if it's the "X is not defined"/
+    //      "X is not a function" shape — the common case for a compile-time
+    //      crash, and the one tiers 1 and 3 can't actually reach: the
+    //      frontend (useCompilation.ts) only ever keeps the error's bare
+    //      message, never a line number, and even if it had one, that line
+    //      would point into a Babel-transpiled/import-stripped/prelude-
+    //      prepended COPY of the code, not reliably mappable back to
+    //      lesson.code at all. Searching for where the named identifier is
+    //      actually referenced sidesteps needing a line number in the first
+    //      place. See locateIdentifierScope's own comment.
+    // If none of these resolve, there's nothing to target a patch at.
+    const errorLine = extractErrorLine(errorMessage);
+    let targetsHeader = locateErrorIsInHeader(lesson.code, errorLine);
+
+    let sceneIndex = null;
+    if (!targetsHeader) {
+      if (typeof crashFrame === "number" && lesson.scenes?.length) {
+        const scene = lesson.scenes.find((s) => crashFrame >= s.startFrame && crashFrame < s.endFrame);
+        if (scene) sceneIndex = scene.index;
+      }
+      if (sceneIndex === null) {
+        sceneIndex = locateSceneIndexAtLineInFullCode(lesson.code, errorLine);
+      }
+      if (sceneIndex === null) {
+        const identifier = extractUndefinedIdentifier(errorMessage);
+        const located = identifier ? locateIdentifierScope(lesson.code, identifier) : null;
+        if (located?.type === "header") targetsHeader = true;
+        else if (located?.type === "scene") sceneIndex = located.index;
+      }
+    }
+
+    if (!targetsHeader && sceneIndex === null) {
+      return res.status(422).json({
+        error: "Could not isolate which scene (or the header) failed",
+        fallbackToFullRetry: true,
+      });
+    }
+
+    const patchedCode = targetsHeader
+      ? await patchHeaderFromRuntimeError(
+          lesson, componentName, lesson.code, errorMessage,
+          { userId: req.user._id, courseId }
+        )
+      : await patchSceneFromRuntimeError(
+          lesson, componentName, lesson.code, sceneIndex, errorMessage,
+          { userId: req.user._id, courseId }
+        );
 
     await Course.findByIdAndUpdate(courseId, {
       $set: { [`lessons.${idx}.code`]: patchedCode },
@@ -1022,10 +1060,14 @@ async function retrySceneHandler(req, res) {
     // fire-and-forget + poll) — one scene is one fast LLM call, so the
     // frontend can just await this and swap the code in immediately instead
     // of spinning up a poll loop for something that's already done.
-    res.json({ ok: true, sceneIndex, sceneNumber: sceneIndex + 1, code: patchedCode });
+    res.json(
+      targetsHeader
+        ? { ok: true, target: "header", code: patchedCode }
+        : { ok: true, target: "scene", sceneIndex, sceneNumber: sceneIndex + 1, code: patchedCode }
+    );
   } catch (err) {
     console.error("retrySceneHandler error:", err);
-    res.status(500).json({ error: "Failed to patch scene", fallbackToFullRetry: true });
+    res.status(500).json({ error: "Failed to patch lesson", fallbackToFullRetry: true });
   }
 }
 

@@ -1830,10 +1830,14 @@ export default function AILearningPage() {
     setRetryingLesson(lessonIndex);
     try {
       if (crashInfo) {
-        setRetryingLabel("Fixing the scene that broke…");
+        // Generic on purpose — whether the backend ends up targeting the
+        // scene or the shared header (a bug some OTHER scene's code calls
+        // into) isn't known until the request resolves, so this can't say
+        // "scene" or "header" specifically without guessing.
+        setRetryingLabel("Fixing the part that broke…");
         try {
-          const { code } = await retryScene(activeHistoryId, lessonIndex, crashInfo);
-          setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code } : l));
+          const result = await retryScene(activeHistoryId, lessonIndex, crashInfo);
+          setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code: result.code } : l));
           return;
         } catch (err) {
           if (err instanceof RetrySceneError && err.fallbackToFullRetry) {

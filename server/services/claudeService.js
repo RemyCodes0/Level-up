@@ -1822,6 +1822,88 @@ function extractHeaderFromFullCode(fullCode, sceneNames) {
   return idx === -1 ? fullCode : fullCode.slice(0, idx);
 }
 
+// The line-span counterpart of extractHeaderFromFullCode above — needed (not
+// just the text) so a header patch can be spliced back in with the same
+// line-based spliceScene every other patch path uses. The header always
+// starts at line 1; it ends the line before the first scene function starts.
+function locateHeaderInFullCode(fullCode) {
+  const firstScene = locateSceneByIndexInFullCode(fullCode, 0);
+  if (!firstScene) return null;
+  return { name: "__HEADER__", startLine: 1, endLine: firstScene.startLine - 1 };
+}
+
+// A compile error's line number can land in the header just as easily as in
+// a scene — a broken shared component (Backdrop, Arrow, a bad PALETTE
+// value) throws from wherever a scene happens to call it, but the actual
+// bug lives in the header's own code above every scene. Checked BEFORE
+// falling through to locateSceneIndexAtLineInFullCode in the caller, so a
+// header bug gets a header-scoped patch instead of a scene patch that has
+// nothing wrong in it to find.
+function locateErrorIsInHeader(fullCode, targetLine) {
+  if (!targetLine) return false;
+  const header = locateHeaderInFullCode(fullCode);
+  return Boolean(header && targetLine >= header.startLine && targetLine <= header.endLine);
+}
+
+// Last-resort location strategy — used whenever there's no crash frame (a
+// compile-time crash, caught before playback ever starts) AND no usable
+// line number either. That second case is actually the COMMON one for a
+// compile-time error, not the exception: useCompilation.ts only ever keeps
+// `err.message`, never a line number, and even if it did, that line would
+// point into a Babel-transpiled, import-stripped, prelude-prepended COPY of
+// the code — not reliably mappable back to a line in lesson.code at all. So
+// extractErrorLine/locateErrorIsInHeader/locateSceneIndexAtLineInFullCode
+// above are of little use for exactly the error class this exists to catch
+// ("SomeName is not defined" / "SomeName is not a function") — a plain
+// browser ReferenceError/TypeError message with no position info in the
+// text, ever.
+//
+// Instead: these error shapes are extremely standardized (every JS engine
+// phrases them identically) and name the missing identifier directly.
+// Search the lesson's OWN code for where that exact token is referenced —
+// if it's used in exactly one place (one scene, or the header), that's
+// almost certainly where the fix belongs, whether or not it's the literal
+// line that threw.
+const UNDEFINED_IDENTIFIER_PATTERNS = [
+  /^(\w+) is not defined$/,        // Chrome/V8, Firefox
+  /^(\w+) is not a function$/,     // all engines
+  /^Can't find variable: (\w+)$/,  // Safari's ReferenceError phrasing
+];
+function extractUndefinedIdentifier(errorMessage) {
+  for (const pattern of UNDEFINED_IDENTIFIER_PATTERNS) {
+    const m = (errorMessage || "").trim().match(pattern);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+// Returns { type: "header" } | { type: "scene", index } when `identifier`
+// appears (as a whole word) in EXACTLY one place across the header and every
+// scene — anything else (not found anywhere, or referenced in more than one
+// place, e.g. a common local variable name that's coincidentally reused
+// across scenes) is too ambiguous to safely target, and the caller falls
+// back to a full lesson retry rather than risk patching the wrong spot.
+function locateIdentifierScope(fullCode, identifier) {
+  const wordRe = new RegExp(`\\b${identifier}\\b`);
+  const matches = [];
+
+  const header = locateHeaderInFullCode(fullCode);
+  if (header) {
+    const headerCode = fullCode.split("\n").slice(header.startLine - 1, header.endLine).join("\n");
+    if (wordRe.test(headerCode)) matches.push({ type: "header" });
+  }
+
+  const sceneNames = extractSceneNamesInOrder(fullCode);
+  sceneNames.forEach((_, i) => {
+    const located = locateSceneByIndexInFullCode(fullCode, i);
+    if (!located) return;
+    const sceneCode = fullCode.split("\n").slice(located.startLine - 1, located.endLine).join("\n");
+    if (wordRe.test(sceneCode)) matches.push({ type: "scene", index: i });
+  });
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
 // Pulls durationInFrames for one scene straight out of the stitcher's own
 // <Series.Sequence durationInFrames={N}>...<SceneN /> block — the same
 // number stitchLessonCode wrote there originally, so this is always exactly
@@ -1994,6 +2076,101 @@ async function patchSceneFromRuntimeError(lesson, componentName, fullCode, scene
     }
   }
   throw lastErr ?? new Error(`Runtime patch for ${targetSceneName} failed after ${maxAttempts} attempts`);
+}
+
+function buildHeaderRuntimePatchUserContent(lesson, componentName, currentHeaderCode, errorMessage, sceneNames, feedback) {
+  return `
+LESSON: ${lesson.title} (component ${componentName})
+
+This lesson already finished generating and a real user hit an error watching it. The bug is in the HEADER — the shared imports/constants/components (e.g. PALETTE, Backdrop, Arrow) every scene in this lesson calls — NOT in any individual scene. You are making a SURGICAL fix: find the exact line(s) actually causing this error and change ONLY those. Do not rewrite, restyle, or "improve" anything else, even if you'd do it differently — every untouched line must come out byte-for-byte identical to what's below. In particular, do NOT rename, remove, or change the signature of anything the scenes below already depend on unless that is ITSELF the bug — every one of these scenes calls into this header and would break if a name it relies on disappeared or changed shape.
+
+SCENES THAT CALL INTO THIS HEADER (not shown, already correct — do not repeat them): ${sceneNames.join(", ") || "none"}
+
+CURRENT HEADER CODE (line-numbered for reference only — do not include the numbers in your output):
+${currentHeaderCode.split("\n").map((l, i) => `${i + 1}| ${l}`).join("\n")}
+
+THE ERROR THIS PRODUCES:
+${errorMessage}
+
+Output ONE find/replace block for each spot that needs to change (usually just one), in EXACTLY this format and nothing else — no explanation, no code fences, no scenes:
+
+${PATCH_FIND_MARKER}
+<the EXACT original snippet to replace, copied character-for-character from the code above — no line numbers, exact whitespace/indentation, just enough surrounding lines to be unambiguous (matched only once)>
+${PATCH_REPLACE_MARKER}
+<the corrected replacement for exactly that snippet — nothing more>
+${PATCH_END_MARKER}
+${feedback ? `\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:\n"${feedback}"\nMake sure the FIND text is an exact, unique, verbatim copy from the code above this time.` : ""}
+`;
+}
+
+// The header counterpart of patchSceneFromRuntimeError above — same
+// surgical find/replace approach (see that function's own comment for the
+// full rationale), scoped to the header instead of one scene. Higher blast
+// radius than a scene patch by nature (every scene calls into the header),
+// which is exactly why the prompt above is explicit about not touching
+// anything the scenes depend on beyond the actual bug — the find/replace
+// format's own guarantee (untouched code comes back byte-identical) is what
+// keeps that risk bounded rather than eliminated.
+async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, errorMessage, { userId = null, courseId = null, maxAttempts = 2 } = {}) {
+  const sceneNames = extractSceneNamesInOrder(fullCode);
+  const located = locateHeaderInFullCode(fullCode);
+  if (!located) {
+    throw new Error("Could not locate this lesson's header code span");
+  }
+
+  const currentHeaderCode = fullCode.split("\n").slice(located.startLine - 1, located.endLine).join("\n");
+  const label = `runtime-patch header L${lesson.lessonNumber}`;
+  const start = Date.now();
+
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const { text, stopReason, usage } = await streamCodeCompletion({
+        limiter: limitLessonCodeCall,
+        provider: LESSON_CODE_PROVIDER_NO_REASONING,
+        systemPrompt: LESSON_HEADER_RULES,
+        userContent: buildHeaderRuntimePatchUserContent(
+          lesson, componentName, currentHeaderCode, errorMessage, sceneNames,
+          attempt > 1 ? lastErr?.message : null
+        ),
+        maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
+      });
+      logUsage(label, usage);
+      if (usage) {
+        recordAiUsage({
+          kind: "lesson-code",
+          provider: LESSON_CODE_PROVIDER_NO_REASONING.providerName,
+          model: LESSON_CODE_PROVIDER_NO_REASONING.model,
+          userId,
+          courseId,
+          promptTokens: usage.prompt_tokens,
+          completionTokens: usage.completion_tokens,
+          cachedTokens: usage.prompt_cache_hit_tokens || 0,
+        });
+      }
+
+      if (stopReason === "length") {
+        throw new Error("Runtime header patch hit max_tokens — truncated.");
+      }
+
+      const blocks = parsePatchBlocks(text);
+      if (blocks.length === 0) {
+        throw new Error(`Runtime header patch did not contain any ${PATCH_FIND_MARKER}/${PATCH_REPLACE_MARKER} block.`);
+      }
+
+      const patchedHeaderCode = applyPatchBlocks(currentHeaderCode, blocks);
+      const fixed = autoFixCode(patchedHeaderCode, {});
+      const validated = validateHeaderFragment(fixed, { reservedNames: LESSON_COMPONENT_NAMES });
+
+      const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(`  [${label}] Patched via ${blocks.length} targeted edit(s) (${validated.length} chars) — took ${elapsedSec}s`);
+      return spliceScene(fullCode, located, validated);
+    } catch (err) {
+      lastErr = err;
+      console.warn(`  [${label}] Attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+    }
+  }
+  throw lastErr ?? new Error(`Runtime header patch failed after ${maxAttempts} attempts`);
 }
 
 // `allScenes` is the FULL lesson's scene list (specs only, for the
@@ -2525,6 +2702,10 @@ module.exports = {
   // — fixes a real crash a user already hit, without regenerating the whole
   // lesson. See the comment above patchSceneFromRuntimeError.
   patchSceneFromRuntimeError,
+  patchHeaderFromRuntimeError,
+  locateErrorIsInHeader,
+  extractUndefinedIdentifier,
+  locateIdentifierScope,
   extractErrorLine,
   locateSceneIndexAtLineInFullCode,
 };
