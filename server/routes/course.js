@@ -6,6 +6,7 @@ const {
   listCoursesHandler,
   getShowcaseCoursesHandler,
   retryLessonHandler,
+  retrySceneHandler,
   deleteCourseHandler,
   unlockRemainingLessonsHandler,
   generateShareLinkHandler,
@@ -75,6 +76,7 @@ router.post("/:courseId/publish", protect, publishCourseHandler);
 router.delete("/:courseId/publish", protect, unpublishCourseHandler);
 
 router.post("/:courseId/retry/:lessonIndex", protect, retryLessonHandler);
+router.post("/:courseId/retry-scene/:lessonIndex", protect, retrySceneHandler);
 router.post("/:courseId/unlock", protect, unlockRemainingLessonsHandler);
 router.get("/status/:courseId", protect, getCourseStatusHandler);
 router.get("/list", protect, listCoursesHandler);

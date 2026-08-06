@@ -1750,6 +1750,252 @@ async function patchSceneInChunk(lesson, targetSceneName, targetScene, brokenChu
   return validated;
 }
 
+// ── Post-hoc scene patch: fixes ONE scene in an already-finished, already-
+// saved lesson (a real user hit a crash watching it) instead of regenerating
+// the whole lesson from scratch — the same cost-saving idea as
+// patchSceneInChunk above, but for a lesson whose original per-scene specs
+// (visualDescription/mechanism/onScreenText — see the comment on
+// sceneMetaSchema in models/Course.js) are long gone. Everything this needs
+// is instead derived straight from the lesson's OWN saved code: the header
+// portion, the target scene's current (broken) body, and its neighbors — no
+// separate stored context required, so this works on any lesson regardless
+// of when it was generated. Locates the target scene by NAME (its index is
+// already known — from the crash frame or from a compile-error line — by the
+// time this is called), the counterpart of locateSceneAtLine's by-LINE
+// lookup used at original-generation time.
+function locateSceneByIndexInFullCode(fullCode, sceneIndex) {
+  const targetName = sceneComponentName(sceneIndex);
+  const lines = fullCode.split("\n");
+  const markerRe = /^(?:function|const)\s+(Scene\d+)\b/;
+  const markers = [];
+  lines.forEach((line, i) => {
+    const m = line.match(markerRe);
+    if (m) markers.push({ name: m[1], startLine: i + 1 });
+  });
+  // Bounds the LAST scene's span — without this it would swallow the
+  // trailing `export const <Lesson> = () => <Series>...` stitched on below
+  // every scene (see stitchLessonCode), since that's the only thing after it.
+  const exportLine = lines.findIndex((l) => l.startsWith("export const"));
+  if (exportLine !== -1) markers.push({ name: "__END__", startLine: exportLine + 1 });
+  markers.sort((a, b) => a.startLine - b.startLine);
+
+  const idx = markers.findIndex((mk) => mk.name === targetName);
+  if (idx === -1) return null;
+  const endLine = idx + 1 < markers.length ? markers[idx + 1].startLine - 1 : lines.length;
+  return { name: targetName, startLine: markers[idx].startLine, endLine };
+}
+
+// Every scene name actually present in a lesson's saved code, in appearance
+// order — used to build the patch prompt's "other scenes" context and to
+// bound-check a requested sceneIndex actually exists in THIS lesson.
+function extractSceneNamesInOrder(fullCode) {
+  const matches = fullCode.matchAll(/^(?:function|const)\s+(Scene\d+)\b/gm);
+  return [...matches].map((m) => m[1]);
+}
+
+// The by-LINE counterpart of locateSceneByIndexInFullCode above — used when
+// the only thing pointing at a scene is a compile error's line number (a
+// crash caught by useCompilation.ts client-side, before playback ever
+// starts, so there's no frame position to map instead). Same marker-scan
+// approach as locateSceneAtLine, just scoped to the FULL saved lesson code
+// rather than one generation-time chunk, and returning a scene INDEX
+// (0-based) instead of a name, since that's what the retry-scene route and
+// patchSceneFromRuntimeError both key on.
+function locateSceneIndexAtLineInFullCode(fullCode, targetLine) {
+  if (!targetLine) return null;
+  const sceneNames = extractSceneNamesInOrder(fullCode);
+  if (sceneNames.length === 0) return null;
+  for (let i = 0; i < sceneNames.length; i++) {
+    const located = locateSceneByIndexInFullCode(fullCode, i);
+    if (located && targetLine >= located.startLine && targetLine <= located.endLine) return i;
+  }
+  return null;
+}
+
+// The header is simply everything before the first scene function — exactly
+// what stitchLessonCode concatenated in the first place (see its own
+// `header.trim() + "" + chunkCodes...`).
+function extractHeaderFromFullCode(fullCode, sceneNames) {
+  if (sceneNames.length === 0) return fullCode;
+  const firstSceneName = sceneNames[0];
+  const idx = fullCode.search(new RegExp(`^(?:function|const)\\s+${firstSceneName}\\b`, "m"));
+  return idx === -1 ? fullCode : fullCode.slice(0, idx);
+}
+
+// Pulls durationInFrames for one scene straight out of the stitcher's own
+// <Series.Sequence durationInFrames={N}>...<SceneN /> block — the same
+// number stitchLessonCode wrote there originally, so this is always exactly
+// right regardless of whether lesson.scenes (DB metadata) is populated.
+function extractSceneDurationFromFullCode(fullCode, sceneName) {
+  const re = new RegExp(
+    `<Series\\.Sequence durationInFrames=\\{(\\d+)\\}>[\\s\\S]*?<${sceneName}\\s*/>`
+  );
+  const m = fullCode.match(re);
+  return m ? Number(m[1]) : null;
+}
+
+// Delimiters for the find/replace format below — distinctive enough that
+// they'll never collide with anything a real scene would contain.
+const PATCH_FIND_MARKER = "<<<FIND>>>";
+const PATCH_REPLACE_MARKER = "<<<REPLACE>>>";
+const PATCH_END_MARKER = "<<<END>>>";
+
+function buildRuntimePatchUserContent(lesson, componentName, targetSceneName, currentSceneCode, errorMessage, headerCode, otherSceneNames, feedback) {
+  return `
+LESSON: ${lesson.title} (component ${componentName})
+
+This lesson already finished generating and a real user hit an error watching it. You are making a SURGICAL fix to ONE scene in an otherwise-working, already-shipped lesson — find the exact line(s) actually causing this error and change ONLY those. Do not rewrite, restyle, or "improve" anything else in the scene, even if you'd do it differently — every untouched line must come out byte-for-byte identical to what's below.
+
+HEADER CODE (already imported/declared — reference these exact names, do not redeclare or reimport):
+\`\`\`tsx
+${headerCode}
+\`\`\`
+
+OTHER SCENES IN THIS LESSON (already correct, not shown — do not repeat them, do not rename anything): ${otherSceneNames.filter((n) => n !== targetSceneName).join(", ") || "none"}
+
+${targetSceneName}'S CURRENT CODE (line-numbered for reference only — do not include the numbers in your output):
+${currentSceneCode.split("\n").map((l, i) => `${i + 1}| ${l}`).join("\n")}
+
+THE ERROR THIS SCENE PRODUCES:
+${errorMessage}
+
+Output ONE find/replace block for each spot that needs to change (usually just one), in EXACTLY this format and nothing else — no explanation, no code fences, no other scenes, no restating the whole function:
+
+${PATCH_FIND_MARKER}
+<the EXACT original snippet to replace, copied character-for-character from the code above — no line numbers, exact whitespace/indentation, just enough surrounding lines to be unambiguous (matched only once in the scene)>
+${PATCH_REPLACE_MARKER}
+<the corrected replacement for exactly that snippet — nothing more>
+${PATCH_END_MARKER}
+${feedback ? `\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:\n"${feedback}"\nMake sure the FIND text is an exact, unique, verbatim copy from the code above this time.` : ""}
+`;
+}
+
+// Parses one or more ${PATCH_FIND_MARKER}/${PATCH_REPLACE_MARKER}/${PATCH_END_MARKER}
+// blocks out of the model's response.
+function parsePatchBlocks(text) {
+  const re = new RegExp(
+    `${PATCH_FIND_MARKER}\\n([\\s\\S]*?)\\n${PATCH_REPLACE_MARKER}\\n([\\s\\S]*?)\\n${PATCH_END_MARKER}`,
+    "g"
+  );
+  const blocks = [...text.matchAll(re)].map((m) => ({ find: m[1], replace: m[2] }));
+  return blocks;
+}
+
+// Applies every find/replace block to sceneCode, IN ORDER, failing loudly
+// (rather than guessing) the moment any `find` isn't a unique, verbatim
+// substring — an ambiguous or missing match means the model didn't actually
+// copy the snippet exactly, which is exactly the failure mode this format
+// exists to catch instead of silently patching the wrong spot.
+function applyPatchBlocks(sceneCode, blocks) {
+  let result = sceneCode;
+  for (const { find, replace } of blocks) {
+    const occurrences = result.split(find).length - 1;
+    if (occurrences === 0) {
+      throw new Error(`Patch FIND text was not found verbatim in the scene's current code:\n${find}`);
+    }
+    if (occurrences > 1) {
+      throw new Error(`Patch FIND text matches ${occurrences} places in the scene — it must uniquely identify one spot:\n${find}`);
+    }
+    result = result.replace(find, replace);
+  }
+  return result;
+}
+
+// Fixes ONE scene in an already-generated, already-saved lesson with a
+// targeted find/replace patch, given the scene's own current (broken) code
+// and the actual error it produced — either a runtime crash caught while a
+// real user was playing it (error message + which frame it happened on,
+// resolved to a scene index by the caller) or a compile error whose line
+// number pointed into this scene (also resolved by the caller).
+//
+// Deliberately NOT "regenerate the whole scene" (that's patchSceneInChunk's
+// job, at GENERATION time, where the scene has no user-visible history yet)
+// — a scene a real viewer has already watched should come back changed in
+// exactly the one place that broke, not rewritten wholesale by the model's
+// own judgment of how it "should" look. The model is asked for one or more
+// find/replace snippets (see PATCH_FIND_MARKER et al.) instead of a full
+// function body; those get applied as literal substring replacements
+// against the scene's OWN current code, so anything the model doesn't
+// explicitly target is guaranteed byte-identical to before, not just
+// "hopefully preserved" by the model.
+//
+// Returns the FULL lesson code with just that one scene's span replaced —
+// everything else (header, other scenes, the <Series> wrapper, every audio
+// URL and duration) is untouched, spliced back in with the same line-based
+// spliceScene used by the generation-time patch path above.
+async function patchSceneFromRuntimeError(lesson, componentName, fullCode, sceneIndex, errorMessage, { userId = null, courseId = null, maxAttempts = 2 } = {}) {
+  const sceneNames = extractSceneNamesInOrder(fullCode);
+  const targetSceneName = sceneComponentName(sceneIndex);
+  if (!sceneNames.includes(targetSceneName)) {
+    throw new Error(`Scene ${targetSceneName} not found in this lesson's code`);
+  }
+
+  const located = locateSceneByIndexInFullCode(fullCode, sceneIndex);
+  if (!located) {
+    throw new Error(`Could not locate ${targetSceneName}'s code span`);
+  }
+
+  const currentSceneCode = fullCode.split("\n").slice(located.startLine - 1, located.endLine).join("\n");
+  const headerCode = extractHeaderFromFullCode(fullCode, sceneNames);
+  const headerAvailableNames = new Set(getHeaderExposedNames(headerCode));
+  const durationInFrames = extractSceneDurationFromFullCode(fullCode, targetSceneName)
+    ?? lesson.scenes?.find((s) => s.index === sceneIndex)?.endFrame - (lesson.scenes?.find((s) => s.index === sceneIndex)?.startFrame ?? 0)
+    ?? undefined;
+
+  const label = `runtime-patch ${targetSceneName} L${lesson.lessonNumber}`;
+  const start = Date.now();
+
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const { text, stopReason, usage } = await streamCodeCompletion({
+        limiter: limitLessonCodeCall,
+        provider: LESSON_CODE_PROVIDER_NO_REASONING,
+        systemPrompt: LESSON_CHUNK_RULES,
+        userContent: buildRuntimePatchUserContent(
+          lesson, componentName, targetSceneName, currentSceneCode, errorMessage, headerCode, sceneNames,
+          attempt > 1 ? lastErr?.message : null
+        ),
+        maxOutputTokens: CHUNK_MAX_OUTPUT_TOKENS,
+      });
+      logUsage(label, usage);
+      if (usage) {
+        recordAiUsage({
+          kind: "lesson-code",
+          provider: LESSON_CODE_PROVIDER_NO_REASONING.providerName,
+          model: LESSON_CODE_PROVIDER_NO_REASONING.model,
+          userId,
+          courseId,
+          promptTokens: usage.prompt_tokens,
+          completionTokens: usage.completion_tokens,
+          cachedTokens: usage.prompt_cache_hit_tokens || 0,
+        });
+      }
+
+      if (stopReason === "length") {
+        throw new Error(`Runtime patch for ${targetSceneName} hit max_tokens — truncated.`);
+      }
+
+      const blocks = parsePatchBlocks(text);
+      if (blocks.length === 0) {
+        throw new Error(`Runtime patch for ${targetSceneName} did not contain any ${PATCH_FIND_MARKER}/${PATCH_REPLACE_MARKER} block.`);
+      }
+
+      const patchedSceneCode = applyPatchBlocks(currentSceneCode, blocks);
+      const fixed = autoFixCode(patchedSceneCode, { totalFrames: durationInFrames });
+      const validated = validateSceneFragment(fixed, targetSceneName, { headerAvailableNames });
+
+      const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(`  [${label}] Patched via ${blocks.length} targeted edit(s) (${validated.length} chars) — took ${elapsedSec}s`);
+      return spliceScene(fullCode, located, validated);
+    } catch (err) {
+      lastErr = err;
+      console.warn(`  [${label}] Attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+    }
+  }
+  throw lastErr ?? new Error(`Runtime patch for ${targetSceneName} failed after ${maxAttempts} attempts`);
+}
+
 // `allScenes` is the FULL lesson's scene list (specs only, for the
 // OTHER-SCENES context) — not this chunk's own scenes, and never another
 // chunk's actual generated code. Chunks now run in PARALLEL (see
@@ -2275,4 +2521,10 @@ module.exports = {
   describeError,
   isNonRetryable,
   backoffDelay,
+  // Post-hoc single-scene patching (courseController.js's retry-scene route)
+  // — fixes a real crash a user already hit, without regenerating the whole
+  // lesson. See the comment above patchSceneFromRuntimeError.
+  patchSceneFromRuntimeError,
+  extractErrorLine,
+  locateSceneIndexAtLineInFullCode,
 };

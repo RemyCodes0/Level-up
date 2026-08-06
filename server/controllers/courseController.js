@@ -7,6 +7,9 @@ const {
   generateLessonCode,
   generateLessonHeader,
   generateNextCourseSuggestions,
+  patchSceneFromRuntimeError,
+  extractErrorLine,
+  locateSceneIndexAtLineInFullCode,
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
 const { generateAllSceneAudioPipelined } = require("../services/ttsService");
@@ -947,6 +950,85 @@ async function retryLessonHandler(req, res) {
   }
 }
 
+// ── Fix ONE scene, not the whole lesson ─────────────────────────────────────
+// Called when a real user hits a crash watching an already-finished lesson
+// (see DynamicPlayer.tsx's onRetry) — the far more common case than a broken
+// lesson slipping past generation-time validation entirely. Regenerating the
+// whole lesson for a one-scene bug is wasteful (a full lesson is 6-14 scenes
+// + narration audio); this patches just the scene that broke, using the
+// lesson's OWN saved code as context (see patchSceneFromRuntimeError's own
+// comment for why no separately-stored scene spec is needed).
+//
+// Synchronous, unlike retryLessonHandler's fire-and-forget: one scene is one
+// small LLM call, fast enough to just await and return the result — no
+// course.status flip, no polling. The frontend shows its own lightweight
+// "Fixing scene N…" state around this single request instead of the full
+// lesson-generating skeleton.
+async function retrySceneHandler(req, res) {
+  try {
+    const { courseId, lessonIndex } = req.params;
+    const { crashFrame, errorMessage } = req.body;
+    const idx = parseInt(lessonIndex, 10);
+
+    if (!errorMessage) {
+      return res.status(400).json({ error: "errorMessage is required" });
+    }
+
+    const course = await Course.findOne({ _id: courseId, userId: req.user._id });
+    if (!course) return res.status(404).json({ error: "Course not found" });
+    if (idx < 0 || idx >= course.lessons.length) return res.status(400).json({ error: "Invalid lesson index" });
+
+    const lesson = course.lessons[idx];
+    if (!lesson.code) return res.status(400).json({ error: "Lesson has no code to patch" });
+
+    // Resolve WHICH scene, in priority order: the crash frame (most reliable
+    // — exactly which <Series.Sequence> was on screen when it broke) against
+    // the lesson's own saved scene boundaries, then the error's own line
+    // number (a compile error caught before playback ever started, so there
+    // is no frame) against the saved code directly. If neither resolves,
+    // there's nothing to target a scene-only fix at.
+    let sceneIndex = null;
+    if (typeof crashFrame === "number" && lesson.scenes?.length) {
+      const scene = lesson.scenes.find((s) => crashFrame >= s.startFrame && crashFrame < s.endFrame);
+      if (scene) sceneIndex = scene.index;
+    }
+    if (sceneIndex === null) {
+      const line = extractErrorLine(errorMessage);
+      sceneIndex = locateSceneIndexAtLineInFullCode(lesson.code, line);
+    }
+
+    if (sceneIndex === null) {
+      return res.status(422).json({
+        error: "Could not isolate which scene failed",
+        fallbackToFullRetry: true,
+      });
+    }
+
+    const componentName = lesson.code.match(/export const (\w+) =/)?.[1];
+    if (!componentName) {
+      return res.status(422).json({ error: "Could not identify lesson component name", fallbackToFullRetry: true });
+    }
+
+    const patchedCode = await patchSceneFromRuntimeError(
+      lesson, componentName, lesson.code, sceneIndex, errorMessage,
+      { userId: req.user._id, courseId }
+    );
+
+    await Course.findByIdAndUpdate(courseId, {
+      $set: { [`lessons.${idx}.code`]: patchedCode },
+    });
+
+    // Returns the patched code directly (unlike retryLessonHandler's
+    // fire-and-forget + poll) — one scene is one fast LLM call, so the
+    // frontend can just await this and swap the code in immediately instead
+    // of spinning up a poll loop for something that's already done.
+    res.json({ ok: true, sceneIndex, sceneNumber: sceneIndex + 1, code: patchedCode });
+  } catch (err) {
+    console.error("retrySceneHandler error:", err);
+    res.status(500).json({ error: "Failed to patch scene", fallbackToFullRetry: true });
+  }
+}
+
 // ── Unlock the rest of a free-trial course ──────────────────────────────────
 // Called after the user buys credits and wants to continue a course that
 // was capped at lesson 1. Costs 1 credit (same price as any other course),
@@ -1060,6 +1142,7 @@ module.exports = {
   deleteCourseHandler,
   getShowcaseCoursesHandler,
   retryLessonHandler,
+  retrySceneHandler,
   unlockRemainingLessonsHandler,
   generateShareLinkHandler,
   // Exported for collabController.js — creating a collaborative room's

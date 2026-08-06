@@ -20,6 +20,8 @@ import {
   listCourses,
   deleteCourse,
   retryLesson,
+  retryScene,
+  RetrySceneError,
   unlockCourse,
   getCourseStatus,
   getNextSuggestions,
@@ -31,6 +33,7 @@ import { submitQuiz as submitQuizApi, getLatestAttempt } from "../api/QuizApi";
 import type { QuizResult } from "../api/QuizApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer, PlayerErrorBoundary } from "../remotion/DynamicPlayer";
+import type { LessonCrashInfo } from "../remotion/DynamicPlayer";
 import { Thumbnail } from "@remotion/player";
 import { useCompilation } from "../remotion/useCompilation";
 import { ReferralCard } from "../components/ReferralCard";
@@ -48,7 +51,7 @@ import {
   Award, TrendingUp, TrendingDown, ClipboardList, Trophy,
   X, Check, PanelLeft, PenSquare, GraduationCap, Loader2, Trash2, XCircle,
   CreditCard, Zap, Minus, Plus, MessageSquare, Share2, Globe2,
-  User as UserIcon, LogOut, ChevronsUpDown, Search,
+  User as UserIcon, LogOut, ChevronsUpDown, Search, Gift,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -139,6 +142,9 @@ interface Credits {
   spendableBalance?: number;
   signupBonusCredits?: number;
   signupBonusExpiresAt?: string | null;
+  // Whether this user has already claimed the one-time feedback credit
+  // bonus — drives the sidebar "Send feedback" button's reward callout.
+  feedbackCreditGranted?: boolean;
 }
 
 // Loading-skeleton lessons shown while a course generates, before real data
@@ -843,10 +849,10 @@ const FPS = 30;
 const POSITION_REPORT_INTERVAL_MS = 5000;
 
 function VideoPlayer({
-  lesson, onComplete, onRetry, retrying, courseId, lessonNumber,
+  lesson, onComplete, onRetry, retrying, retryingLabel, courseId, lessonNumber,
   nextLessonTitle, nextLessonReady, onPlayNext,
 }: {
-  lesson: Lesson; onComplete: () => void; onRetry?: () => void; retrying?: boolean; courseId: string | null; lessonNumber: number;
+  lesson: Lesson; onComplete: () => void; onRetry?: (info?: LessonCrashInfo) => void; retrying?: boolean; retryingLabel?: string; courseId: string | null; lessonNumber: number;
   nextLessonTitle?: string | null; nextLessonReady?: boolean; onPlayNext?: () => void;
 }) {
   const [showUpNext, setShowUpNext] = useState(false);
@@ -938,7 +944,7 @@ function VideoPlayer({
             A successful "Regenerate this lesson" replaces `code`, changing
             this key so the boundary mounts fresh instead of staying stuck
             on the previous crash. */}
-        <PlayerErrorBoundary key={lesson.code ?? "no-code"} onRetry={onRetry} retrying={retrying}>
+        <PlayerErrorBoundary key={lesson.code ?? "no-code"} onRetry={onRetry} retrying={retrying} retryingLabel={retryingLabel}>
           <DynamicPlayer
             key={`lesson-${lessonNumber}-full`}
             code={lesson.code}
@@ -946,6 +952,7 @@ function VideoPlayer({
             onEnded={handleEnded}
             onRetry={onRetry}
             retrying={retrying}
+            retryingLabel={retryingLabel}
             onFrameUpdate={handleFrameUpdate}
             // Passed through as DynamicPlayer's `overlay` prop (rendered
             // INSIDE its fullscreened container) instead of a sibling div
@@ -1477,10 +1484,17 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
       <div className="border-t border-slate-100 p-3">
         <button
           onClick={onFeedback}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-bold hover:bg-emerald-100 hover:border-emerald-300 transition-all"
+          className="relative w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-bold hover:bg-emerald-100 hover:border-emerald-300 transition-all"
         >
           <MessageSquare className="h-4 w-4" />
           Send feedback
+          {/* One-time reward callout — only for logged-in users (credits is
+              only populated once authenticated) who haven't claimed it yet. */}
+          {credits && !credits.feedbackCreditGranted && (
+            <span className="absolute -top-2 -right-2 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-900 text-[10px] font-extrabold shadow-sm">
+              <Gift className="h-2.5 w-2.5" /> +20
+            </span>
+          )}
         </button>
       </div>
       <SidebarUserMenu user={user} onLogout={onLogout} />
@@ -1568,6 +1582,11 @@ export default function AILearningPage() {
   const [historySidebarCollapsed, setHistorySidebarCollapsed] = useState(false);
   const [credits, setCredits] = useState<Credits | null>(null);
   const [retryingLesson, setRetryingLesson] = useState<number | null>(null);
+  // What the retry button says while retryingLesson is set — distinguishes
+  // "Fixing scene 4…" (a targeted, cheap patch) from "Regenerating…" (the
+  // full lesson) so the user knows which one is actually happening. See
+  // handleRetryLesson.
+  const [retryingLabel, setRetryingLabel] = useState("Regenerating…");
   const [unlockingCourse, setUnlockingCourse] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -1773,20 +1792,58 @@ export default function AILearningPage() {
     });
   }, [lessonStatuses, lessons]);
 
-  const handleRetryLesson = async (lessonIndex: number) => {
+  // Full-lesson regenerate — unchanged from before, extracted so
+  // handleRetryLesson can fall back to it when a scene-only fix isn't
+  // possible (no crashInfo at all, or the backend couldn't confidently
+  // isolate which scene broke — e.g. a lesson generated before scene
+  // boundaries were tracked). Errors propagate to the caller's own catch —
+  // this never alerts itself, so a scene-fix-then-fallback path never shows
+  // the user two error popups for one failure.
+  const handleFullRetryLesson = async (lessonIndex: number) => {
+    setRetryingLabel("Regenerating…");
+    await retryLesson(activeHistoryId!, lessonIndex);
+    setLessonStatuses((prev) => prev.map((s, i) => i === lessonIndex ? "generating" : s));
+    setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code: null, totalFrames: null } : l));
+    if (pollCancelRef.current) pollCancelRef.current();
+    pollCancelRef.current = pollCourse(activeHistoryId!, (course: CourseFromAPI) => {
+      setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
+      if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
+      if (course.questions?.length) setQuizQuestions(course.questions);
+    });
+  };
+
+  // crashInfo (from DynamicPlayer's onRetry — see LessonCrashInfo) means
+  // this came from an actual playback crash, not the "lesson failed to
+  // generate at all" banner — those always call this with no crashInfo and
+  // go straight to a full regenerate, since there's no existing code to
+  // patch a scene INTO in the first place.
+  //
+  // When crashInfo IS present, try the cheap, targeted fix first: patch just
+  // the scene that broke instead of paying for the whole lesson again. Only
+  // falls back to a full regenerate when the backend genuinely can't isolate
+  // a scene (fallbackToFullRetry) — never on a generic network/5xx error,
+  // where retrying the same targeted patch is the right move, not silently
+  // escalating to a full regenerate the user didn't ask for.
+  const handleRetryLesson = async (lessonIndex: number, crashInfo?: LessonCrashInfo) => {
     if (!activeHistoryId || retryingLesson !== null) return;
     analytics.lessonRegenerated({ lesson: lessonIndex + 1 });
     setRetryingLesson(lessonIndex);
     try {
-      await retryLesson(activeHistoryId, lessonIndex);
-      setLessonStatuses((prev) => prev.map((s, i) => i === lessonIndex ? "generating" : s));
-      setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code: null, totalFrames: null } : l));
-      if (pollCancelRef.current) pollCancelRef.current();
-      pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
-        if (course.questions?.length) setQuizQuestions(course.questions);
-      });
+      if (crashInfo) {
+        setRetryingLabel("Fixing the scene that broke…");
+        try {
+          const { code } = await retryScene(activeHistoryId, lessonIndex, crashInfo);
+          setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code } : l));
+          return;
+        } catch (err) {
+          if (err instanceof RetrySceneError && err.fallbackToFullRetry) {
+            console.warn("Scene-only fix unavailable, falling back to full lesson regenerate:", err.message);
+          } else {
+            throw err;
+          }
+        }
+      }
+      await handleFullRetryLesson(lessonIndex);
     } catch (err) {
       console.error("Failed to retry lesson:", err);
       alert("Failed to regenerate lesson. Please try again.");
@@ -2286,8 +2343,9 @@ export default function AILearningPage() {
                 <VideoPlayer
                   lesson={lessons[activeLesson]}
                   onComplete={() => markComplete(lessons[activeLesson].id)}
-                  onRetry={() => handleRetryLesson(activeLesson)}
+                  onRetry={(crashInfo) => handleRetryLesson(activeLesson, crashInfo)}
                   retrying={retryingLesson === activeLesson}
+                  retryingLabel={retryingLabel}
                   courseId={activeHistoryId}
                   lessonNumber={activeLesson + 1}
                   nextLessonTitle={lessons[activeLesson + 1]?.title}

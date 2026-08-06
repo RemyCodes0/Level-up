@@ -256,6 +256,38 @@ export async function retryLesson(courseId: string, lessonIndex: number): Promis
   if (!res.ok) throw new Error("Failed to retry lesson");
 }
 
+// ── Fix just the ONE scene that crashed, not the whole lesson ───────────────
+// Synchronous (unlike retryLesson's fire-and-forget-then-poll) — one scene is
+// a single small LLM call, fast enough to just await. Throws a RetrySceneError
+// with `fallbackToFullRetry: true` when the backend couldn't confidently
+// isolate which scene broke (e.g. an old lesson generated before scene
+// boundaries were tracked) — the caller should fall back to retryLesson.
+export class RetrySceneError extends Error {
+  fallbackToFullRetry: boolean;
+  constructor(message: string, fallbackToFullRetry: boolean) {
+    super(message);
+    this.fallbackToFullRetry = fallbackToFullRetry;
+  }
+}
+
+export async function retryScene(
+  courseId: string,
+  lessonIndex: number,
+  info: { crashFrame: number | null; errorMessage: string }
+): Promise<{ sceneNumber: number; code: string }> {
+  const res = await fetch(`${BASE_URL}/api/course/${courseId}/retry-scene/${lessonIndex}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(info),
+  });
+  handleUnauthorized(res);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new RetrySceneError(data.error || "Failed to patch scene", Boolean(data.fallbackToFullRetry));
+  }
+  return data;
+}
+
 // ── Unlock the rest of a free-trial course (costs 1 credit) ─────────────────
 // Throws an error with a "no_credits" message if the user doesn't have a
 // credit available — the caller should catch this and prompt them to buy one.

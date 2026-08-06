@@ -60,7 +60,7 @@ exports.createCheckout = async (req, res) => {
 // ──────────────────────────────────────────────────────────────────────────
 exports.getCredits = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("courseCredits freeTrialUsed").lean();
+    const user = await User.findById(req.user._id).select("courseCredits freeTrialUsed feedbackCreditGranted").lean();
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -69,6 +69,10 @@ exports.getCredits = async (req, res) => {
       courseCredits: user.courseCredits ?? 0,
       freeTrialUsed: !!user.freeTrialUsed,
       canGenerate: !user.freeTrialUsed || (user.courseCredits ?? 0) > 0,
+      // Lets the feedback modal show/hide its one-time "+20 credits" banner
+      // without a dedicated endpoint — this route is already polled by
+      // fetchCredits() on load and after feedback submission.
+      feedbackCreditGranted: !!user.feedbackCreditGranted,
     });
   } catch (err) {
     console.error("[credits] getCredits error:", err.message);

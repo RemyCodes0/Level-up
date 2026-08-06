@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { X, Star, Loader2, CheckCircle, MessageSquare, Coins } from "lucide-react";
+import { useEffect, useState } from "react";
+import { X, Star, Loader2, CheckCircle, MessageSquare, Coins, Gift } from "lucide-react";
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
@@ -21,6 +21,20 @@ export function FeedbackModal({ onClose, courseId, courseName, onSuccess }: Feed
   const [status, setStatus] = useState<"form" | "submitting" | "success" | "error">("form");
   const [errorMsg, setErrorMsg] = useState("");
   const [creditsAwarded, setCreditsAwarded] = useState(0);
+  // Whether this logged-in user has already claimed the one-time feedback
+  // credit bonus — drives the pre-submit banner below. Stays false (banner
+  // hidden) for logged-out visitors, since the reward only applies once a
+  // real account can hold the credits.
+  const [alreadyClaimed, setAlreadyClaimed] = useState(true);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    fetch(`${BASE_URL}/api/payment/credits`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (data) setAlreadyClaimed(!!data.feedbackCreditGranted); })
+      .catch(() => {}); // banner just stays hidden if this fails — not worth surfacing an error for
+  }, []);
 
   const handleSubmit = async () => {
     if (rating === 0 || !message.trim()) return;
@@ -44,6 +58,7 @@ export function FeedbackModal({ onClose, courseId, courseName, onSuccess }: Feed
       if (res.ok) {
         const awarded = data.creditsAwarded || 0;
         setCreditsAwarded(awarded);
+        if (awarded > 0) setAlreadyClaimed(true);
         setStatus("success");
         onSuccess?.(awarded);
       } else {
@@ -100,6 +115,17 @@ export function FeedbackModal({ onClose, courseId, courseName, onSuccess }: Feed
                 {courseName && <p className="text-xs text-slate-400">{courseName}</p>}
               </div>
             </div>
+
+            {/* One-time reward notice — only shown pre-submission, and only to
+                logged-in users who haven't already claimed it. */}
+            {!alreadyClaimed && (
+              <div className="flex items-center gap-2 mb-5 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-700">
+                <Gift className="h-4 w-4 flex-shrink-0" />
+                <span className="text-sm font-semibold">
+                  Get 20 credits for your first feedback submission!
+                </span>
+              </div>
+            )}
 
             {/* Star rating */}
             <div className="mb-5">

@@ -1,0 +1,26 @@
+diff --git a/node_modules/remotion/dist/cjs/use-media-playback.js b/node_modules/remotion/dist/cjs/use-media-playback.js
+index 9553f6e..786ba48 100644
+--- a/node_modules/remotion/dist/cjs/use-media-playback.js
++++ b/node_modules/remotion/dist/cjs/use-media-playback.js
+@@ -148,7 +148,7 @@ const useMediaPlayback = ({ mediaRef, src, mediaType, playbackRate: localPlaybac
+         var _c, _d;
+         const tagName = mediaType === 'audio' ? '<Html5Audio>' : '<Html5Video>';
+         if (!mediaRef.current) {
+-            throw new Error(`No ${mediaType} ref found`);
++            return;
+         }
+         if (!src) {
+             throw new Error(`No 'src' attribute was passed to the ${tagName} element.`);
+diff --git a/node_modules/remotion/dist/esm/index.mjs b/node_modules/remotion/dist/esm/index.mjs
+index 82e32db..cbdedd0 100644
+--- a/node_modules/remotion/dist/esm/index.mjs
++++ b/node_modules/remotion/dist/esm/index.mjs
+@@ -8139,7 +8139,7 @@ var useMediaPlayback = ({
+   useEffect12(() => {
+     const tagName = mediaType === "audio" ? "<Html5Audio>" : "<Html5Video>";
+     if (!mediaRef.current) {
+-      throw new Error(`No ${mediaType} ref found`);
++      return;
+     }
+     if (!src) {
+       throw new Error(`No 'src' attribute was passed to the ${tagName} element.`);

@@ -3,19 +3,35 @@ import type { PlayerRef } from "@remotion/player";
 import { Component as ReactComponent, useRef, useEffect, useState, useCallback } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import {
-  Loader2, RefreshCw, Play, Pause, Volume2, VolumeX,
+  Loader2, RefreshCw, Play, Pause,
   Maximize2, Minimize2, RotateCcw, SkipBack, SkipForward,
   Repeat,
 } from "lucide-react";
 import { useCompilation } from "./useCompilation";
 import { analytics } from "../lib/analytics";
 
+// What actually broke, passed to onRetry so the caller can ask the backend
+// to fix just the ONE scene responsible instead of regenerating the whole
+// lesson (see retryScene in CourseApi.ts). crashFrame is null for a compile
+// error — that happens before playback ever starts, so there's no frame
+// position to point at; the backend falls back to the error's own line
+// number in that case (see retrySceneHandler).
+export interface LessonCrashInfo {
+  crashFrame: number | null;
+  errorMessage: string;
+}
+
 interface DynamicPlayerProps {
   code: string;
   durationInFrames: number;
   onEnded?: () => void;
-  onRetry?: () => void;
+  onRetry?: (info?: LessonCrashInfo) => void;
   retrying?: boolean;
+  // Text shown on the retry button while `retrying` is true — lets the
+  // caller say "Fixing scene 4…" instead of the generic "Regenerating…"
+  // once it knows (from the crashInfo passed to onRetry) that it's
+  // attempting a scene-only fix rather than a full lesson regenerate.
+  retryingLabel?: string;
   // Fires when playback jumps backward by more than a couple seconds (a
   // deliberate re-watch, not the small backward drift that can happen at a
   // loop boundary) — the new frame position, for the caller to bucket into
@@ -64,7 +80,17 @@ function formatTime(frame: number, fps: number): string {
 // even reaches those — see PlayerErrorBoundary's own comment). Factored out
 // once so both paths show the identical message instead of two near-copies
 // drifting apart over time.
-function PlayerErrorFallback({ onRetry, retrying, phase = "preparing" }: { onRetry?: () => void; retrying?: boolean; phase?: "preparing" | "playing" }) {
+function PlayerErrorFallback({ onRetry, retrying, phase = "preparing", crashInfo, retryingLabel = "Regenerating…" }: {
+  onRetry?: (info?: LessonCrashInfo) => void;
+  retrying?: boolean;
+  phase?: "preparing" | "playing";
+  // Passed straight through to onRetry on click — see LessonCrashInfo. Not
+  // used for display here; the CALLER (which knows whether it's about to
+  // attempt a scene-only fix or a full regenerate) drives retryingLabel
+  // instead, so this component doesn't need to guess.
+  crashInfo?: LessonCrashInfo | null;
+  retryingLabel?: string;
+}) {
   return (
     <div
       style={{ aspectRatio: "16/9" }}
@@ -77,12 +103,12 @@ function PlayerErrorFallback({ onRetry, retrying, phase = "preparing" }: { onRet
       </p>
       {onRetry && (
         <button
-          onClick={onRetry}
+          onClick={() => onRetry(crashInfo ?? undefined)}
           disabled={retrying}
           className="mt-4 px-4 py-2 rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 hover:text-red-200 transition-all text-xs font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {retrying ? (
-            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Regenerating…</>
+            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {retryingLabel}</>
           ) : (
             <><RefreshCw className="h-3.5 w-3.5" /> Regenerate this lesson</>
           )}
@@ -128,8 +154,6 @@ function VideoControls({
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentFrame, setCurrentFrame] = useState(0);
-  const [volume, setVolume] = useState(1);
-  const [muted, setMuted] = useState(false);
   const [seeking, setSeeking] = useState(false);
   const [fullscreenSupported, setFullscreenSupported] = useState(false);
 
@@ -191,21 +215,6 @@ function VideoControls({
     playerRef.current?.seekTo(0);
     setCurrentFrame(0);
   }, [playerRef]);
-
-  const toggleMute = useCallback(() => {
-    const player = playerRef.current;
-    if (!player) return;
-    if (muted) { player.unmute(); setMuted(false); }
-    else { player.mute(); setMuted(true); }
-  }, [playerRef, muted]);
-
-  const handleVolumeChange = useCallback((v: number) => {
-    const player = playerRef.current;
-    if (!player) return;
-    player.setVolume(v);
-    setVolume(v);
-    if (v > 0 && muted) { player.unmute(); setMuted(false); }
-  }, [playerRef, muted]);
 
   const handleSeekInput = useCallback((frame: number) => {
     setSeeking(true);
@@ -272,23 +281,6 @@ function VideoControls({
 
         <div className="flex-1" />
 
-        {/* Volume */}
-        <div className="flex items-center gap-1.5 group">
-          <button onClick={toggleMute} className="p-1.5 text-white/70 hover:text-white transition-colors" aria-label={muted ? "Unmute" : "Mute"}>
-            {muted || volume === 0 ? <VolumeX className="h-3.5 w-3.5 sm:h-4 sm:w-4" /> : <Volume2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={muted ? 0 : volume}
-            onChange={(e) => handleVolumeChange(Number(e.target.value))}
-            className="w-14 sm:w-16 h-1 rounded-full cursor-pointer accent-blue-500 hidden sm:block"
-            aria-label="Volume"
-          />
-        </div>
-
         {/* Loop toggle */}
         <button
           onClick={() => setLoop(!loop)}
@@ -332,6 +324,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   onEnded,
   onRetry,
   retrying,
+  retryingLabel,
   onSeekBack,
   onFrameUpdate,
   overlay,
@@ -373,6 +366,37 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
       });
     }
   }, []);
+
+  // Remotion's <Player> only ever letterboxes to FIT the composition's fixed
+  // 1920x1080 (16:9) inside its box — there's no built-in "cover" mode, so
+  // any fullscreen display whose aspect ratio isn't exactly 16:9 (i.e. almost
+  // every real monitor) shows black bars. To fill the screen with no bars,
+  // this sizes the Player itself to the smallest box that's at least as big
+  // as the fullscreen viewport in both dimensions (like CSS
+  // `background-size: cover`), centers it, and relies on containerRef's own
+  // `overflow-hidden` to crop the overhang — same trick `object-fit: cover`
+  // does for a plain <video>. Only active in fullscreen; the normal inline
+  // player is already exactly 16:9 sized (via the aspectRatio style below),
+  // so there's nothing to cover there.
+  const [coverSize, setCoverSize] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    if (!isFullscreen) {
+      setCoverSize(null);
+      return;
+    }
+    const el = containerRef.current;
+    if (!el) return;
+    const recompute = () => {
+      const { width, height } = el.getBoundingClientRect();
+      if (!width || !height) return;
+      const scale = Math.max(width / 1920, height / 1080);
+      setCoverSize({ width: 1920 * scale, height: 1080 * scale });
+    };
+    recompute();
+    const observer = new ResizeObserver(recompute);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [isFullscreen]);
 
   // Auto-hide logic: any tap/move shows controls and resets a 3s timer.
   // While paused, controls always stay visible (no point hiding them on a
@@ -505,12 +529,20 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   // those; storing them here routes BOTH failure modes into the same error
   // screen below — the one that already has the working Regenerate button.
   const [renderError, setRenderError] = useState(false);
+  // Captured alongside renderError — the frame the Player was on when the
+  // composition threw, plus the actual error message. Sent up through
+  // onRetry so the caller can ask the backend to patch just this ONE scene
+  // (see LessonCrashInfo / retryScene in CourseApi.ts) instead of
+  // regenerating the whole lesson. Not shown in the UI — see the existing
+  // console-only convention on error details in this file.
+  const [crashInfo, setCrashInfo] = useState<LessonCrashInfo | null>(null);
 
   // A successful retry replaces `code` with freshly generated code — clear the
   // crash state so the new lesson gets a clean mount instead of being stuck
   // behind the previous code's error screen.
   useEffect(() => {
     setRenderError(false);
+    setCrashInfo(null);
   }, [code]);
 
   // The Player emits an "error" EVENT on its ref when the composition throws
@@ -528,7 +560,9 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         "[DynamicPlayer] Generated lesson code crashed at render time:",
         e?.detail?.error ?? e
       );
-      analytics.lessonRenderFailed({ message: e?.detail?.error?.message });
+      const message = e?.detail?.error?.message ?? "Unknown render error";
+      analytics.lessonRenderFailed({ message });
+      setCrashInfo({ crashFrame: player.getCurrentFrame?.() ?? null, errorMessage: message });
       setRenderError(true);
     };
     player.addEventListener("error", onPlayerError);
@@ -543,7 +577,23 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   }, [error]);
 
   if (error || renderError) {
-    return <PlayerErrorFallback onRetry={onRetry} retrying={retrying} phase={renderError ? "playing" : "preparing"} />;
+    // A compile error (from useCompilation, above) happens before playback
+    // ever starts — there's no frame to point at, only the error text itself
+    // (the backend falls back to locating the scene by the error's own line
+    // number in that case). A renderError already has its own crashInfo
+    // (frame included) captured above.
+    const effectiveCrashInfo: LessonCrashInfo | null = error
+      ? { crashFrame: null, errorMessage: error }
+      : crashInfo;
+    return (
+      <PlayerErrorFallback
+        onRetry={onRetry}
+        retrying={retrying}
+        phase={renderError ? "playing" : "preparing"}
+        crashInfo={effectiveCrashInfo}
+        retryingLabel={retryingLabel}
+      />
+    );
   }
 
   if (!Component) {
@@ -567,6 +617,20 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
       onTouchStart={showControls}
       onClick={showControls}
     >
+      <div
+        style={
+          coverSize
+            ? {
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                width: coverSize.width,
+                height: coverSize.height,
+                transform: "translate(-50%, -50%)",
+              }
+            : { width: "100%", height: "100%" }
+        }
+      >
       <Player
         ref={playerRef}
         component={Component}
@@ -580,6 +644,18 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         controls={false}
         clickToPlay
         acknowledgeRemotionLicense
+        // Remotion pre-mounts a pool of real <audio> tags (silently primed on
+        // first interaction, to dodge iOS Safari's autoplay policy) and hands
+        // one to each <Audio> the composition renders — default pool size is
+        // 5. Lessons with more concurrently-mounted <Audio> elements than
+        // that (narration + background music + effects across overlapping
+        // scenes) leave the extras without a real ref. Normal playback rarely
+        // touches that ref, but mute/unmute re-syncs every mounted audio
+        // element's ref at once, so the ones over the pool limit throw
+        // "No audio ref found" right there — this is exactly that: bumped
+        // well past what a lesson should ever need concurrently.
+        // https://www.remotion.dev/docs/player/player#numberofsharedaudiotags
+        numberOfSharedAudioTags={20}
         // ── Render-time crash containment ──────────────────────────────────
         // The Player's built-in error boundary renders this the MOMENT the
         // composition throws — so the user immediately sees the message and
@@ -590,7 +666,17 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         // Inline styles + generous font sizes on purpose: this renders inside
         // the Player surface, which may be scaled, so sizes must stay legible
         // either way.
-        errorFallback={() => (
+        errorFallback={({ error: caughtError }) => {
+          // This renders for one frame BEFORE the "error" event listener
+          // above has flushed renderError/crashInfo into state — {error} is
+          // handed to us directly by Remotion's own ErrorBoundary (see
+          // error-boundary.js), so build the same LessonCrashInfo right here
+          // rather than waiting a tick for the outer state to catch up.
+          const inlineCrashInfo: LessonCrashInfo = {
+            crashFrame: playerRef.current?.getCurrentFrame?.() ?? null,
+            errorMessage: caughtError?.message ?? "Unknown render error",
+          };
+          return (
           <div
             style={{
               width: "100%", height: "100%",
@@ -609,7 +695,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
             </div>
             {onRetry ? (
               <button
-                onClick={(e) => { e.stopPropagation(); if (!retrying) onRetry(); }}
+                onClick={(e) => { e.stopPropagation(); if (!retrying) onRetry(inlineCrashInfo); }}
                 disabled={retrying}
                 style={{
                   marginTop: 10, padding: "12px 24px", borderRadius: 12,
@@ -619,7 +705,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
                   opacity: retrying ? 0.5 : 1,
                 }}
               >
-                {retrying ? "Regenerating…" : "Regenerate this lesson"}
+                {retrying ? (retryingLabel ?? "Regenerating…") : "Regenerate this lesson"}
               </button>
             ) : (
               <div style={{ fontSize: 16, color: "rgba(239,68,68,0.5)", marginTop: 6 }}>
@@ -627,8 +713,10 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
               </div>
             )}
           </div>
-        )}
+          );
+        }}
       />
+      </div>
       {/* Subtle watermark — always visible, non-intrusive, bottom-right corner.
           Stays above the video but below the control bar overlay so it's
           visible while playing but doesn't interfere with controls. */}
@@ -666,12 +754,14 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
 };
 
 interface PlayerErrorBoundaryProps {
-  onRetry?: () => void;
+  onRetry?: (info?: LessonCrashInfo) => void;
   retrying?: boolean;
+  retryingLabel?: string;
   children: ReactNode;
 }
 interface PlayerErrorBoundaryState {
   hasError: boolean;
+  errorMessage: string | null;
 }
 
 // Catches crashes that happen BEFORE DynamicPlayer even reaches Remotion's
@@ -704,11 +794,11 @@ interface PlayerErrorBoundaryState {
 export class PlayerErrorBoundary extends ReactComponent<PlayerErrorBoundaryProps, PlayerErrorBoundaryState> {
   constructor(props: PlayerErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, errorMessage: null };
   }
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, errorMessage: error?.message ?? "Unknown error" };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -719,7 +809,19 @@ export class PlayerErrorBoundary extends ReactComponent<PlayerErrorBoundaryProps
 
   render() {
     if (this.state.hasError) {
-      return <PlayerErrorFallback onRetry={this.props.onRetry} retrying={this.props.retrying} phase="preparing" />;
+      // No frame — this crash happens before <Player> ever mounts (see the
+      // comment above), so there was never any playback position to point
+      // at. The backend falls back to the error's own line number instead.
+      const crashInfo: LessonCrashInfo = { crashFrame: null, errorMessage: this.state.errorMessage ?? "Unknown error" };
+      return (
+        <PlayerErrorFallback
+          onRetry={this.props.onRetry}
+          retrying={this.props.retrying}
+          phase="preparing"
+          crashInfo={crashInfo}
+          retryingLabel={this.props.retryingLabel}
+        />
+      );
     }
     return this.props.children;
   }
