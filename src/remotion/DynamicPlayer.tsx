@@ -460,6 +460,56 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [Component]);
 
+  // Keeps the device screen from auto-dimming/locking while a lesson is
+  // actually playing — narration + animation with no taps/scrolls for
+  // minutes at a time otherwise looks idle to the OS, exactly like leaving
+  // the phone untouched. Works identically for inline and fullscreen
+  // playback — the Wake Lock API has no concept of fullscreen, only page
+  // visibility, so this one effect (keyed on the same isPlaying already
+  // tracked above) covers both presentations.
+  useEffect(() => {
+    if (!isPlaying) return;
+    if (!("wakeLock" in navigator)) return; // unsupported browser — silently no-ops, not an error
+    let released = false;
+    let sentinel: WakeLockSentinel | null = null;
+
+    const acquire = async () => {
+      try {
+        const s = await navigator.wakeLock.request("screen");
+        // isPlaying can flip back to false (pause, or this effect re-running
+        // for the visibilitychange re-acquire path) WHILE this request is
+        // still in flight — the request() promise doesn't resolve
+        // instantly. If cleanup already ran by the time it does, `sentinel`
+        // below would never get read again, silently leaking a lock held
+        // for a video that's no longer playing. Release it right away
+        // instead of assigning it in that case.
+        if (released) { s.release().catch(() => {}); return; }
+        sentinel = s;
+      } catch (err) {
+        // Fails if the tab is hidden at the exact moment of the call, or
+        // under some battery-saver states — non-fatal, the screen can just
+        // sleep normally in that case.
+        console.warn("[DynamicPlayer] Wake lock request failed:", err);
+      }
+    };
+    acquire();
+
+    // The OS/browser automatically RELEASES any wake lock the instant the
+    // tab is hidden (switching apps, manually locking the phone) — there's
+    // no way to prevent that, only to re-acquire once the tab is visible
+    // again while still playing. This is the standard pattern for this API.
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && !released) acquire();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      released = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      sentinel?.release().catch(() => {});
+    };
+  }, [isPlaying]);
+
   // Prefetches every scene's audio file as soon as the lesson loads —
   // before the user even presses play. Without this, each scene's <Audio>
   // tag only starts fetching its file right when that scene's Sequence

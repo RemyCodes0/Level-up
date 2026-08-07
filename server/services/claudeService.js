@@ -1423,17 +1423,22 @@ function logUsage(label, usage) {
 // retry loop rerolls immediately instead of waiting out the ceiling.
 const STREAM_IDLE_TIMEOUT_MS = Number(process.env.CODEGEN_STREAM_IDLE_TIMEOUT_MS) || 90 * 1000;
 
-async function streamCodeCompletion({ limiter, provider, systemPrompt, userContent, maxOutputTokens }) {
+// sessionId (optional): OpenRouter's provider-sticky-routing key — see
+// buildLessonSessionId below for what it's built from and why. Only
+// meaningful for the OpenRouter-routed path (streamOpenAiCompatible);
+// Anthropic-native calls (streamAnthropicNative) have no such concept and
+// silently ignore it.
+async function streamCodeCompletion({ limiter, provider, systemPrompt, userContent, maxOutputTokens, sessionId = null }) {
   return limiter(() =>
     provider.isAnthropicNative
       ? streamAnthropicNative({ provider, systemPrompt, userContent, maxOutputTokens })
-      : streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens })
+      : streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens, sessionId })
   );
 }
 
 // GLM, DeepSeek, and Fable — every OpenRouter-routed provider — all speak
 // the OpenAI chat-completions wire shape — this is that path.
-async function streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens }) {
+async function streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens, sessionId = null }) {
   const controller = new AbortController();
   const stream = await provider.client.chat.completions.create(
     {
@@ -1445,6 +1450,15 @@ async function streamOpenAiCompatible({ provider, systemPrompt, userContent, max
       // `usage` chunk at all, so cache hit/miss and completion tokens would
       // be invisible to this codebase entirely.
       stream_options: { include_usage: true },
+      // OpenRouter's provider-sticky-routing key (see buildLessonSessionId)
+      // — routes every call sharing this id to the same backend instance,
+      // which is what lets a cache written by an earlier call in this
+      // lesson (the header, an earlier chunk, a prior retry attempt) actually
+      // be reused instead of each call landing on a random replica with
+      // nothing to hit. A top-level request field per OpenRouter's own
+      // prompt-caching docs — harmless to omit for a provider that ignores
+      // it, so this is unconditional, not gated per-provider.
+      ...(sessionId ? { session_id: sessionId } : {}),
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
@@ -1560,6 +1574,21 @@ function sceneComponentName(index) {
   return `Scene${index + 1}`;
 }
 
+// OpenRouter's provider-sticky-routing key (see the comment on the
+// session_id field in streamOpenAiCompatible) — every call that belongs to
+// generating ONE lesson (its header, every scene chunk, and any retry of
+// either) shares this same id, so they land on the same backend instance
+// and can actually reuse each other's cached prefix. Scoped per LESSON, not
+// per course: each lesson gets its own freshly-generated header, so a
+// lesson's shared prefix (header code, other-scenes context) has nothing in
+// common with a sibling lesson's — grouping them under the same session_id
+// would just mean more traffic competing for the same cache slot with no
+// actual overlap to reuse.
+function buildLessonSessionId(courseId, lessonNumber) {
+  if (!courseId || !lessonNumber) return null;
+  return `lesson-${courseId}-${lessonNumber}`;
+}
+
 // Reasoning is OFF (LESSON_CODE_PROVIDER_NO_REASONING below), so these
 // budgets only need to cover actual code, not hidden reasoning tokens.
 const HEADER_MAX_OUTPUT_TOKENS = Number(process.env.HEADER_MAX_OUTPUT_TOKENS) || 32000;
@@ -1575,6 +1604,7 @@ const CHUNK_MAX_OUTPUT_TOKENS = Number(process.env.CHUNK_MAX_OUTPUT_TOKENS) || 4
 async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = null, courseId = null } = {}) {
   const label = `header L${lesson.lessonNumber}`;
   const start = Date.now();
+  const sessionId = buildLessonSessionId(courseId, lesson.lessonNumber);
 
   return withRetries(label, maxAttempts, async ({ attempt, feedback }) => {
     console.log(`  [${label}] Attempt ${attempt}/${maxAttempts}...`);
@@ -1585,6 +1615,7 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = 
       systemPrompt: LESSON_HEADER_RULES,
       userContent: buildHeaderUserContent(lesson, scenes) + feedbackSuffix(feedback),
       maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
+      sessionId,
     });
     logUsage(label, usage);
     if (usage) {
@@ -1726,6 +1757,7 @@ async function patchSceneInChunk(lesson, targetSceneName, targetScene, brokenChu
     systemPrompt: LESSON_CHUNK_RULES,
     userContent: buildPatchUserContent(lesson, componentName, targetSceneName, targetScene, brokenChunkCode, errorMessage, compactHeaderCode, otherScenesSpec),
     maxOutputTokens: CHUNK_MAX_OUTPUT_TOKENS,
+    sessionId: buildLessonSessionId(courseId, lesson.lessonNumber),
   });
   logUsage(label, usage);
   if (usage) {
@@ -2034,6 +2066,15 @@ async function patchSceneFromRuntimeError(lesson, componentName, fullCode, scene
 
   const label = `runtime-patch ${targetSceneName} L${lesson.lessonNumber}`;
   const start = Date.now();
+  // Distinct from the original generation's session_id (a "-patch" suffix)
+  // — this is a real user hitting a crash, potentially long after the
+  // lesson originally generated, so there's no live cache from that first
+  // pass left to reuse anyway. What DOES help: this function's OWN retry
+  // loop below resends the identical header/scene-code context on attempt
+  // 2 — sharing one session_id across those attempts is what lets that
+  // repeat be cached.
+  const baseSessionId = buildLessonSessionId(courseId, lesson.lessonNumber);
+  const sessionId = baseSessionId ? `${baseSessionId}-patch` : null;
 
   let lastErr = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -2047,6 +2088,7 @@ async function patchSceneFromRuntimeError(lesson, componentName, fullCode, scene
           attempt > 1 ? lastErr?.message : null
         ),
         maxOutputTokens: CHUNK_MAX_OUTPUT_TOKENS,
+        sessionId,
       });
       logUsage(label, usage);
       if (usage) {
@@ -2129,6 +2171,12 @@ async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, erro
   const currentHeaderCode = fullCode.split("\n").slice(located.startLine - 1, located.endLine).join("\n");
   const label = `runtime-patch header L${lesson.lessonNumber}`;
   const start = Date.now();
+  // See the identical comment on patchSceneFromRuntimeError's sessionId —
+  // same "-patch" suffix convention, same reason (shares a session_id
+  // across THIS function's own retry attempts, not with the original
+  // generation).
+  const baseSessionId = buildLessonSessionId(courseId, lesson.lessonNumber);
+  const sessionId = baseSessionId ? `${baseSessionId}-patch` : null;
 
   let lastErr = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -2142,6 +2190,7 @@ async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, erro
           attempt > 1 ? lastErr?.message : null
         ),
         maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
+        sessionId,
       });
       logUsage(label, usage);
       if (usage) {
@@ -2193,6 +2242,7 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
   const label = `chunk ${chunkLabel} L${lesson.lessonNumber}`;
   const start = Date.now();
   const expectedNames = chunkScenes.map((_, i) => sceneComponentName(chunkStartIndex + i));
+  const sessionId = buildLessonSessionId(courseId, lesson.lessonNumber);
 
   // compactHeaderForPrompt strips shared-component BODIES the same way it
   // already does for the split-pipeline's header — a chunk never needs to
@@ -2207,6 +2257,7 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       systemPrompt: LESSON_CHUNK_RULES,
       userContent: buildChunkUserContent(lesson, componentName, chunkScenes, chunkStartIndex, totalScenes, compactHeader, allScenes) + feedbackSuffix(feedback),
       maxOutputTokens: CHUNK_MAX_OUTPUT_TOKENS,
+      sessionId,
     });
     logUsage(label, usage);
     if (usage) {
