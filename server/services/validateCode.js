@@ -1414,4 +1414,14 @@ module.exports = {
   validateChunkFragment,
   getHeaderExposedNames,
   compactHeaderForPrompt,
+  // Exposed so globalComponentLibrary.js's PREVIEW_HEADER_CONTRACT can
+  // include a real import line — validateHeaderFragment's own undefined-
+  // reference check only recognizes a hook/component as "in scope" if it's
+  // actually imported in the text being validated (a REAL header always
+  // has this; a bare CLAMP/SAFE/ZONES-only stub does not), so without this
+  // every single component that calls useCurrentFrame/interpolate/etc
+  // (virtually all of them) would fail validation for a reason that has
+  // nothing to do with the component's own correctness.
+  CANONICAL_REMOTION_EXPORTS,
+  CANONICAL_REACT_EXPORTS,
 };

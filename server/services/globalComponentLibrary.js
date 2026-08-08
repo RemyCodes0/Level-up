@@ -31,6 +31,11 @@
 //      regex pass over the final code and bumps usageCount for every active
 //      component actually called — not just offered.
 const LibraryComponent = require("../models/LibraryComponent");
+// Direct leaf-module require (validateCode.js only depends on @babel/*,
+// never on claudeService.js or this file) — NOT via claudeService.js, which
+// itself requires this file, so requiring claudeService.js here would be a
+// circular dependency.
+const { validateHeaderFragment, CANONICAL_REMOTION_EXPORTS, CANONICAL_REACT_EXPORTS } = require("./validateCode");
 
 // ── Marker parsing ──────────────────────────────────────────────────────────
 // Deliberately TEXT-based, not AST-based — same reasoning as every other
@@ -41,17 +46,47 @@ const LibraryComponent = require("../models/LibraryComponent");
 const REUSABLE_MARKER_RE = /\/\/\s*@reusable:\s*(\w+)\s*(?:—|-)\s*(.+?)\s*\r?\n\s*\/\/\s*@example:\s*(.+?)\s*\r?\n/g;
 
 // Finds the declaration named `name` starting at/after `searchFrom` in
-// `code`, then walks brace depth from its first `{` to the matching `}` —
+// `code`, then walks brace depth from its BODY's `{` to the matching `}` —
 // robust to whatever's around it (other declarations before/after), and
-// works identically for `function Name(...) {...}` and
-// `const Name = (...) => {...}` shapes, since both start their body at the
-// first `{`.
+// works for both `function Name(...) {...}` and `const Name = (...) => {...}`
+// shapes.
+//
+// FIXED (was the root cause of every real "@reusable" component saved via
+// this path coming out truncated/broken — confirmed against two real
+// candidates, Enzyme/NucleotideBlock, extracted from a real DNA-replication
+// lesson and unusable in the admin preview): naively taking the FIRST "{"
+// after the declaration grabs a DESTRUCTURED PARAMETER's own "{" instead of
+// the function body's, for the extremely common (essentially universal —
+// every hand-written component in this codebase does this) shape
+// `function Name({ cx, cy, radius }) { ... }` / `const Name = ({ cx, cy }) =>
+// { ... }` — the brace-counter then stops as soon as the destructuring's OWN
+// "}" closes, returning `const Name = ({ cx, cy, radius }` with everything
+// from `) => { ... }` onward silently cut off. Fix: if a "(" appears before
+// the first "{" (the parameter list), walk ITS balanced parens to the
+// matching ")" first, so the brace search starts AFTER the parameter list
+// and finds the body's own "{" — not a parameter's.
 function extractDeclaration(code, name, searchFrom) {
   const declRe = new RegExp(`(?:function\\s+${name}\\s*\\(|const\\s+${name}\\s*=)`);
   const rel = code.slice(searchFrom).match(declRe);
   if (!rel) return null;
   const declStart = searchFrom + rel.index;
-  const braceStart = code.indexOf("{", declStart);
+
+  const firstBrace = code.indexOf("{", declStart);
+  const firstParen = code.indexOf("(", declStart);
+
+  let bodySearchFrom = declStart;
+  if (firstParen !== -1 && (firstBrace === -1 || firstParen < firstBrace)) {
+    let parenDepth = 0;
+    for (let i = firstParen; i < code.length; i++) {
+      if (code[i] === "(") parenDepth++;
+      else if (code[i] === ")") {
+        parenDepth--;
+        if (parenDepth === 0) { bodySearchFrom = i + 1; break; }
+      }
+    }
+  }
+
+  const braceStart = code.indexOf("{", bodySearchFrom);
   if (braceStart === -1) return null;
 
   let depth = 0;
@@ -89,6 +124,29 @@ function extractReusableCandidates(headerCode) {
   return results;
 }
 
+// Compile-checks one component's code in isolation, the same way an admin's
+// preview eventually will (see buildPreviewCode below) — PREVIEW_HEADER_
+// CONTRACT supplies the CLAMP/SAFE/ZONES/clampPos/SVG_FRAME/PALETTE names
+// every component is contractually allowed to assume exist, so this can
+// validate ONE declaration on its own without the rest of its original
+// lesson's header. Added after a real, confirmed incident: extractDeclaration
+// had a brace-matching bug (now fixed) that silently truncated every
+// candidate extracted from a destructured-props declaration — nothing caught
+// it before this, so two broken candidates (Enzyme, NucleotideBlock) reached
+// the admin page and only failed once a reviewer actually tried to preview
+// them. This is the gate that should have existed from the start: a
+// candidate that can't even compile in isolation must never be saved as
+// something a human is asked to review, let alone something a future lesson
+// could be offered.
+function isValidComponentCode(code) {
+  try {
+    validateHeaderFragment(`${PREVIEW_HEADER_CONTRACT}\n${code}`, {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ── Persistence ──────────────────────────────────────────────────────────
 // Never throws into the caller — this is always a side effect riding along
 // on a real lesson's header generation, same "a side-effect failure must
@@ -97,6 +155,11 @@ function extractReusableCandidates(headerCode) {
 async function saveCandidates(candidates, { courseId = null, lessonNumber = null } = {}) {
   for (const c of candidates) {
     try {
+      if (!isValidComponentCode(c.code)) {
+        console.warn(`[globalComponentLibrary] Skipping candidate "${c.name}" — its extracted code does not compile on its own (see isValidComponentCode).`);
+        continue;
+      }
+
       // Name collision with an existing entry (any status) — skip rather
       // than overwrite. A duplicate proposal for a name that already exists
       // is far more likely the model reusing a good name it saw in the
@@ -191,6 +254,8 @@ async function trackUsage(finalCode, activeNames) {
 // a component is contractually allowed to assume exists (see
 // lessonComponentLibrary.js's own "Contract" comment).
 const PREVIEW_HEADER_CONTRACT = `
+import { ${CANONICAL_REMOTION_EXPORTS.join(", ")} } from "remotion";
+import { ${CANONICAL_REACT_EXPORTS.join(", ")} } from "react";
 const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
 const FRAME = { w: 1920, h: 1080 };
 const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
@@ -201,7 +266,20 @@ const ZONES = {
   stage:   { x: 120, y: 270, w: 1680, h: 580, cx: 960, cy: 560 },
   caption: { x: 120, y: 870, w: 1680, h: 90,  cx: 960 },
 };
-const PALETTE = { bg: "#12131c", accent: "#5ec8f2", text: "#f5f7fa", support: "#f2b95e", support2: "#8f6bd9" };
+// bg/accent/text are the only THREE keys any component is contractually
+// guaranteed (see lessonComponentLibrary.js's own "Contract" comment) — the
+// rest below are generous extras purely so a REAL component that happens to
+// reference a common extra semantic color (its own lesson's PALETTE.warn/
+// .hero/.deep/etc, which passes static validation fine since PALETTE itself
+// exists — undefined member access isn't a reference error) still renders
+// with a real color in this standalone ADMIN PREVIEW instead of a missing/
+// black fallback, rather than actually being part of what's promised
+// elsewhere in the codebase.
+const PALETTE = {
+  bg: "#12131c", accent: "#5ec8f2", text: "#f5f7fa",
+  support: "#f2b95e", support2: "#8f6bd9",
+  hero: "#5ec8f2", warn: "#f2b95e", deep: "#0a0b12", muted: "#8a93a6", glow: "#5ec8f2",
+};
 `;
 
 const PREVIEW_DURATION_FRAMES = 180; // 6s at 30fps — long enough to see a full motion cycle, short enough to loop fast
