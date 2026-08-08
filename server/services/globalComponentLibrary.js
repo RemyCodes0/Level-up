@@ -291,7 +291,10 @@ async function saveCandidates(candidates, { courseId = null, lessonNumber = null
       // same identity; overwriting risks silently replacing an approved,
       // trusted component with an unreviewed one.
       const exists = await LibraryComponent.findOne({ name: c.name }).select("_id").lean();
-      if (exists) continue;
+      if (exists) {
+        console.log(`[globalComponentLibrary] Skipping candidate "${c.name}" — a component with this name already exists.`);
+        continue;
+      }
       await LibraryComponent.create({
         name: c.name,
         description: c.description,
@@ -302,6 +305,11 @@ async function saveCandidates(candidates, { courseId = null, lessonNumber = null
         sourceCourseId: courseId,
         sourceLessonNumber: lessonNumber,
       });
+      // Rejections were already logged above (console.warn) — without a
+      // matching success log, the console only ever shows the negative
+      // case, making a genuinely healthy save rate (often 30-50%) look
+      // like a total failure. This is that missing other half.
+      console.log(`[globalComponentLibrary] Saved candidate "${c.name}" for review.`);
     } catch (err) {
       console.warn(`[globalComponentLibrary] Failed to save candidate "${c.name}" (non-fatal): ${err.message}`);
     }
