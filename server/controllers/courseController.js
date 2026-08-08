@@ -6,6 +6,7 @@ const {
   generateCourseQuiz,
   generateLessonCode,
   generateLessonHeader,
+  generateCourseComponents,
   generateNextCourseSuggestions,
   patchSceneFromRuntimeError,
   patchHeaderFromRuntimeError,
@@ -526,6 +527,19 @@ async function processCourse(
         totalFrames: null,
       })),
     });
+
+    // Course-level component pre-generation — runs ONCE, before any lesson
+    // starts building below. buildLessonsConcurrently fires every lesson's
+    // full pipeline in PARALLEL, so this is the only point where something
+    // can be guaranteed visible to every lesson in this course from the
+    // start (see generateCourseComponents's own comment in claudeService.js
+    // for why this can't be done per-lesson instead). Awaited, not fire-
+    // and-forget: the whole point is for lessons to see these from their
+    // very first header-generation call, not sometime after they've already
+    // started. Non-fatal internally (see its own try/catch) — this never
+    // throws, so no try/catch needed here.
+    console.log(`[${courseId}] Course-level component planning...`);
+    await generateCourseComponents(topic, lessons, { userId, courseId });
 
     // Build all of this course's lessons one at a time, regardless of trial
     // status — how many that is now depends on the selected tier (or the

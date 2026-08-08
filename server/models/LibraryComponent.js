@@ -50,9 +50,15 @@ const libraryComponentSchema = new mongoose.Schema(
     // per lesson — see trackUsage) — not once per lesson it was merely
     // offered to, so this reflects real reuse, not just availability.
     usageCount: { type: Number, default: 0 },
-    // Where it came from — purely informational (shown on the admin page),
-    // never used to gate anything. sourceCourseId/sourceLessonNumber are
-    // null for the hand-seeded starter set (see scripts/seedLibraryComponents.js).
+    // Where it came from. sourceCourseId is NOT purely informational for a
+    // "candidate" — getActiveCatalog/getActiveNames/getActiveLibrarySource
+    // (globalComponentLibrary.js) treat a candidate tagged with the CURRENT
+    // course as usable immediately by every lesson in THAT course, before
+    // any admin approval — only a DIFFERENT course still requires the
+    // approval gate. sourceLessonNumber is null for both the hand-seeded
+    // starter set (scripts/seedLibraryComponents.js) AND course-level
+    // candidates proposed by generateCourseComponents (claudeService.js) —
+    // the latter belong to the whole course, not one specific lesson.
     sourceCourseId: { type: mongoose.Schema.Types.ObjectId, ref: "Course", default: null },
     sourceLessonNumber: { type: Number, default: null },
   },

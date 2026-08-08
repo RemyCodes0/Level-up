@@ -11,6 +11,7 @@ const {
   getActiveNames,
   getActiveLibrarySource,
   trackUsage: trackLibraryUsage,
+  PREVIEW_HEADER_CONTRACT,
 } = require("./globalComponentLibrary");
 const { reviewGeneratedCode } = require("./codeCriticService");
 const { createLimiter } = require("../utils/concurrencyLimiter");
@@ -1664,6 +1665,137 @@ const HEADER_MAX_OUTPUT_TOKENS = Number(process.env.HEADER_MAX_OUTPUT_TOKENS) ||
 const LESSON_CHUNK_SCENES = Number(process.env.LESSON_CHUNK_SCENES) || 3;
 const CHUNK_MAX_OUTPUT_TOKENS = Number(process.env.CHUNK_MAX_OUTPUT_TOKENS) || 48000;
 
+// ── Course-level component pre-generation ───────────────────────────────────
+// Runs ONCE per course, before any lesson starts building (see
+// buildLessonsConcurrently in courseController.js — every lesson builds in
+// PARALLEL, so this is the only point where something can be guaranteed
+// visible to ALL of a course's lessons from the start). This is what makes
+// cross-LESSON reuse within one course actually work: the ad-hoc @reusable
+// marking during header/chunk generation (see LESSON_HEADER_RULES/
+// LESSON_CHUNK_RULES) only discovers a candidate AFTER some lesson already
+// built it — too late for that same course's OTHER lessons, which are
+// already generating concurrently by then. This step instead looks at the
+// WHOLE course up front (topic + every lesson's title/description, already
+// known from generateCoursePlan, no scene-plan detail needed) and proposes
+// anything a course on this topic will likely need across multiple lessons.
+//
+// Saved the same way as any other candidate — status "candidate", tagged
+// with this sourceCourseId — but getActiveCatalog/getActiveNames/
+// getActiveLibrarySource now treat a candidate tagged with the CURRENT
+// course as usable immediately (see their own comment in
+// globalComponentLibrary.js): free reuse within this course, still gated
+// behind admin approval before any OTHER course can see it.
+const COURSE_COMPONENTS_MAX_OUTPUT_TOKENS = Number(process.env.COURSE_COMPONENTS_MAX_OUTPUT_TOKENS) || 16000;
+
+const COURSE_COMPONENTS_RULES = `
+⚠️ OUTPUT FORMAT: Respond with ONLY raw TypeScript/TSX code (zero or more component declarations, back to back). No prose, no explanation, no markdown fences. If nothing is needed (see below), respond with exactly this one line and nothing else: // NONE NEEDED
+
+You are planning the SHARED VISUAL COMPONENTS for an entire course, before any of its lessons are written. You will be shown the course topic and every lesson's title + description. Your ONLY job: decide whether this course would benefit from any NEW reusable visual component — something multiple DIFFERENT lessons in this course will each need to draw (e.g. a DNA strand for a genetics course, an orbiting body for an astronomy course, a wave for a physics course) — and if so, write it.
+
+RULES:
+1. Check the EXISTING LIBRARY CATALOG below FIRST. If something already there covers the need, do NOT redeclare it — that's what lessons will call directly, no action needed from you.
+2. Only propose something a HUMAN REVIEWER would agree is genuinely generic and reusable beyond just this one course — not tied to this course's specific subject facts, numbers, or labels. A "DNA double helix" is reusable (any biology course on genetics could use it); "the specific 12-base-pair sequence from lesson 3" is not.
+3. Only propose something you're confident MULTIPLE lessons in THIS course will each want — if only one lesson would ever use it, leave it for that lesson to build normally as a scene-local helper instead (do not propose it here).
+4. Propose at most 2-3 components. Most courses genuinely need zero or one — do not force it.
+5. Each component MUST be self-contained: call its OWN useCurrentFrame() (never assume any outer frame variable exists), and depend on nothing except its own props/params and these already-guaranteed names: PALETTE.bg/.accent/.text, CLAMP, SAFE, ZONES, clampPos, SVG_FRAME. Do NOT declare CLAMP/SAFE/ZONES/clampPos/SVG_FRAME/PALETTE yourself — they already exist wherever this component ends up being used.
+6. Wrap any SVG primitives in their own <svg style={SVG_FRAME}>.
+7. For EACH component, write exactly these two comment lines immediately above its declaration, then the declaration itself (function ComponentName(...) {...} or const ComponentName = (...) => {...}):
+     // @reusable: ComponentName — one-line description of what it does and when to use it
+     // @example: <ComponentName someProp={123} otherProp={PALETTE.accent} .../>
+   The @example line must be valid, working JSX using only props that component actually accepts — it's used verbatim to preview the component later.
+
+Your entire response is code (or the exact "// NONE NEEDED" line) — no text or fences around it.
+`;
+
+function buildCourseComponentsUserContent(topic, lessons, catalog) {
+  const lessonTable = lessons
+    .map((l, i) => `${i + 1}. ${l.title}${l.description ? " — " + l.description : ""}`)
+    .join("\n");
+  return `COURSE TOPIC: ${topic}
+
+LESSONS IN THIS COURSE:
+${lessonTable}
+${buildLibraryCatalogBlock(catalog)}`;
+}
+
+async function generateCourseComponents(topic, lessons, { userId = null, courseId = null } = {}) {
+  const label = `course-components ${courseId || "?"}`;
+  const sessionId = courseId ? `course-components-${courseId}` : null;
+
+  let catalog = [];
+  try {
+    catalog = await getActiveCatalog(); // global only — this step is what CREATES this course's own entries
+  } catch (err) {
+    console.warn(`[globalComponentLibrary] Failed to load catalog for ${label} (non-fatal, continuing without it): ${err.message}`);
+  }
+
+  try {
+    await withRetries(label, 2, async ({ attempt, feedback }) => {
+      logVerbose(`  [${label}] Attempt ${attempt}/2...`);
+
+      const { text, stopReason, usage } = await streamCodeCompletion({
+        limiter: limitLessonCodeCall,
+        provider: LESSON_CODE_PROVIDER_NO_REASONING,
+        systemPrompt: COURSE_COMPONENTS_RULES,
+        userContent: buildCourseComponentsUserContent(topic, lessons, catalog) + feedbackSuffix(feedback),
+        maxOutputTokens: COURSE_COMPONENTS_MAX_OUTPUT_TOKENS,
+        sessionId,
+      });
+      logUsage(label, usage);
+      if (usage) {
+        recordAiUsage({
+          kind: "lesson-code",
+          provider: LESSON_CODE_PROVIDER_NO_REASONING.providerName,
+          model: LESSON_CODE_PROVIDER_NO_REASONING.model,
+          userId,
+          courseId,
+          promptTokens: usage.prompt_tokens,
+          completionTokens: usage.completion_tokens,
+          cachedTokens: usage.prompt_cache_hit_tokens || 0,
+        });
+      }
+
+      try {
+        if (stopReason === "length") {
+          throw new Error("Course-components output hit max_tokens — was truncated.");
+        }
+        const code = stripCodeFences(text);
+        if (code.includes("NONE NEEDED") || !code.includes("@reusable")) {
+          logVerbose(`  [${label}] No course-level components proposed.`);
+          return;
+        }
+
+        // Validation-only stub: these components never declare CLAMP/PALETTE/
+        // etc themselves (rule 5 above) — prepend the same contract block
+        // every OTHER active/candidate component already assumes is in
+        // scope, purely so validateHeaderFragment's undefined-reference
+        // check has something to resolve those names against. Only the
+        // MODEL'S OWN declarations get extracted afterward (extractDeclaration
+        // is name-targeted), so the stub itself is never saved.
+        const libraryNames = catalog.map((c) => c.name);
+        const fixed = autoFixCode(code, {});
+        const validated = validateHeaderFragment(PREVIEW_HEADER_CONTRACT + "\n" + fixed, {
+          reservedNames: [...LESSON_COMPONENT_NAMES, ...libraryNames],
+        });
+
+        const candidates = extractReusableCandidates(validated);
+        if (candidates.length > 0) {
+          await saveCandidates(candidates, { courseId, lessonNumber: null });
+          logVerbose(`  [${label}] Proposed ${candidates.length} course-level component(s): ${candidates.map((c) => c.name).join(", ")}`);
+        }
+      } catch (err) {
+        err.isContentError = true;
+        throw err;
+      }
+    }, { keyEnv: LESSON_CODE_PROVIDER_NO_REASONING.keyEnv });
+  } catch (err) {
+    // Purely additive — a failure here just means this course starts with
+    // no pre-generated course-scoped components (lessons still build fully
+    // normally, and can still propose/reuse components the ad-hoc way).
+    console.warn(`[${label}] Course-level component generation failed (non-fatal): ${err.message}`);
+  }
+}
+
 // ── Header generation ───────────────────────────────────────────────────────
 async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = null, courseId = null } = {}) {
   const label = `header L${lesson.lessonNumber}`;
@@ -1678,7 +1810,7 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = 
   let libraryCatalog = [];
   let libraryNames = [];
   try {
-    [libraryCatalog, libraryNames] = await Promise.all([getActiveCatalog(), getActiveNames()]);
+    [libraryCatalog, libraryNames] = await Promise.all([getActiveCatalog(courseId), getActiveNames(courseId)]);
   } catch (err) {
     console.warn(`[globalComponentLibrary] Failed to load catalog for ${label} (non-fatal, continuing without it): ${err.message}`);
   }
@@ -2275,7 +2407,7 @@ async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, erro
   // — reserve active library names here too so it can't collide with one.
   let libraryNames = [];
   try {
-    libraryNames = await getActiveNames();
+    libraryNames = await getActiveNames(courseId);
   } catch (err) {
     console.warn(`[globalComponentLibrary] Failed to load names for ${label} (non-fatal): ${err.message}`);
   }
@@ -2547,7 +2679,7 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
   let activeLibrarySource = "";
   let activeLibraryNames = [];
   try {
-    [activeLibrarySource, activeLibraryNames] = await Promise.all([getActiveLibrarySource(), getActiveNames()]);
+    [activeLibrarySource, activeLibraryNames] = await Promise.all([getActiveLibrarySource(courseId), getActiveNames(courseId)]);
   } catch (err) {
     console.warn(`[globalComponentLibrary] Failed to load active library for L${lesson.lessonNumber} (non-fatal): ${err.message}`);
   }
@@ -2867,6 +2999,9 @@ module.exports = {
   generateCoursePlan,
   generateCourseQuiz,
   generateLessonCode,
+  // Runs once per course, before any lesson starts building — see its own
+  // comment for why this can't be folded into per-lesson header generation.
+  generateCourseComponents,
   // Exposed so buildLesson (courseController.js) can kick off header
   // generation concurrently with scene audio synthesis instead of after it —
   // see the headerPromise param on generateLessonCode above.

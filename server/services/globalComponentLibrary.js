@@ -121,32 +121,45 @@ async function saveCandidates(candidates, { courseId = null, lessonNumber = null
 }
 
 // ── Catalog for prompt injection ────────────────────────────────────────
-// Active only — a candidate hasn't been reviewed yet, so it's never offered
-// to another lesson. Name + description + props ONLY, never the code — this
-// is what keeps the header prompt small regardless of how large the library
-// grows; the actual code only gets pulled in by getActiveLibrarySource,
-// server-side, never sent back through the model.
-async function getActiveCatalog() {
-  const docs = await LibraryComponent.find({ status: "active" })
+// Active PLUS this course's own not-yet-approved candidates (when courseId
+// is given) — see generateCourseComponents in claudeService.js. The intent:
+// a component proposed for THIS course should be immediately usable by
+// every OTHER lesson in the SAME course without waiting on admin review —
+// only being offered to a DIFFERENT course still requires promotion to
+// "active". Every lesson's header/chunk generation already has its own
+// courseId in scope, so this costs nothing extra to thread through.
+// Name + description + props ONLY, never the code — this is what keeps the
+// header prompt small regardless of how large the library grows; the
+// actual code only gets pulled in by getActiveLibrarySource, server-side,
+// never sent back through the model.
+function catalogFilter(courseId) {
+  return courseId
+    ? { $or: [{ status: "active" }, { status: "candidate", sourceCourseId: courseId }] }
+    : { status: "active" };
+}
+
+async function getActiveCatalog(courseId = null) {
+  const docs = await LibraryComponent.find(catalogFilter(courseId))
     .select("name description propsDoc")
     .lean();
   return docs.map((d) => ({ name: d.name, description: d.description, propsDoc: d.propsDoc || "" }));
 }
 
-async function getActiveNames() {
-  const docs = await LibraryComponent.find({ status: "active" }).select("name").lean();
+async function getActiveNames(courseId = null) {
+  const docs = await LibraryComponent.find(catalogFilter(courseId)).select("name").lean();
   return docs.map((d) => d.name);
 }
 
-// Concatenated source for every active component — appended onto the
-// header exactly the way lessonComponentLibrary.js's hand-written
-// LESSON_COMPONENT_LIBRARY_SOURCE already is (see generateLessonCode),
-// which is what makes these callable at runtime with zero changes needed
-// anywhere else in the compile/render pipeline.
-async function getActiveLibrarySource() {
-  const docs = await LibraryComponent.find({ status: "active" }).select("code").lean();
+// Concatenated source for every active (+ this course's own candidate)
+// component — appended onto the header exactly the way
+// lessonComponentLibrary.js's hand-written LESSON_COMPONENT_LIBRARY_SOURCE
+// already is (see generateLessonCode), which is what makes these callable
+// at runtime with zero changes needed anywhere else in the compile/render
+// pipeline.
+async function getActiveLibrarySource(courseId = null) {
+  const docs = await LibraryComponent.find(catalogFilter(courseId)).select("code").lean();
   if (docs.length === 0) return "";
-  return "\n// ── Global reusable component library (grown from real lessons, admin-approved) ──\n" +
+  return "\n// ── Global reusable component library (grown from real lessons, admin-approved, plus this course's own pending candidates) ──\n" +
     docs.map((d) => d.code).join("\n\n");
 }
 
@@ -209,6 +222,7 @@ export const PreviewComponent = () => {
 
 module.exports = {
   extractReusableCandidates,
+  extractDeclaration,
   saveCandidates,
   getActiveCatalog,
   getActiveNames,
@@ -216,4 +230,10 @@ module.exports = {
   trackUsage,
   buildPreviewCode,
   PREVIEW_DURATION_FRAMES,
+  // Exposed so claudeService.js's generateCourseComponents can prepend it
+  // as a validation-only stub — the model's course-level component output
+  // never redeclares CLAMP/PALETTE/etc itself (same contract every other
+  // library component follows), but validateHeaderFragment needs SOMETHING
+  // declaring those names in scope to not flag them as undefined refs.
+  PREVIEW_HEADER_CONTRACT,
 };

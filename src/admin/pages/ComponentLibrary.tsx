@@ -21,6 +21,7 @@ interface LibraryComponentRow {
   domainTags: string[];
   status: "candidate" | "active" | "rejected";
   usageCount: number;
+  sourceCourseId: string | null;
   sourceLessonNumber: number | null;
   createdAt: string;
 }
@@ -195,6 +196,8 @@ function ComponentCard({ component, onChanged }: { component: LibraryComponentRo
         <p className="text-[11px] text-slate-400 mb-3">
           {component.sourceLessonNumber
             ? `Proposed from lesson ${component.sourceLessonNumber} · ${fmtDate(component.createdAt)}`
+            : component.sourceCourseId
+            ? `Proposed at course-planning stage · ${fmtDate(component.createdAt)}`
             : `Starter component · ${fmtDate(component.createdAt)}`}
         </p>
 
