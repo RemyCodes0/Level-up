@@ -812,6 +812,11 @@ ${rules}
       promptTokens: usage.prompt_tokens,
       completionTokens: usage.completion_tokens,
       cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      // generateJson already requests usage:{include:true} — usage.cost IS
+      // the real OpenRouter-billed amount, just never read before this fix
+      // (silently fell back to the static config/modelPricing.js estimate
+      // on every course-plan/quiz/remedial-plan/next-course call).
+      costUsd: usage.cost ?? null,
       costUsd: usage.cost ?? null,
     }),
   });
@@ -894,6 +899,7 @@ Rules:
       completionTokens: usage.completion_tokens,
       cachedTokens: usage.prompt_cache_hit_tokens || 0,
       costUsd: usage.cost ?? null,
+      costUsd: usage.cost ?? null,
     }),
   });
 
@@ -952,6 +958,7 @@ Rules:
       completionTokens: usage.completion_tokens,
       cachedTokens: usage.prompt_cache_hit_tokens || 0,
       costUsd: usage.cost ?? null,
+      costUsd: usage.cost ?? null,
     }),
   });
 }
@@ -1001,6 +1008,7 @@ Rules:
       promptTokens: usage.prompt_tokens,
       completionTokens: usage.completion_tokens,
       cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      costUsd: usage.cost ?? null,
       costUsd: usage.cost ?? null,
     }),
   });

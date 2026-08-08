@@ -281,15 +281,43 @@ exports.getAiUsage = async (req, res) => {
 // GET /api/admin/courses/:courseId/costs
 // Every AiUsageLog row for ONE course, broken down by kind — shown on the
 // course detail view.
+//
+// Split by isRealCost (see AiUsageLog's own comment) as well as by kind —
+// totalUsd alone reads as "one approximate number" even on a course where
+// the vast majority of it is the ACTUAL OpenRouter-billed amount, not an
+// estimate. realUsd/estimatedUsd (overall and per-kind) let the admin page
+// show that split directly instead of leaving every course's cost looking
+// equally uncertain. TTS (Kokoro has no cost field at all) is the one kind
+// that's always estimated; every LLM call kind is real cost as of this
+// session's fix to the 4 generateJson-based call sites that were silently
+// discarding usage.cost.
 exports.getCourseCosts = async (req, res) => {
   try {
-    const byKind = await AiUsageLog.aggregate([
+    const rows = await AiUsageLog.aggregate([
       { $match: { courseId: new mongoose.Types.ObjectId(req.params.courseId) } },
-      { $group: { _id: "$kind", totalUsd: { $sum: "$costUsd" }, calls: { $sum: 1 } } },
-      { $sort: { totalUsd: -1 } },
+      { $group: { _id: { kind: "$kind", isRealCost: "$isRealCost" }, subtotalUsd: { $sum: "$costUsd" }, calls: { $sum: 1 } } },
     ]);
-    const totalUsd = byKind.reduce((sum, k) => sum + k.totalUsd, 0);
-    res.json({ totalUsd, byKind: byKind.map((k) => ({ kind: k._id, totalUsd: k.totalUsd, calls: k.calls })) });
+
+    const byKindMap = new Map();
+    let realUsd = 0;
+    let estimatedUsd = 0;
+    for (const row of rows) {
+      const { kind, isRealCost } = row._id;
+      if (!byKindMap.has(kind)) byKindMap.set(kind, { kind, totalUsd: 0, calls: 0, realUsd: 0, estimatedUsd: 0 });
+      const entry = byKindMap.get(kind);
+      entry.totalUsd += row.subtotalUsd;
+      entry.calls += row.calls;
+      if (isRealCost) {
+        entry.realUsd += row.subtotalUsd;
+        realUsd += row.subtotalUsd;
+      } else {
+        entry.estimatedUsd += row.subtotalUsd;
+        estimatedUsd += row.subtotalUsd;
+      }
+    }
+
+    const byKind = [...byKindMap.values()].sort((a, b) => b.totalUsd - a.totalUsd);
+    res.json({ totalUsd: realUsd + estimatedUsd, realUsd, estimatedUsd, byKind });
   } catch (err) {
     console.error("admin getCourseCosts error:", err);
     res.status(500).json({ error: "Failed to load course costs" });

@@ -106,7 +106,12 @@ interface LessonProgressInfo {
 
 function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string; onClose: () => void; onDeleted: () => void }) {
   const [course, setCourse] = useState<any | null>(null);
-  const [costs, setCosts] = useState<{ totalUsd: number; byKind: { kind: string; totalUsd: number; calls: number }[] } | null>(null);
+  const [costs, setCosts] = useState<{
+    totalUsd: number;
+    realUsd: number;
+    estimatedUsd: number;
+    byKind: { kind: string; totalUsd: number; calls: number; realUsd: number; estimatedUsd: number }[];
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [previewLesson, setPreviewLesson] = useState<number | null>(null);
   const [showCode, setShowCode] = useState(false);
@@ -124,7 +129,7 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
     setProgressByLesson(null);
     Promise.all([
       adminApi.get<{ course: any }>(`/api/admin/courses/${courseId}`),
-      adminApi.get<{ totalUsd: number; byKind: any[] }>(`/api/admin/courses/${courseId}/costs`),
+      adminApi.get<{ totalUsd: number; realUsd: number; estimatedUsd: number; byKind: any[] }>(`/api/admin/courses/${courseId}/costs`),
     ])
       .then(([c, costData]) => {
         setCourse(c.course);
@@ -179,14 +184,24 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
 
             {costs && (
               <div className="px-6 py-4 border-b border-slate-100 bg-slate-50">
-                <div className="flex items-center gap-2 mb-2">
+                <div className="flex items-center gap-2 mb-1">
                   <DollarSign className="h-4 w-4 text-slate-400" />
                   <span className="text-sm font-semibold text-slate-700">Total cost: {fmtUsd(costs.totalUsd)}</span>
                 </div>
+                {/* Not every dollar here is equally certain — LLM calls carry
+                    OpenRouter's own actually-billed amount, but TTS (Kokoro
+                    returns no cost field at all) is always a per-character
+                    estimate. Showing the split instead of one flat number is
+                    the whole point of this endpoint's real/estimated
+                    breakdown — see adminController.js's getCourseCosts. */}
+                <p className="text-xs text-slate-400 mb-2">
+                  {fmtUsd(costs.realUsd)} actual (OpenRouter-billed)
+                  {costs.estimatedUsd > 0 && <> · {fmtUsd(costs.estimatedUsd)} estimated (TTS has no real-cost figure)</>}
+                </p>
                 <div className="flex flex-wrap gap-2">
                   {costs.byKind.map((k) => (
                     <span key={k.kind} className="text-xs px-2 py-1 rounded-lg bg-white border border-slate-200 text-slate-600">
-                      {k.kind}: {fmtUsd(k.totalUsd)} ({k.calls})
+                      {k.kind}: {fmtUsd(k.totalUsd)} ({k.calls}){k.estimatedUsd > 0 && k.realUsd > 0 && " · mixed"}
                     </span>
                   ))}
                 </div>
