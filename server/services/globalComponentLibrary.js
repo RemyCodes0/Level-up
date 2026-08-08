@@ -45,63 +45,104 @@ const { validateHeaderFragment, CANONICAL_REMOTION_EXPORTS, CANONICAL_REACT_EXPO
 // header parsing cleanly.
 const REUSABLE_MARKER_RE = /\/\/\s*@reusable:\s*(\w+)\s*(?:—|-)\s*(.+?)\s*\r?\n\s*\/\/\s*@example:\s*(.+?)\s*\r?\n/g;
 
+// Walks balanced delimiters (open/close char pair) from `start` (which must
+// BE the opening char) to its match — shared by extractDeclaration's own
+// param-list/body/implicit-return handling below.
+function matchDelimiter(code, start, openChar, closeChar) {
+  let depth = 0;
+  for (let i = start; i < code.length; i++) {
+    if (code[i] === openChar) depth++;
+    else if (code[i] === closeChar) {
+      depth--;
+      if (depth === 0) return i + 1; // exclusive end, right after the closer
+    }
+  }
+  return -1;
+}
+
 // Finds the declaration named `name` starting at/after `searchFrom` in
-// `code`, then walks brace depth from its BODY's `{` to the matching `}` —
-// robust to whatever's around it (other declarations before/after), and
-// works for both `function Name(...) {...}` and `const Name = (...) => {...}`
-// shapes.
+// `code` and returns its full source text — robust to whatever's around it
+// (other declarations before/after), and handles every shape a real
+// component actually gets written in:
+//   function Name(...) { ...block body... }
+//   const Name = (...) => { ...block body... }
+//   const Name = (...) => ( <JSX/> )         (implicit return, parenthesized)
 //
-// FIXED (was the root cause of every real "@reusable" component saved via
-// this path coming out truncated/broken — confirmed against two real
-// candidates, Enzyme/NucleotideBlock, extracted from a real DNA-replication
-// lesson and unusable in the admin preview): naively taking the FIRST "{"
-// after the declaration grabs a DESTRUCTURED PARAMETER's own "{" instead of
-// the function body's, for the extremely common (essentially universal —
-// every hand-written component in this codebase does this) shape
-// `function Name({ cx, cy, radius }) { ... }` / `const Name = ({ cx, cy }) =>
-// { ... }` — the brace-counter then stops as soon as the destructuring's OWN
-// "}" closes, returning `const Name = ({ cx, cy, radius }` with everything
-// from `) => { ... }` onward silently cut off. Fix: if a "(" appears before
-// the first "{" (the parameter list), walk ITS balanced parens to the
-// matching ")" first, so the brace search starts AFTER the parameter list
-// and finds the body's own "{" — not a parameter's.
+// FIX HISTORY (both confirmed against real saved/rejected candidates, not
+// hypothetical):
+//   1. Originally took the FIRST "{" after the declaration as the body's
+//      opening brace — for the near-universal `({ cx, cy }) => {...}` shape
+//      (destructured props), that "{" is the PARAMETER's own brace, not the
+//      body's, silently truncating the declaration mid-signature (Enzyme/
+//      NucleotideBlock). Fixed by skipping the parameter list's own
+//      balanced parens first.
+//   2. That fix still assumed the body always starts with "{" — an arrow
+//      function using an IMPLICIT RETURN (`=> (<span>...</span>)`, no block
+//      body at all — a completely ordinary, common React pattern, not a
+//      corner case) has no body "{" to find, so the old code kept
+//      searching forward and latched onto some LATER, unrelated "{"
+//      (e.g. a JSX prop's own `style={{...}}`, or even the next
+//      declaration entirely), producing garbage (Label, ForkStrand,
+//      SynthArrow, PolymeraseDot all corrupted this way in one real run).
+//      Fixed: after the parameter list, look at what ACTUALLY follows the
+//      "=>" — a "{" gets the existing brace-matching; a "(" (the implicit-
+//      return-wrapped-in-parens shape) gets paren-matching instead. A bare
+//      implicit return with no wrapping parens at all (`=> <JSX/>`) is left
+//      unsupported — JSX can't be reliably bounded by simple text scanning
+//      without parens as an anchor — and returns null (skipped, same "never
+//      guess" rule this function has always followed) rather than risk
+//      producing a THIRD kind of corrupted extraction.
 function extractDeclaration(code, name, searchFrom) {
   const declRe = new RegExp(`(?:function\\s+${name}\\s*\\(|const\\s+${name}\\s*=)`);
   const rel = code.slice(searchFrom).match(declRe);
   if (!rel) return null;
   const declStart = searchFrom + rel.index;
+  const isFunctionForm = rel[0].trimStart().startsWith("function");
 
-  const firstBrace = code.indexOf("{", declStart);
-  const firstParen = code.indexOf("(", declStart);
+  // 1. Skip the parameter list's own "(...)" span, so its own "{" (a
+  // destructured param) is never mistaken for the body's.
+  let afterParams;
+  if (isFunctionForm) {
+    // The regex match itself already ends in the param list's opening "(".
+    afterParams = matchDelimiter(code, declStart + rel[0].length - 1, "(", ")");
+  } else {
+    const parenStart = code.indexOf("(", declStart);
+    const arrowIdx = code.indexOf("=>", declStart);
+    // Only treat this "(" as the parameter list if it genuinely comes
+    // before the "=>" — a bare single-identifier param (`props => ...`,
+    // no parens at all) has no param-list "(" to skip.
+    afterParams = parenStart !== -1 && (arrowIdx === -1 || parenStart < arrowIdx)
+      ? matchDelimiter(code, parenStart, "(", ")")
+      : arrowIdx;
+  }
+  if (afterParams === -1 || afterParams === undefined) return null;
 
-  let bodySearchFrom = declStart;
-  if (firstParen !== -1 && (firstBrace === -1 || firstParen < firstBrace)) {
-    let parenDepth = 0;
-    for (let i = firstParen; i < code.length; i++) {
-      if (code[i] === "(") parenDepth++;
-      else if (code[i] === ")") {
-        parenDepth--;
-        if (parenDepth === 0) { bodySearchFrom = i + 1; break; }
-      }
-    }
+  // 2. function declarations go straight into their block body; a
+  // const-arrow form has an "=>" (possibly after a TS return-type
+  // annotation — indexOf just skips past that text either way) before
+  // its body/implicit-return starts.
+  let bodyStart = afterParams;
+  if (!isFunctionForm) {
+    const arrowIdx = code.indexOf("=>", afterParams);
+    if (arrowIdx === -1) return null;
+    bodyStart = arrowIdx + 2;
   }
 
-  const braceStart = code.indexOf("{", bodySearchFrom);
-  if (braceStart === -1) return null;
+  let i = bodyStart;
+  while (i < code.length && /\s/.test(code[i])) i++;
 
-  let depth = 0;
-  let end = -1;
-  for (let i = braceStart; i < code.length; i++) {
-    if (code[i] === "{") depth++;
-    else if (code[i] === "}") {
-      depth--;
-      if (depth === 0) { end = i + 1; break; }
-    }
+  let end;
+  if (code[i] === "{") {
+    end = matchDelimiter(code, i, "{", "}");
+  } else if (code[i] === "(") {
+    end = matchDelimiter(code, i, "(", ")");
+  } else {
+    return null; // bare implicit return with no "{" or "(" — see comment above
   }
   if (end === -1) return null; // unbalanced — never guess, just skip this one
 
   let codeEnd = end;
-  if (code[codeEnd] === ";") codeEnd++; // const-arrow declarations often end with one
+  if (code[codeEnd] === ";") codeEnd++; // declarations often end with one
   return code.slice(declStart, codeEnd).trim();
 }
 
@@ -214,12 +255,18 @@ function extractReusableCandidates(headerCode) {
 // candidate that can't even compile in isolation must never be saved as
 // something a human is asked to review, let alone something a future lesson
 // could be offered.
-function isValidComponentCode(code) {
+// Returns the actual validation error (its first line — the rest is
+// per-occurrence detail not needed for a log line) rather than a bare
+// boolean, so a rejection is diagnosable straight from the server log
+// instead of requiring an ad-hoc script to reproduce it, which is how the
+// original version of this function's silent `catch {}` was actually
+// debugged the first time this mattered.
+function checkComponentCode(code) {
   try {
     validateHeaderFragment(`${PREVIEW_HEADER_CONTRACT}\n${code}`, {});
-    return true;
-  } catch {
-    return false;
+    return { valid: true };
+  } catch (err) {
+    return { valid: false, reason: err.message.split("\n")[0] };
   }
 }
 
@@ -231,8 +278,9 @@ function isValidComponentCode(code) {
 async function saveCandidates(candidates, { courseId = null, lessonNumber = null } = {}) {
   for (const c of candidates) {
     try {
-      if (!isValidComponentCode(c.code)) {
-        console.warn(`[globalComponentLibrary] Skipping candidate "${c.name}" — its extracted code does not compile on its own (see isValidComponentCode).`);
+      const check = checkComponentCode(c.code);
+      if (!check.valid) {
+        console.warn(`[globalComponentLibrary] Skipping candidate "${c.name}" — ${check.reason}`);
         continue;
       }
 
