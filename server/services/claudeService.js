@@ -4,6 +4,14 @@ const pdfParse = require("pdf-parse");
 const JSZip = require("jszip");
 const { validateGeneratedCode, validateHeaderFragment, validateChunkFragment, validateSceneFragment, getHeaderExposedNames, compactHeaderForPrompt } = require("./validateCode");
 const { LESSON_COMPONENT_LIBRARY_SOURCE, LESSON_COMPONENT_NAMES } = require("./lessonComponentLibrary");
+const {
+  extractReusableCandidates,
+  saveCandidates,
+  getActiveCatalog,
+  getActiveNames,
+  getActiveLibrarySource,
+  trackUsage: trackLibraryUsage,
+} = require("./globalComponentLibrary");
 const { reviewGeneratedCode } = require("./codeCriticService");
 const { createLimiter } = require("../utils/concurrencyLimiter");
 const { recordAiUsage } = require("./aiUsageService");
@@ -64,20 +72,30 @@ const CODE_PROVIDERS = {
     client: openRouterClient,
     model: "z-ai/glm-5.2",
     providerName: "glm",
-    // Pinned to Decart specifically, by deliberate choice (2026-08-06),
-    // superseding an earlier UNPINNED period: a pin to z-ai's own hosting was
-    // tried first (see git history) on the theory that a third-party rehost
-    // (CoreWeave/Together, confirmed live via OpenRouter's activity log)
-    // risked a quantized backend, then reverted — the unpinned traffic
-    // produced the cleanest observed run at the time (5/5 codegen calls
-    // "stop", no retries), better than the pinned-z-ai theory predicted.
-    // allow_fallbacks is FALSE here — deliberately, not the allow_fallbacks:
-    // true safety-net pattern every other `provider.order` pin in this file
-    // uses (see SCENE_PLAN_PROVIDER, DEEPSEEK_*_PLAN_PROVIDER below): if
-    // Decart has downtime or hits capacity, lesson/ad code generation should
-    // hard-fail rather than silently route to a different (possibly
-    // quantized) host. Revisit only with real evidence, same bar as before.
-    extraParams: { reasoning: { enabled: false }, provider: { order: ["decart"], allow_fallbacks: false } },
+    // History: unpinned → pinned to z-ai (reverted, see old git history) →
+    // pinned to Decart specifically with allow_fallbacks:false (2026-08-06)
+    // → this (2026-08-08). The Decart-only pin's hard-fail-if-unavailable
+    // choice turned out to cost more than it saved: under a real 6-lesson
+    // course's concurrency (header + several chunks per lesson, all firing
+    // at once, all forced onto ONE host with zero fallback), Decart's rate
+    // limit tripped repeatedly — confirmed live, 3 of 6 lessons in one
+    // course permanently failed on sustained 429s, each retry hitting the
+    // same saturated limit again immediately.
+    //
+    // sort:"price" + preferred_min_throughput replaces the single-provider
+    // pin: always prefers the cheapest host, but only among ones clearing a
+    // speed floor (matches the actual reasoning behind picking Decart
+    // before — cheap AND fast, not cheapest at any speed), and — the part
+    // the old pin didn't have — automatically falls through to the next
+    // cheapest-and-fast-enough host if the top pick 429s or is down, instead
+    // of hard-failing the whole lesson. allow_fallbacks TRUE here, matching
+    // every other provider.sort/order in this file (see SCENE_PLAN_PROVIDER,
+    // DEEPSEEK_*_PLAN_PROVIDER below) — the Decart pin was the one deliberate
+    // exception to that pattern, and it's exactly what caused the failures.
+    // 40 tokens/sec floor is a starting point (comfortably above the
+    // slowest hosts, well below the fastest) — tune against real observed
+    // throughput, not on the strength of this comment alone.
+    extraParams: { reasoning: { enabled: false }, provider: { sort: "price", preferred_min_throughput: 40, allow_fallbacks: true } },
     maxTokens: 100000,
     keyEnv: "OPENROUTER_API_KEY",
   },
@@ -255,11 +273,11 @@ const SCENE_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "z-ai/glm-5.2",
   providerName: "glm",
-  // Pinned to Decart, same deliberate choice (and same hard-fail-over-
-  // fallback reasoning) as CODE_PROVIDERS.glm above — every GLM 5.2 call
-  // site in this file should route the same way, not just the lesson-code
-  // path.
-  extraParams: { reasoning: { enabled: false }, provider: { order: ["decart"], allow_fallbacks: false } },
+  // sort:"price" + preferred_min_throughput, same as CODE_PROVIDERS.glm
+  // above (see its comment for the full reasoning, including why the
+  // earlier Decart-only pin was dropped) — every GLM 5.2 call site in this
+  // file should route the same way, not just the lesson-code path.
+  extraParams: { reasoning: { enabled: false }, provider: { sort: "price", preferred_min_throughput: 40, allow_fallbacks: true } },
   maxTokens: 40000,
   keyEnv: "OPENROUTER_API_KEY",
 };
@@ -1057,10 +1075,29 @@ SHARED TEXT + FRAMING HELPERS:
 
 CODE QUALITY: Inline styles only (no Tailwind, no className for styling, no external CSS). No registerRoot, no Composition, no export. Never leave a "TODO" — every const/component you declare must be complete, working code a scene could use immediately.
 
-Begin with imports, then CLAMP/FRAME/SAFE/clampPos/ZONES (verbatim), then your palette const, then your shared helper components. Your entire response is the code file, first characters "import", no text or fences around it.
+REUSABLE COMPONENT LIBRARY (grown from real lessons, not hand-written): a catalog of already-built, admin-approved components may be listed below, under "AVAILABLE LIBRARY COMPONENTS" — these are ALREADY IN SCOPE, do not redeclare or reimport them, just call them directly by name (e.g. <Gear radius={80} teeth={12} color={PALETTE.accent} cx={960} cy={540} />) exactly like you would call Backdrop or Label. Check that list FIRST — if one fits what this lesson needs, use it instead of building your own.
+  • If NONE of them fit and you need something genuinely GENERIC — a shape, mechanism, or animated element that other lessons on OTHER subjects could plausibly reuse too (a gear, a wave, a particle, a directional arrow, an orbiting body — NOT anything tied to this lesson's specific facts, names, or numbers) — you may define it as a normal shared helper here, AND additionally mark it for the library by writing exactly these two comment lines immediately above its declaration:
+      // @reusable: ComponentName — one-line description of what it does and when to use it
+      // @example: <ComponentName someProp={123} otherProp={PALETTE.accent} .../>
+    The @example line must be valid, working JSX using ONLY props that component actually accepts, since it's used verbatim to preview the component later — get it right.
+  • Do NOT mark something reusable just to mark it. Most helpers you write ARE lesson-specific (they reference this lesson's own PALETTE choices, this lesson's own subject) and should NOT be marked — reserve @reusable for something you'd genuinely expect to be useful in a completely different lesson on a different subject.
+
+Begin with imports, then CLAMP/FRAME/SAFE/clampPos/ZONES (verbatim), then your palette const, then your shared helper components (checking the library catalog first). Your entire response is the code file, first characters "import", no text or fences around it.
 `;
 
-function buildHeaderUserContent(lesson, scenes) {
+// Renders the active-component catalog (see globalComponentLibrary's own
+// comment) into the compact "name — description (props)" listing shown to
+// the header prompt — never the actual code, so this stays small regardless
+// of how large the library grows.
+function buildLibraryCatalogBlock(catalog) {
+  if (!catalog || catalog.length === 0) return "";
+  const lines = catalog
+    .map((c) => `  • ${c.name}${c.propsDoc ? ` ${c.propsDoc}` : ""} — ${c.description}`)
+    .join("\n");
+  return `\nAVAILABLE LIBRARY COMPONENTS (already in scope — call directly, do not redeclare):\n${lines}\n`;
+}
+
+function buildHeaderUserContent(lesson, scenes, catalog = []) {
   const sceneTable = scenes
     .map((s, i) => {
       const m = s.mechanism;
@@ -1080,7 +1117,7 @@ LESSON: ${lesson.title}
 ${lesson.description ? "LESSON SUMMARY: " + lesson.description + "\n" : ""}TOTAL SCENES: ${scenes.length}
 
 Derive ONE lesson-wide VISUAL IDENTITY (palette + motif) from "${lesson.title}" that will suit ALL ${scenes.length} scenes below. Do not write any scene's content — just the shared imports, palette/motif consts, and reusable helper components.
-
+${buildLibraryCatalogBlock(catalog)}
 SCENES (context only, so your palette/motif choice suits all of them, AND so you can spot scenes that share one concrete example — see SHARED EXAMPLE DATA below — do not build these):
 
 ${sceneTable}
@@ -1337,7 +1374,7 @@ function autoFixCode(code, { totalFrames } = {}) {
   }
 
   if (notes.length) {
-    console.log(`  [autofix] Applied: ${notes.join(" | ")}`);
+    logVerbose(`  [autofix] Applied: ${notes.join(" | ")}`);
   }
 
   return fixed;
@@ -1398,9 +1435,29 @@ function stripCodeFences(text) {
     .trim();
 }
 
+// A real course is 60-90+ GLM calls (a header + several 3-scene chunks per
+// lesson, times 6 lessons, plus retries) — every one of those calls used to
+// print its own "Attempt N/M...", then its own "Valid code generated (chars)
+// — took Xs" receipt, then its own token-count line, ALL interleaved across
+// several lessons building concurrently. Genuinely useful when actively
+// debugging one specific generation; genuinely noisy as the default
+// live-log experience for "is my course still building" — one course could
+// print 200+ lines of routine success chatter.
+//
+// This gates exactly that: per-call progress/success logs. It does NOT gate
+// console.warn/console.error anywhere in this file — an actual failure, a
+// retry, or a validation rejection is signal you want regardless of this
+// flag, never noise. Also doesn't touch courseController.js's own logs,
+// which are already per-LESSON milestones (6 lessons × ~4 lines), not
+// per-call — the right granularity already.
+const VERBOSE_CODEGEN_LOGS = process.env.VERBOSE_CODEGEN_LOGS === "true";
+function logVerbose(...args) {
+  if (VERBOSE_CODEGEN_LOGS) console.log(...args);
+}
+
 function logUsage(label, usage) {
   if (!usage) return;
-  console.log(
+  logVerbose(
     `  [${label}] tokens: ${usage.prompt_tokens} in ` +
     `(${usage.prompt_cache_hit_tokens ?? 0} cache hit / ${usage.prompt_cache_miss_tokens ?? 0} cache miss), ` +
     `${usage.completion_tokens} out`
@@ -1606,14 +1663,27 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = 
   const start = Date.now();
   const sessionId = buildLessonSessionId(courseId, lesson.lessonNumber);
 
+  // Fetched ONCE, outside the retry loop — not worth re-querying per
+  // attempt, and a fresh header attempt should see the same catalog/
+  // reserved-name set as the first. Never fails the header itself: an
+  // empty catalog/name list just means no library components get offered
+  // or reserved this time, not a broken generation.
+  let libraryCatalog = [];
+  let libraryNames = [];
+  try {
+    [libraryCatalog, libraryNames] = await Promise.all([getActiveCatalog(), getActiveNames()]);
+  } catch (err) {
+    console.warn(`[globalComponentLibrary] Failed to load catalog for ${label} (non-fatal, continuing without it): ${err.message}`);
+  }
+
   return withRetries(label, maxAttempts, async ({ attempt, feedback }) => {
-    console.log(`  [${label}] Attempt ${attempt}/${maxAttempts}...`);
+    logVerbose(`  [${label}] Attempt ${attempt}/${maxAttempts}...`);
 
     const { text, stopReason, usage } = await streamCodeCompletion({
       limiter: limitLessonCodeCall,
       provider: LESSON_CODE_PROVIDER_NO_REASONING,
       systemPrompt: LESSON_HEADER_RULES,
-      userContent: buildHeaderUserContent(lesson, scenes) + feedbackSuffix(feedback),
+      userContent: buildHeaderUserContent(lesson, scenes, libraryCatalog) + feedbackSuffix(feedback),
       maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
       sessionId,
     });
@@ -1642,10 +1712,26 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = 
       }
 
       const fixed = autoFixCode(code, {});
-      const validated = validateHeaderFragment(fixed, { reservedNames: LESSON_COMPONENT_NAMES });
+      const validated = validateHeaderFragment(fixed, { reservedNames: [...LESSON_COMPONENT_NAMES, ...libraryNames] });
+
+      // Side effect, fire-and-forget — pulls out any `// @reusable:` marked
+      // helper and persists it as a candidate for later admin review. Must
+      // never delay or fail the header itself: this header already
+      // validated and the lesson is moving on with or without this
+      // succeeding.
+      try {
+        const candidates = extractReusableCandidates(validated);
+        if (candidates.length > 0) {
+          saveCandidates(candidates, { courseId, lessonNumber: lesson.lessonNumber }).catch((err) => {
+            console.warn(`[globalComponentLibrary] Failed to save candidates for ${label} (non-fatal): ${err.message}`);
+          });
+        }
+      } catch (err) {
+        console.warn(`[globalComponentLibrary] Failed to extract candidates for ${label} (non-fatal): ${err.message}`);
+      }
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-      console.log(`  [${label}] Valid header generated (${validated.length} chars) — took ${elapsedSec}s`);
+      logVerbose(`  [${label}] Valid header generated (${validated.length} chars) — took ${elapsedSec}s`);
       return validated;
     } catch (err) {
       err.isContentError = true;
@@ -1786,7 +1872,7 @@ async function patchSceneInChunk(lesson, targetSceneName, targetScene, brokenChu
   const validated = validateSceneFragment(fixed, targetSceneName, { headerAvailableNames: availableNames });
 
   const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-  console.log(`  [${label}] Patched scene generated (${validated.length} chars) — took ${elapsedSec}s`);
+  logVerbose(`  [${label}] Patched scene generated (${validated.length} chars) — took ${elapsedSec}s`);
   return validated;
 }
 
@@ -2118,7 +2204,7 @@ async function patchSceneFromRuntimeError(lesson, componentName, fullCode, scene
       const validated = validateSceneFragment(fixed, targetSceneName, { headerAvailableNames });
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-      console.log(`  [${label}] Patched via ${blocks.length} targeted edit(s) (${validated.length} chars) — took ${elapsedSec}s`);
+      logVerbose(`  [${label}] Patched via ${blocks.length} targeted edit(s) (${validated.length} chars) — took ${elapsedSec}s`);
       return spliceScene(fullCode, located, validated);
     } catch (err) {
       lastErr = err;
@@ -2178,6 +2264,15 @@ async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, erro
   const baseSessionId = buildLessonSessionId(courseId, lesson.lessonNumber);
   const sessionId = baseSessionId ? `${baseSessionId}-patch` : null;
 
+  // A patch can still introduce a NEW helper the header didn't have before
+  // — reserve active library names here too so it can't collide with one.
+  let libraryNames = [];
+  try {
+    libraryNames = await getActiveNames();
+  } catch (err) {
+    console.warn(`[globalComponentLibrary] Failed to load names for ${label} (non-fatal): ${err.message}`);
+  }
+
   let lastErr = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -2217,10 +2312,10 @@ async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, erro
 
       const patchedHeaderCode = applyPatchBlocks(currentHeaderCode, blocks);
       const fixed = autoFixCode(patchedHeaderCode, {});
-      const validated = validateHeaderFragment(fixed, { reservedNames: LESSON_COMPONENT_NAMES });
+      const validated = validateHeaderFragment(fixed, { reservedNames: [...LESSON_COMPONENT_NAMES, ...libraryNames] });
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-      console.log(`  [${label}] Patched via ${blocks.length} targeted edit(s) (${validated.length} chars) — took ${elapsedSec}s`);
+      logVerbose(`  [${label}] Patched via ${blocks.length} targeted edit(s) (${validated.length} chars) — took ${elapsedSec}s`);
       return spliceScene(fullCode, located, validated);
     } catch (err) {
       lastErr = err;
@@ -2318,7 +2413,7 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
         const located = errLine ? locateSceneAtLine(lastRawCode, errLine, expectedNames) : null;
         if (located) {
           try {
-            console.log(`  [${label}] Attempt ${attempt}/${maxAttempts} — targeted patch for ${located.name} (localized to line ${errLine})...`);
+            logVerbose(`  [${label}] Attempt ${attempt}/${maxAttempts} — targeted patch for ${located.name} (localized to line ${errLine})...`);
             const targetIndex = expectedNames.indexOf(located.name);
             const patchedScene = await patchSceneInChunk(
               lesson, located.name, chunkScenes[targetIndex], lastRawCode, lastError.message,
@@ -2333,7 +2428,7 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       }
 
       if (!patched) {
-        console.log(`  [${label}] Attempt ${attempt}/${maxAttempts}${attempt > 1 ? " (full regeneration)" : ""}...`);
+        logVerbose(`  [${label}] Attempt ${attempt}/${maxAttempts}${attempt > 1 ? " (full regeneration)" : ""}...`);
         rawCode = await generateFullChunk(lastError?.isContentError ? lastError.message : null);
       }
 
@@ -2341,7 +2436,7 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       const validated = validateChunk(rawCode);
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-      console.log(`  [${label}] Valid code generated (${validated.length} chars)${patched ? " via targeted patch" : ""} — took ${elapsedSec}s`);
+      logVerbose(`  [${label}] Valid code generated (${validated.length} chars)${patched ? " via targeted patch" : ""} — took ${elapsedSec}s`);
       return validated;
     } catch (err) {
       lastError = err;
@@ -2417,13 +2512,28 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
   const generatedHeader = headerPromise
     ? await headerPromise
     : await generateLessonHeader(lesson, scenes, undefined, { userId, courseId });
-  // Append the hand-written component library (never LLM-generated) to
-  // the header text AFTER validation, before computing exposed names —
-  // this one splice makes AnimatedGraph/AnimatedArray automatically
-  // visible to every chunk's availableNames AND automatically shown
-  // (signature-only, via compactHeaderForPrompt below) in every chunk's
-  // prompt, with no other plumbing needed.
-  const header = generatedHeader + "\n\n" + LESSON_COMPONENT_LIBRARY_SOURCE;
+
+  // Same splice as the hand-written library below, for the ACTIVE (admin-
+  // approved) global library — fetched fresh here rather than threaded
+  // through from generateLessonHeader's own catalog fetch, since that one
+  // only needed names+descriptions for the prompt; this needs the actual
+  // code, for runtime injection. activeLibraryNames is kept for the
+  // usage-tracking call once this lesson's final code exists (see below).
+  let activeLibrarySource = "";
+  let activeLibraryNames = [];
+  try {
+    [activeLibrarySource, activeLibraryNames] = await Promise.all([getActiveLibrarySource(), getActiveNames()]);
+  } catch (err) {
+    console.warn(`[globalComponentLibrary] Failed to load active library for L${lesson.lessonNumber} (non-fatal): ${err.message}`);
+  }
+
+  // Append the hand-written component library (never LLM-generated) AND
+  // the dynamic, admin-approved one to the header text AFTER validation,
+  // before computing exposed names — this one splice makes both
+  // automatically visible to every chunk's availableNames AND automatically
+  // shown (signature-only, via compactHeaderForPrompt below) in every
+  // chunk's prompt, with no other plumbing needed.
+  const header = generatedHeader + "\n\n" + LESSON_COMPONENT_LIBRARY_SOURCE + activeLibrarySource;
   const headerAvailableNames = new Set(getHeaderExposedNames(header));
 
   // Chunks run IN PARALLEL, not sequentially — the old design awaited
@@ -2544,6 +2654,13 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
       console.log(
         `  [code L${lesson.lessonNumber}] Valid code generated (${validatedCode.length} chars) — took ${elapsedSec}s for ${componentName}`
       );
+      // One cheap regex pass over the FINAL code, once, fire-and-forget —
+      // bumps usageCount only for library components this lesson actually
+      // called, not just ones it had available. See globalComponentLibrary's
+      // own comment on why this is deliberately this cheap.
+      trackLibraryUsage(validatedCode, activeLibraryNames).catch((err) => {
+        console.warn(`[globalComponentLibrary] Failed to track usage for L${lesson.lessonNumber} (non-fatal): ${err.message}`);
+      });
       return { code: validatedCode, totalFrames };
     }
 
@@ -2672,7 +2789,7 @@ ${sceneTable}
 
 async function generateAdCode(ad, componentName, scenes, totalFrames, maxAttempts = 3, { userId = null, adId = null } = {}) {
   return withRetries("ad-code", maxAttempts, async ({ attempt, feedback }) => {
-    console.log(`  [ad-code] Attempt ${attempt}/${maxAttempts} for ${componentName}...`);
+    logVerbose(`  [ad-code] Attempt ${attempt}/${maxAttempts} for ${componentName}...`);
 
     // Now shares streamCodeCompletion — the ad path gets the idle watchdog
     // and usage logging for free (it previously carried its own inline copy
@@ -2712,7 +2829,7 @@ async function generateAdCode(ad, componentName, scenes, totalFrames, maxAttempt
       const audioFixedCode = enforceCorrectAudioUrls(fixedCode, scenes);
       const validatedCode = validateGeneratedCode(audioFixedCode, componentName, totalFrames);
 
-      console.log(`  [ad-code] Valid ad code generated (${validatedCode.length} chars) for ${componentName}`);
+      logVerbose(`  [ad-code] Valid ad code generated (${validatedCode.length} chars) for ${componentName}`);
       return validatedCode;
     } catch (err) {
       err.isContentError = true;

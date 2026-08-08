@@ -3,7 +3,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import {
   LayoutDashboard, DollarSign, BookOpen, Users, GraduationCap,
-  MessageSquare, LineChart, Settings, Mail,
+  MessageSquare, LineChart, Settings, Mail, Blocks,
 } from "lucide-react";
 import { PageMeta } from "@/components/PageMeta";
 import { RequireAdmin } from "./RequireAdmin";
@@ -12,6 +12,7 @@ const NAV = [
   { to: "/admin", end: true, label: "Overview", icon: LayoutDashboard },
   { to: "/admin/ai-spend", label: "AI Spend", icon: DollarSign },
   { to: "/admin/courses", label: "Courses", icon: BookOpen },
+  { to: "/admin/component-library", label: "Component Library", icon: Blocks },
   { to: "/admin/users", label: "Users", icon: Users },
   { to: "/admin/tutors-bookings", label: "Tutors & Bookings", icon: GraduationCap },
   { to: "/admin/feedback-reviews", label: "Feedback & Reviews", icon: MessageSquare },

@@ -22,6 +22,7 @@ import AdminLayout from './admin/AdminLayout'
 import AdminOverviewPage from './admin/pages/Overview'
 import AdminAiSpendPage from './admin/pages/AiSpend'
 import AdminCoursesPage from './admin/pages/Courses'
+import AdminComponentLibraryPage from './admin/pages/ComponentLibrary'
 import AdminUsersPage from './admin/pages/Users'
 import AdminTutorsAndBookingsPage from './admin/pages/TutorsAndBookings'
 import AdminFeedbackAndReviewsPage from './admin/pages/FeedbackAndReviews'
@@ -124,6 +125,7 @@ function App() {
         <Route path="ai-spend" element={<AdminAiSpendPage/>}/>
         <Route path="courses" element={<AdminCoursesPage/>}/>
         <Route path="courses/:courseId" element={<AdminCoursesPage/>}/>
+        <Route path="component-library" element={<AdminComponentLibraryPage/>}/>
         <Route path="users" element={<AdminUsersPage/>}/>
         <Route path="tutors-bookings" element={<AdminTutorsAndBookingsPage/>}/>
         <Route path="feedback-reviews" element={<AdminFeedbackAndReviewsPage/>}/>

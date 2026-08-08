@@ -18,6 +18,13 @@ const {
   getAdminMaintenanceConfig,
   updateAdminMaintenanceConfig,
 } = require("../controllers/maintenanceController");
+const {
+  listLibraryComponents,
+  getLibraryComponentPreview,
+  approveLibraryComponent,
+  rejectLibraryComponent,
+  deleteLibraryComponent,
+} = require("../controllers/libraryComponentController");
 const { protect } = require("../middleware/authMiddleware");
 const { requireAdmin } = require("../middleware/requireAdmin");
 
@@ -42,6 +49,14 @@ router.put("/pricing-config", updateAdminPricingConfig);
 
 router.get("/maintenance", getAdminMaintenanceConfig);
 router.put("/maintenance", updateAdminMaintenanceConfig);
+
+// Global reusable-component library — review/approve "as we go" candidates
+// proposed by real lesson generation (see services/globalComponentLibrary.js).
+router.get("/library-components", listLibraryComponents);
+router.get("/library-components/:id/preview", getLibraryComponentPreview);
+router.post("/library-components/:id/approve", approveLibraryComponent);
+router.post("/library-components/:id/reject", rejectLibraryComponent);
+router.delete("/library-components/:id", deleteLibraryComponent);
 
 module.exports = router;
 
