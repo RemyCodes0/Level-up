@@ -105,6 +105,82 @@ function extractDeclaration(code, name, searchFrom) {
   return code.slice(declStart, codeEnd).trim();
 }
 
+// Mechanically derives a human-readable propsDoc string (e.g.
+// "{ cx, cy, radius, color, label }") straight from a component's OWN
+// destructured parameter list — no model involvement, unlike the pre-seed
+// script's hand-written propsDoc. This can never drift out of sync with the
+// real code the way an LLM-written description could, and costs zero extra
+// prompt/token budget (the ad-hoc @reusable/@example marker convention
+// never asked the model for one at all — this is what backfills it).
+// Deliberately conservative: only handles the destructured-object shape
+// every real component here actually uses (`({ a, b, c })`); anything else
+// (a bare `props` identifier, no params) returns "" — the SAME "no props
+// shown" state as before this existed, not a guess. A missing propsDoc is
+// harmless (buildLibraryCatalogBlock already renders fine without one); a
+// WRONG one would actively mislead a future lesson into calling the
+// component with the wrong prop names, which is worse than showing nothing.
+function derivePropsDoc(code, name) {
+  try {
+    const declRe = new RegExp(`(?:function\\s+${name}\\s*\\(|const\\s+${name}\\s*=\\s*)`);
+    const m = code.match(declRe);
+    if (!m) return "";
+    const afterDecl = m.index + m[0].length;
+
+    // function-form regex already consumed the opening "(" itself; the
+    // const-arrow form stops right before it.
+    const parenStart = code[afterDecl - 1] === "(" ? afterDecl - 1 : code.indexOf("(", afterDecl);
+    if (parenStart === -1) return "";
+
+    let depth = 0;
+    let parenEnd = -1;
+    for (let i = parenStart; i < code.length; i++) {
+      if (code[i] === "(") depth++;
+      else if (code[i] === ")") { depth--; if (depth === 0) { parenEnd = i; break; } }
+    }
+    if (parenEnd === -1) return "";
+    const params = code.slice(parenStart + 1, parenEnd);
+
+    // Only the destructured-object shape has individual names to list — the
+    // FIRST "{" inside the parameter list is that pattern (a TS type
+    // annotation, if any, comes AFTER it and is ignored entirely, never
+    // parsed for prop names).
+    const objStart = params.indexOf("{");
+    if (objStart === -1) return "";
+    let braceDepth = 0;
+    let objEnd = -1;
+    for (let i = objStart; i < params.length; i++) {
+      if (params[i] === "{") braceDepth++;
+      else if (params[i] === "}") { braceDepth--; if (braceDepth === 0) { objEnd = i; break; } }
+    }
+    if (objEnd === -1) return "";
+    const inner = params.slice(objStart + 1, objEnd);
+
+    // Split on top-level commas only — depth-tracked so a default value
+    // like `area = { x: 0, y: 0 }` doesn't get split apart mid-object.
+    const segments = [];
+    let current = "";
+    let d = 0;
+    for (const ch of inner) {
+      if ("{[(".includes(ch)) d++;
+      else if ("}])".includes(ch)) d--;
+      if (ch === "," && d === 0) { segments.push(current); current = ""; }
+      else current += ch;
+    }
+    if (current.trim()) segments.push(current);
+
+    // Each segment is `name`, `name = default`, or `name: renamedLocal` —
+    // the prop's PUBLIC name (what a caller passes) is always the part
+    // before either "=" or ":".
+    const propNames = segments
+      .map((s) => s.split(":")[0].split("=")[0].trim())
+      .filter(Boolean);
+
+    return propNames.length ? `{ ${propNames.join(", ")} }` : "";
+  } catch {
+    return "";
+  }
+}
+
 // Pulls every `// @reusable: Name — description` / `// @example: <JSX/>`
 // pair out of a validated header, paired with the actual declaration that
 // follows each one. A marker with no matching declaration right after it
@@ -119,7 +195,7 @@ function extractReusableCandidates(headerCode) {
     const [, name, description, example] = m;
     const code = extractDeclaration(headerCode, name, REUSABLE_MARKER_RE.lastIndex);
     if (!code) continue;
-    results.push({ name, description: description.trim(), example: example.trim(), code });
+    results.push({ name, description: description.trim(), example: example.trim(), code, propsDoc: derivePropsDoc(code, name) });
   }
   return results;
 }
@@ -171,6 +247,7 @@ async function saveCandidates(candidates, { courseId = null, lessonNumber = null
       await LibraryComponent.create({
         name: c.name,
         description: c.description,
+        propsDoc: c.propsDoc || "",
         code: c.code,
         example: c.example,
         status: "candidate",
