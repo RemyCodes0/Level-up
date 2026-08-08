@@ -31,6 +31,36 @@ exports.listLibraryComponents = async (req, res) => {
   }
 };
 
+// GET /api/admin/library-components/stats
+// Answers "is the library actually being leaned on, or is nearly
+// everything still novel?" — a reuse rate computed from data that's
+// already being recorded (usageCount, sourceCourseId), with NO new writes
+// anywhere: totalReuses is every lesson-call to an already-existing
+// component (usageCount is incremented once per lesson that calls one —
+// see trackUsage in globalComponentLibrary.js); totalProposed is every
+// DISTINCT component ever born from real generation (sourceCourseId set —
+// excludes the hand-written pre-seed, which has sourceCourseId: null),
+// regardless of whether it ended up active/candidate/rejected, since each
+// one represents one moment the system needed something new. The ratio of
+// the two is "growth events" vs "reuse events" — a rising rate over time
+// means the library is increasingly covering what lessons actually need
+// instead of lessons increasingly inventing their own.
+exports.getLibraryStats = async (req, res) => {
+  try {
+    const [usageAgg, totalProposed] = await Promise.all([
+      LibraryComponent.aggregate([{ $group: { _id: null, total: { $sum: "$usageCount" } } }]),
+      LibraryComponent.countDocuments({ sourceCourseId: { $ne: null } }),
+    ]);
+    const totalReuses = usageAgg[0]?.total || 0;
+    const denom = totalReuses + totalProposed;
+    const reuseRatePercent = denom > 0 ? Math.round((totalReuses / denom) * 100) : null;
+    res.json({ totalReuses, totalProposed, reuseRatePercent });
+  } catch (err) {
+    console.error("getLibraryStats error:", err);
+    res.status(500).json({ error: "Failed to load library stats" });
+  }
+};
+
 // GET /api/admin/library-components/:id/preview
 // Returns a complete synthesized "lesson code" string — same shape
 // DynamicPlayer already knows how to compile and play — so the admin page

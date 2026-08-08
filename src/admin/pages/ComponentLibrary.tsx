@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Check, X, Trash2, RotateCcw, Loader2, Repeat, Sparkles, Code2 } from "lucide-react";
+import { Check, X, Trash2, RotateCcw, Loader2, Repeat, Sparkles, Code2, Percent } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, Pagination, fmtDate } from "../components";
+import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, Pagination, StatCard, fmtDate } from "../components";
 import { DynamicPlayer } from "../../remotion/DynamicPlayer";
 
 // A "shadcn-style" browsable gallery for the global reusable-component
@@ -42,6 +42,7 @@ export default function ComponentLibrary() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState<{ totalReuses: number; totalProposed: number; reuseRatePercent: number | null } | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -71,6 +72,19 @@ export default function ComponentLibrary() {
         .catch(() => {});
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reuse rate: "growth events" (distinct new components ever proposed by
+  // real generation) vs "reuse events" (usageCount — a lesson calling an
+  // already-existing component). Computed entirely server-side from data
+  // already being recorded, no new tracking anywhere — see the backend
+  // comment on getLibraryStats. Fetched once; approve/reject don't change
+  // either number, only new course generations do.
+  useEffect(() => {
+    adminApi
+      .get<{ totalReuses: number; totalProposed: number; reuseRatePercent: number | null }>("/api/admin/library-components/stats")
+      .then(setStats)
+      .catch(() => {});
   }, []);
 
   const refreshAfterAction = () => {
@@ -109,6 +123,32 @@ export default function ComponentLibrary() {
           </div>
         }
       />
+
+      {stats && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <StatCard
+            icon={<Repeat className="h-5 w-5" />}
+            label="Total Reuses"
+            value={stats.totalReuses}
+            sub="lesson calls to an existing component"
+            accent="text-emerald-500"
+          />
+          <StatCard
+            icon={<Sparkles className="h-5 w-5" />}
+            label="New Components"
+            value={stats.totalProposed}
+            sub="distinct pieces ever proposed by real lessons"
+            accent="text-indigo-500"
+          />
+          <StatCard
+            icon={<Percent className="h-5 w-5" />}
+            label="Reuse Rate"
+            value={stats.reuseRatePercent === null ? "—" : `${stats.reuseRatePercent}%`}
+            sub="reuse events vs. new-component events"
+            accent="text-amber-500"
+          />
+        </div>
+      )}
 
       {loading ? (
         <LoadingBlock />

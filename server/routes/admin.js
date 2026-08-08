@@ -20,6 +20,7 @@ const {
 } = require("../controllers/maintenanceController");
 const {
   listLibraryComponents,
+  getLibraryStats,
   getLibraryComponentPreview,
   approveLibraryComponent,
   rejectLibraryComponent,
@@ -53,6 +54,7 @@ router.put("/maintenance", updateAdminMaintenanceConfig);
 // Global reusable-component library — review/approve "as we go" candidates
 // proposed by real lesson generation (see services/globalComponentLibrary.js).
 router.get("/library-components", listLibraryComponents);
+router.get("/library-components/stats", getLibraryStats);
 router.get("/library-components/:id/preview", getLibraryComponentPreview);
 router.post("/library-components/:id/approve", approveLibraryComponent);
 router.post("/library-components/:id/reject", rejectLibraryComponent);
