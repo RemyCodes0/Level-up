@@ -7,6 +7,7 @@ const {
   generateLessonCode,
   generateLessonHeader,
   generateCourseComponents,
+  COMPONENT_LIBRARY_ENABLED,
   generateNextCourseSuggestions,
   patchSceneFromRuntimeError,
   patchHeaderFromRuntimeError,
@@ -583,7 +584,7 @@ async function processCourse(
     // very first header-generation call, not sometime after they've already
     // started. Non-fatal internally (see its own try/catch) — this never
     // throws, so no try/catch needed here.
-    console.log(`[${courseId}] Course-level component planning...`);
+    if (COMPONENT_LIBRARY_ENABLED) console.log(`[${courseId}] Course-level component planning...`);
     await generateCourseComponents(topic, lessons, { userId, courseId });
 
     // Build all of this course's lessons one at a time, regardless of trial

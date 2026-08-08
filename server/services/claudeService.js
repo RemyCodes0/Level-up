@@ -17,6 +17,18 @@ const { reviewGeneratedCode } = require("./codeCriticService");
 const { createLimiter } = require("../utils/concurrencyLimiter");
 const { recordAiUsage } = require("./aiUsageService");
 
+// Disconnects the global reusable-component library from generation — the
+// model sees no catalog, no "AVAILABLE LIBRARY COMPONENTS" list, and none of
+// the REUSABLE COMPONENT LIBRARY prompt sections (decompose-into-named-
+// pieces, mark-by-default), so its code comes out exactly as it did before
+// that feature existed. Deliberately NOT a removal: every piece of the
+// feature (globalComponentLibrary.js, LibraryComponent model, the admin
+// review page, the 56 seeded/approved components already in the DB) is
+// left completely intact — this is the one flag that decides whether
+// generation ever CALLS any of it. Flip back to "true" (no code changes
+// needed anywhere else) to reconnect everything at once.
+const COMPONENT_LIBRARY_ENABLED = process.env.COMPONENT_LIBRARY_ENABLED === "true";
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CLIENTS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1041,6 +1053,31 @@ Rules:
 // it can copy a shared graph/array/dataset by exact name instead of
 // re-deriving it — the same pattern that emerged naturally in testing.
 
+// Extracted into its own constant (rather than inline in LESSON_HEADER_RULES)
+// specifically so COMPONENT_LIBRARY_ENABLED can omit it entirely — when
+// disabled, the header prompt never mentions the library at all, matching
+// this codebase's pre-component-library behavior byte-for-byte, not just an
+// empty catalog with these instructions still shaping how code gets written.
+const LESSON_HEADER_REUSABLE_SECTION = `
+REUSABLE COMPONENT LIBRARY (grown from real lessons, not hand-written, human-reviewed before reuse): a catalog of already-built, admin-approved components may be listed below, under "AVAILABLE LIBRARY COMPONENTS" — these are ALREADY IN SCOPE, do not redeclare or reimport them, just call them directly by name (e.g. <Gear radius={80} teeth={12} color={PALETTE.accent} cx={960} cy={540} />) exactly like you would call Backdrop or Label. Check that list FIRST — if one fits what this lesson needs, use it instead of building your own.
+  • Only mark an actual VISUAL COMPONENT (something that renders JSX and could be called as <Name .../> in a scene) — never PALETTE, CLAMP, SAFE, ZONES, clampPos, SVG_FRAME, or any other plain data/config const. Those already exist everywhere by contract and marking one is always rejected — it's not a component, there's nothing to preview or call.
+  • For every OTHER shared helper you declare here that isn't just a trivial one-line wrapper — mark it for the library BY DEFAULT, not only ones you personally judge to be obviously reusable elsewhere. A human reviews every proposal on an admin page (with a live animated preview) before it's ever offered to another lesson — nothing you mark becomes visible to anyone else automatically — so your job is to PROPOSE, not to pre-filter. Write exactly these two comment lines immediately above its declaration:
+      // @reusable: ComponentName — one-line description of what it does and when to use it
+      // @example: <ComponentName someProp={123} otherProp={PALETTE.accent} .../>
+    The @example line must be valid, working JSX using ONLY props that component actually accepts, since it's used verbatim to preview the component later — get it right.
+  • Skip marking ONLY when a helper hard-codes THIS lesson's specific facts/numbers/labels directly in its own body instead of taking them as props (genuinely can't be reused as-is) — everything else, mark it. A marked component is validated in COMPLETE ISOLATION — anything it depends on beyond its own props and PALETTE.bg/.accent/.text/CLAMP/SAFE/ZONES/clampPos/SVG_FRAME gets it silently rejected before a human ever sees it. THREE real, repeat mistakes, all confirmed from real rejected components — check for every one of these before marking:
+      (1) ANY outer-scope value — not just a lookup const, a plain number/string too (spacing, a count, a start position). Take it as a prop instead:
+            WRONG: const strandSpacing = 40; function Rung({ x, y }) { /* uses strandSpacing */ }
+            RIGHT: function Rung({ x, y, spacing }) { /* uses spacing */ }
+      (2) Reading the enclosing scope's own frame variable instead of calling useCurrentFrame() itself:
+            WRONG: function Pulse({ cx, cy }) { const r = 10 + Math.sin(frame / 10) * 4; ... }
+            RIGHT: function Pulse({ cx, cy }) { const frame = useCurrentFrame(); const r = 10 + Math.sin(frame / 10) * 4; ... }
+      (3) A shared lookup const declared OUTSIDE the component (e.g. a color-by-category map) — resolve it to a prop, or copy a small local version INSIDE the component's own body:
+            WRONG: const BASE_COLORS = { A: "...", T: "..." }; function Nt({ base }) { return <circle fill={BASE_COLORS[base]} />; }
+            RIGHT: function Nt({ base, color }) { return <circle fill={color} />; }
+    (4) If it renders SVG primitives, it MUST return its own <svg style={SVG_FRAME}>...</svg> root — a bare <g>/<path> as the top-level return is invisible (and rejected) the instant it's used outside an <svg> ancestor, which reuse elsewhere constantly does.
+`;
+
 const LESSON_HEADER_RULES = `
 ⚠️ OUTPUT FORMAT: Respond with ONLY raw TypeScript/TSX code. No prose, no explanation, no markdown fences. The FIRST character of your response must be "i" (from "import"). Anything else fails the build and the user loses their course. CODE ONLY.
 
@@ -1092,26 +1129,8 @@ SHARED TEXT + FRAMING HELPERS:
   • Panel({ children, width, height }) OR Glow({ color, size }) — pick whichever suits the subject better.
 
 CODE QUALITY: Inline styles only (no Tailwind, no className for styling, no external CSS). No registerRoot, no Composition, no export. Never leave a "TODO" — every const/component you declare must be complete, working code a scene could use immediately.
-
-REUSABLE COMPONENT LIBRARY (grown from real lessons, not hand-written, human-reviewed before reuse): a catalog of already-built, admin-approved components may be listed below, under "AVAILABLE LIBRARY COMPONENTS" — these are ALREADY IN SCOPE, do not redeclare or reimport them, just call them directly by name (e.g. <Gear radius={80} teeth={12} color={PALETTE.accent} cx={960} cy={540} />) exactly like you would call Backdrop or Label. Check that list FIRST — if one fits what this lesson needs, use it instead of building your own.
-  • Only mark an actual VISUAL COMPONENT (something that renders JSX and could be called as <Name .../> in a scene) — never PALETTE, CLAMP, SAFE, ZONES, clampPos, SVG_FRAME, or any other plain data/config const. Those already exist everywhere by contract and marking one is always rejected — it's not a component, there's nothing to preview or call.
-  • For every OTHER shared helper you declare here that isn't just a trivial one-line wrapper — mark it for the library BY DEFAULT, not only ones you personally judge to be obviously reusable elsewhere. A human reviews every proposal on an admin page (with a live animated preview) before it's ever offered to another lesson — nothing you mark becomes visible to anyone else automatically — so your job is to PROPOSE, not to pre-filter. Write exactly these two comment lines immediately above its declaration:
-      // @reusable: ComponentName — one-line description of what it does and when to use it
-      // @example: <ComponentName someProp={123} otherProp={PALETTE.accent} .../>
-    The @example line must be valid, working JSX using ONLY props that component actually accepts, since it's used verbatim to preview the component later — get it right.
-  • Skip marking ONLY when a helper hard-codes THIS lesson's specific facts/numbers/labels directly in its own body instead of taking them as props (genuinely can't be reused as-is) — everything else, mark it. A marked component is validated in COMPLETE ISOLATION — anything it depends on beyond its own props and PALETTE.bg/.accent/.text/CLAMP/SAFE/ZONES/clampPos/SVG_FRAME gets it silently rejected before a human ever sees it. THREE real, repeat mistakes, all confirmed from real rejected components — check for every one of these before marking:
-      (1) ANY outer-scope value — not just a lookup const, a plain number/string too (spacing, a count, a start position). Take it as a prop instead:
-            WRONG: const strandSpacing = 40; function Rung({ x, y }) { /* uses strandSpacing */ }
-            RIGHT: function Rung({ x, y, spacing }) { /* uses spacing */ }
-      (2) Reading the enclosing scope's own frame variable instead of calling useCurrentFrame() itself:
-            WRONG: function Pulse({ cx, cy }) { const r = 10 + Math.sin(frame / 10) * 4; ... }
-            RIGHT: function Pulse({ cx, cy }) { const frame = useCurrentFrame(); const r = 10 + Math.sin(frame / 10) * 4; ... }
-      (3) A shared lookup const declared OUTSIDE the component (e.g. a color-by-category map) — resolve it to a prop, or copy a small local version INSIDE the component's own body:
-            WRONG: const BASE_COLORS = { A: "...", T: "..." }; function Nt({ base }) { return <circle fill={BASE_COLORS[base]} />; }
-            RIGHT: function Nt({ base, color }) { return <circle fill={color} />; }
-    (4) If it renders SVG primitives, it MUST return its own <svg style={SVG_FRAME}>...</svg> root — a bare <g>/<path> as the top-level return is invisible (and rejected) the instant it's used outside an <svg> ancestor, which reuse elsewhere constantly does.
-
-Begin with imports, then CLAMP/FRAME/SAFE/clampPos/ZONES (verbatim), then your palette const, then your shared helper components (checking the library catalog first). Your entire response is the code file, first characters "import", no text or fences around it.
+${COMPONENT_LIBRARY_ENABLED ? LESSON_HEADER_REUSABLE_SECTION : ""}
+Begin with imports, then CLAMP/FRAME/SAFE/clampPos/ZONES (verbatim), then your palette const, then your shared helper components${COMPONENT_LIBRARY_ENABLED ? " (checking the library catalog first)" : ""}. Your entire response is the code file, first characters "import", no text or fences around it.
 `;
 
 // Renders the active-component catalog (see globalComponentLibrary's own
@@ -1153,37 +1172,11 @@ ${sceneTable}
 `;
 }
 
-const LESSON_CHUNK_RULES = `
-⚠️ OUTPUT FORMAT: Respond with ONLY raw TypeScript/TSX code. No prose, no explanation, no markdown fences. The FIRST character of your response must be "f" (from "function"). Anything else fails the build and the user loses their course. CODE ONLY.
-
-You are a world-class Remotion motion-graphics developer writing a GROUP of scenes for a visually astonishing educational lesson. This is a premium learning product — every scene must feel alive, dynamic, and visually connected to the concept being taught. The HEADER CODE below (already generated) has this lesson's imports, palette, and shared helper components declared and in scope — reference those exact names; never redeclare, reimport, or rename them. Other chunks of this same lesson are being written IN PARALLEL, right now, by separate calls that cannot see each other's output — you will NOT be shown any other chunk's actual code, only the SPEC (not code) of the lesson's other scenes, for context. Never assume a name from another chunk is in scope; the only names available to you are the header's and your own.
-
-STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
-1. Write EXACTLY one top-level declaration per scene: function SceneN() { ... }, using the EXACT names given to you (these are ABSOLUTE scene numbers for the whole lesson, not counted from 1 within your group) — no parameters, no props. A local helper used by only ONE scene must be a function NESTED inside that scene's own function — never a second top-level declaration (it would collide with another scene). The one exception is rule 1a below.
-1a. If two of YOUR OWN scenes in this chunk need a piece of DATA that must stay identical between them (a specific graph, a specific array, a specific dataset — see CROSS-SCENE DATA CONSISTENCY below), declare it as its OWN top-level const, a sibling to your scene functions, NOT nested inside one — a const declared inside a function only exists inside that function. This only helps within THIS chunk — a scene in another chunk cannot see it (chunks run in parallel, not in sequence).
-2. Do NOT write ANY import statement. Everything you need is already imported/declared by the header below and in scope for you.
-   From "react": ONLY useMemo, useCallback, useRef exist. useState DOES NOT EXIST here and crashes the video.
-3. NO external/dynamic data. Every identifier must be locally declared (inside your function, or top-level per rule 1a) or a listed remotion/react export, or something declared in the header code below. Never reference a name you'd expect another chunk to declare — it will not exist.
-   • NEVER shadow a JS built-in (Math, Array, Object, String, Number, Date, JSON, Boolean, Map, Set).
-   • ⚠️ Do NOT invent an additional header-level helper name that ISN'T actually in the HEADER CODE shown to you below — a plausible-sounding name like GroundLine, LabelTextWithPointer, LayerTag, or PartLegend is not automatically real just because it fits this scene's visual. The header exports EXACTLY what you can see in it, nothing more. If you need a labeled line, a pointer callout, a tag, or a legend and the header doesn't already provide it, build it yourself as a helper NESTED inside your own scene function (per rule 1) — this exact mistake (assuming an uncalled-for header helper exists) is a repeat cause of failed generations.
-4. Do NOT render <Series>, <Series.Sequence>, or <Audio> — your scenes are combined with the header and every other chunk into those wrappers by other code after you return your functions.
-5. EACH SCENE'S DURATION is given to you as a literal number. Hardcode that literal directly in your interpolate() calls for pacing — do not read it from a variable, it does not exist in scope.
-6. FRAME NUMBERS ARE PER-SCENE. useCurrentFrame() resets to 0 at the start of EACH of your scenes — never offset a timing as if another scene's duration applies. Entrances live near [0, 30]; exits near [thisSceneDuration - 30, thisSceneDuration], written as literals of THAT scene's own duration.
-7. Aim for roughly 300-400 lines PER SCENE — rich, detailed animation, but concise: every extra line is extra generation time. Extract any local helper once near the top of that scene's function and reuse it within that scene.
-
-CROSS-SCENE DATA CONSISTENCY — chunks generate IN PARALLEL now, so you cannot copy another chunk's exact code byte-for-byte the way you could in the old sequential pipeline. FIRST check the HEADER CODE below: if your scene is part of a worked example that spans multiple scenes (an algorithm walkthrough, a sort/search trace, a running numeric example), the header may have ALREADY declared that example's exact data as a named top-level const (e.g. DIJKSTRA_GRAPH, SORT_ARRAY) specifically so every scene uses the identical example — if it's there, you MUST reference it by that exact name, never redeclare or invent your own version. Only if the header did NOT declare it (the example wasn't flagged as shared, or you're genuinely the only scene using it) do you fall back to independently building the SAME canonical version of that example from the shared subject matter — the standard/obvious textbook instance of it, not an arbitrary one you invent — so two independent derivations are likely to land on the same values even without seeing each other's code. Within YOUR OWN chunk, scenes CAN and should share exact values via rule 1a.
-
-ANIMATION QUALITY — THE MOST CRITICAL REQUIREMENT. A boring animation is a failed animation.
-8. CONTINUOUS MOTION IS NON-NEGOTIABLE. At frame 0, things move. At the midpoint, things move. At the final frame, things move. Use Math.sin(frame/k), Math.cos(frame/k), and (frame*speed)%360 to guarantee perpetual motion on every element.
-9. ILLUSTRATE THE EXACT CONCEPT — not generic particles. Each scene is given its mechanism (the state it starts in, the state it ends in, the visible action that drives that change) — build exactly that transformation. The animation must make the concept VISIBLE without reading the text.
-10. THREE MANDATORY LAYERS in every scene, anchored to the header's fixed ZONES (never hand-picked coordinates):
-   - Layer 1 (background): the header's Backdrop component (that exact name) as the base layer.
-   - Layer 2 (concept): the main animated diagram, footprint centered/sized to fit inside ZONES.stage — generous, not a cage, never drifting into title/caption. The star of the scene.
-   - Layer 3 (text): on-screen text inside ZONES.caption (and a title inside ZONES.title if this scene has one), springing or fading in, never overlapping Layer 2.
-11. RICHNESS — every scene needs at least: 3+ animated elements, one spring() entrance, one continuous Math.sin/cos motion, glow effects (boxShadow with a palette color), and its onScreenText appearing with a stagger. ENFORCED: a scene that's only a title over a plain background, with no Layer-2 diagram, WILL be rejected.
-
-VISUAL CONTINUITY: reuse the header's palette/motif/helpers/ZONES by NAME — never invent your own colors or redeclare a name already declared. Render text through the header's Label helper, not a hand-styled <div>.
-
+// Same reasoning as LESSON_HEADER_REUSABLE_SECTION above — extracted so
+// COMPONENT_LIBRARY_ENABLED can omit it entirely rather than leave the
+// decompose/mark-by-default instructions shaping scene structure even with
+// an empty catalog.
+const LESSON_CHUNK_REUSABLE_SECTION = `
 REUSABLE COMPONENT LIBRARY (grown from real lessons, human-reviewed before reuse): if the header code above already lists components under "AVAILABLE LIBRARY COMPONENTS", or declares AnimatedGraph/AnimatedArray, check those first and call one directly if it fits instead of hand-building the same thing again.
   • DECOMPOSE Layer 2 into named pieces, not one undifferentiated blob. For every visually distinct element you draw (a shape, an icon, a mechanism, a labeled marker, an animated indicator — anything beyond a single primitive line/rect/text) — build it as its OWN function, NESTED inside your scene function per rule 1 (this does not change where you declare it — still local to your scene, never a second top-level declaration). Same discipline you'd use in any real codebase: one named piece per distinct visual idea, not everything inlined together.
   • MARK EVERY SUCH PIECE by default — not only ones you personally judge to be obviously reusable elsewhere. A human reviews every proposal on an admin page (with a live animated preview) before it's ever offered to another lesson — nothing you mark becomes visible to anyone else automatically — so your job is to PROPOSE liberally, not to pre-filter. Write exactly these two comment lines immediately above each piece's declaration:
@@ -1201,7 +1194,39 @@ REUSABLE COMPONENT LIBRARY (grown from real lessons, human-reviewed before reuse
             RIGHT: function Nt({ base, color }) { return <circle fill={color} />; }
     (4) If it renders SVG primitives, it MUST return its own <svg style={SVG_FRAME}>...</svg> root — a bare <g>/<path> as the top-level return is invisible (and rejected) the instant it's used outside an <svg> ancestor, which reuse elsewhere constantly does.
   • Skip marking ONLY a single trivial primitive with no meaningful structure, or a piece that hard-codes THIS lesson's specific facts/numbers/labels directly in its own body instead of taking them as props (genuinely can't be reused as-is). Everything else: build it as its own piece and mark it. The @example line must be valid, working JSX using only props that component actually accepts.
+`;
 
+const LESSON_CHUNK_RULES = `
+⚠️ OUTPUT FORMAT: Respond with ONLY raw TypeScript/TSX code. No prose, no explanation, no markdown fences. The FIRST character of your response must be "f" (from "function"). Anything else fails the build and the user loses their course. CODE ONLY.
+
+You are a world-class Remotion motion-graphics developer writing a GROUP of scenes for a visually astonishing educational lesson. This is a premium learning product — every scene must feel alive, dynamic, and visually connected to the concept being taught. The HEADER CODE below (already generated) has this lesson's imports, palette, and shared helper components declared and in scope — reference those exact names; never redeclare, reimport, or rename them. Other chunks of this same lesson are being written IN PARALLEL, right now, by separate calls that cannot see each other's output — you will NOT be shown any other chunk's actual code, only the SPEC (not code) of the lesson's other scenes, for context. Never assume a name from another chunk is in scope; the only names available to you are the header's and your own.
+
+STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
+1. Write EXACTLY one top-level declaration per scene: function SceneN() { ... }, using the EXACT names given to you (these are ABSOLUTE scene numbers for the whole lesson, not counted from 1 within your group) — no parameters, no props. A local helper used by only ONE scene must be a function NESTED inside that scene's own function — never a second top-level declaration (it would collide with another scene). The one exception is rule 1a below.
+1a. If two of YOUR OWN scenes in this chunk need a piece of DATA that must stay identical between them (a specific graph, a specific array, a specific dataset — see CROSS-SCENE DATA CONSISTENCY below), declare it as its OWN top-level const, a sibling to your scene functions, NOT nested inside one — a const declared inside a function only exists inside that function. This only helps within THIS chunk — a scene in another chunk cannot see it (chunks run in parallel, not in sequence).
+2. Do NOT write ANY import statement. Everything you need is already imported/declared by the header below and in scope for you.
+   From "react": ONLY useMemo, useCallback, useRef exist. useState DOES NOT EXIST here and crashes the video.
+3. NO external/dynamic data. Every identifier must be locally declared (inside your function, or top-level per rule 1a) or a listed remotion/react export, or something declared in the header code below. Never reference a name you'd expect another chunk to declare — it will not exist.
+   • NEVER shadow a JS built-in (Math, Array, Object, String, Number, Date, JSON, Boolean, Map, Set).
+   • ⚠️ Do NOT invent an additional header-level helper name that ISN'T actually in the HEADER CODE shown to you below — a plausible-sounding name like GroundLine, LabelTextWithPointer, LayerTag, or PartLegend is not automatically real just because it fits this scene's visual. The header exports EXACTLY what you can see in it, nothing more. If you need a labeled line, a pointer callout, a tag, or a legend and the header doesn't already provide it, build it yourself as a helper NESTED inside your own scene function (per rule 1) — this exact mistake (assuming an uncalled-for header helper exists) is a repeat cause of failed generations.
+4. Do NOT render <Series>, <Series.Sequence>, or <Audio> — your scenes are combined with the header and every other chunk into those wrappers by other code after you return your functions.
+5. EACH SCENE'S DURATION is given to you as a literal number. Hardcode that literal directly in your interpolate() calls for pacing — do not read it from a variable, it does not exist in scope.
+6. FRAME NUMBERS ARE PER-SCENE. useCurrentFrame() resets to 0 at the start of EACH of your scenes — never offset a timing as if another scene's duration applies. Entrances live near [0, 30]; exits near [thisSceneDuration - 30, thisSceneDuration], written as literals of THAT scene's own duration.
+7. Aim for roughly 100-200 lines PER SCENE — rich, detailed animation, but concise: every extra line is extra generation time. Extract any local helper once near the top of that scene's function and reuse it within that scene.
+
+CROSS-SCENE DATA CONSISTENCY — chunks generate IN PARALLEL now, so you cannot copy another chunk's exact code byte-for-byte the way you could in the old sequential pipeline. FIRST check the HEADER CODE below: if your scene is part of a worked example that spans multiple scenes (an algorithm walkthrough, a sort/search trace, a running numeric example), the header may have ALREADY declared that example's exact data as a named top-level const (e.g. DIJKSTRA_GRAPH, SORT_ARRAY) specifically so every scene uses the identical example — if it's there, you MUST reference it by that exact name, never redeclare or invent your own version. Only if the header did NOT declare it (the example wasn't flagged as shared, or you're genuinely the only scene using it) do you fall back to independently building the SAME canonical version of that example from the shared subject matter — the standard/obvious textbook instance of it, not an arbitrary one you invent — so two independent derivations are likely to land on the same values even without seeing each other's code. Within YOUR OWN chunk, scenes CAN and should share exact values via rule 1a.
+
+ANIMATION QUALITY — THE MOST CRITICAL REQUIREMENT. A boring animation is a failed animation.
+8. CONTINUOUS MOTION IS NON-NEGOTIABLE. At frame 0, things move. At the midpoint, things move. At the final frame, things move. Use Math.sin(frame/k), Math.cos(frame/k), and (frame*speed)%360 to guarantee perpetual motion on every element.
+9. ILLUSTRATE THE EXACT CONCEPT — not generic particles. Each scene is given its mechanism (the state it starts in, the state it ends in, the visible action that drives that change) — build exactly that transformation. The animation must make the concept VISIBLE without reading the text.
+10. THREE MANDATORY LAYERS in every scene, anchored to the header's fixed ZONES (never hand-picked coordinates):
+   - Layer 1 (background): the header's Backdrop component (that exact name) as the base layer.
+   - Layer 2 (concept): the main animated diagram, footprint centered/sized to fit inside ZONES.stage — generous, not a cage, never drifting into title/caption. The star of the scene.
+   - Layer 3 (text): on-screen text inside ZONES.caption (and a title inside ZONES.title if this scene has one), springing or fading in, never overlapping Layer 2.
+11. RICHNESS — every scene needs at least: 3+ animated elements, one spring() entrance, one continuous Math.sin/cos motion, glow effects (boxShadow with a palette color), and its onScreenText appearing with a stagger. ENFORCED: a scene that's only a title over a plain background, with no Layer-2 diagram, WILL be rejected.
+
+VISUAL CONTINUITY: reuse the header's palette/motif/helpers/ZONES by NAME — never invent your own colors or redeclare a name already declared. Render text through the header's Label helper, not a hand-styled <div>.
+${COMPONENT_LIBRARY_ENABLED ? LESSON_CHUNK_REUSABLE_SECTION : ""}
 PREBUILT COMPONENTS — the header/library code below also already declares AnimatedGraph({nodes,edges,activeNodes,highlightEdges,area}) and AnimatedArray({values,highlightIndices,area}) (hand-built, tested, not something you write). If a scene's domainSkill is "algorithm-trace" — a graph/tree/network being traversed, or an array/list being sorted/searched/manipulated — STRONGLY PREFER calling one of these with data instead of hand-writing the diagram's SVG yourself: pass nodes/edges (or values/highlightIndices) as plain data objects/arrays, using each entry's revealAt (a frame number) to stage when it appears. If the header declared a shared example const for this exact algorithm/dataset (see CROSS-SCENE DATA CONSISTENCY above), pass ITS nodes/edges/values into AnimatedGraph/AnimatedArray — don't invent a parallel, different dataset just because you're also free to pass "plain data objects". Do not redeclare AnimatedGraph/AnimatedArray, and do not hand-roll an equivalent from raw <svg> when one of these already fits — that's exactly the free-form code this exists to replace. For scenes that don't fit either shape, build Layer 2 by hand as usual.
 
 INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
@@ -1785,6 +1810,12 @@ ${buildLibraryCatalogBlock(catalog)}`;
 }
 
 async function generateCourseComponents(topic, lessons, { userId = null, courseId = null } = {}) {
+  // Gated INSIDE the function itself, not just at its one known call site
+  // (courseController.js's processCourse) — so it's a true no-op regardless
+  // of what calls it, now or in the future, while COMPONENT_LIBRARY_ENABLED
+  // stays false.
+  if (!COMPONENT_LIBRARY_ENABLED) return;
+
   const label = `course-components ${courseId || "?"}`;
   const sessionId = courseId ? `course-components-${courseId}` : null;
 
@@ -1878,10 +1909,12 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = HEADER_MAX_ATT
   // or reserved this time, not a broken generation.
   let libraryCatalog = [];
   let libraryNames = [];
-  try {
-    [libraryCatalog, libraryNames] = await Promise.all([getActiveCatalog(courseId), getActiveNames(courseId)]);
-  } catch (err) {
-    console.warn(`[globalComponentLibrary] Failed to load catalog for ${label} (non-fatal, continuing without it): ${err.message}`);
+  if (COMPONENT_LIBRARY_ENABLED) {
+    try {
+      [libraryCatalog, libraryNames] = await Promise.all([getActiveCatalog(courseId), getActiveNames(courseId)]);
+    } catch (err) {
+      console.warn(`[globalComponentLibrary] Failed to load catalog for ${label} (non-fatal, continuing without it): ${err.message}`);
+    }
   }
 
   async function generateFullHeader(feedback) {
@@ -1992,7 +2025,7 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = HEADER_MAX_ATT
       // but there's no reason to pay for it twice.
       const validated = patched ? rawCode : validateHeader(rawCode);
 
-      saveReusableCandidates(validated);
+      if (COMPONENT_LIBRARY_ENABLED) saveReusableCandidates(validated);
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
       logVerbose(`  [${label}] Valid header generated (${validated.length} chars)${patched ? " via targeted patch" : ""} — took ${elapsedSec}s`);
@@ -2624,11 +2657,14 @@ async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, erro
 
   // A patch can still introduce a NEW helper the header didn't have before
   // — reserve active library names here too so it can't collide with one.
+  // Skipped entirely when disconnected (see COMPONENT_LIBRARY_ENABLED).
   let libraryNames = [];
-  try {
-    libraryNames = await getActiveNames(courseId);
-  } catch (err) {
-    console.warn(`[globalComponentLibrary] Failed to load names for ${label} (non-fatal): ${err.message}`);
+  if (COMPONENT_LIBRARY_ENABLED) {
+    try {
+      libraryNames = await getActiveNames(courseId);
+    } catch (err) {
+      console.warn(`[globalComponentLibrary] Failed to load names for ${label} (non-fatal): ${err.message}`);
+    }
   }
 
   let lastErr = null;
@@ -2817,16 +2853,23 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       // not the header, so this is where a genuinely-generic one-off (a DNA
       // strand, a particle, an orbit) is actually likely to get proposed.
       // Never delays or fails the chunk: it already validated and is moving
-      // on with or without this succeeding.
-      try {
-        const candidates = extractReusableCandidates(validated);
-        if (candidates.length > 0) {
-          saveCandidates(candidates, { courseId, lessonNumber: lesson.lessonNumber }).catch((err) => {
-            console.warn(`[globalComponentLibrary] Failed to save candidates for ${label} (non-fatal): ${err.message}`);
-          });
+      // on with or without this succeeding. Skipped entirely when the
+      // library is disconnected (see COMPONENT_LIBRARY_ENABLED) — scenes
+      // never get told to mark anything in that mode (LESSON_CHUNK_RULES
+      // omits the whole section), so this would find nothing anyway, but
+      // skipping the call outright avoids the wasted regex pass and any DB
+      // round-trip.
+      if (COMPONENT_LIBRARY_ENABLED) {
+        try {
+          const candidates = extractReusableCandidates(validated);
+          if (candidates.length > 0) {
+            saveCandidates(candidates, { courseId, lessonNumber: lesson.lessonNumber }).catch((err) => {
+              console.warn(`[globalComponentLibrary] Failed to save candidates for ${label} (non-fatal): ${err.message}`);
+            });
+          }
+        } catch (err) {
+          console.warn(`[globalComponentLibrary] Failed to extract candidates for ${label} (non-fatal): ${err.message}`);
         }
-      } catch (err) {
-        console.warn(`[globalComponentLibrary] Failed to extract candidates for ${label} (non-fatal): ${err.message}`);
       }
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
@@ -2924,16 +2967,18 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
   // that permanently fails the lesson. Real, observed: "BaseChip" saved as
   // a candidate for this lesson's course, then "Identifier 'BaseChip' has
   // already been declared" crashed the very same lesson's final attempt.
-  const headerOwnNames = getHeaderExposedNames(generatedHeader);
   let activeLibrarySource = "";
   let activeLibraryNames = [];
-  try {
-    [activeLibrarySource, activeLibraryNames] = await Promise.all([
-      getActiveLibrarySource(courseId, [...headerOwnNames]),
-      getActiveNames(courseId, [...headerOwnNames]),
-    ]);
-  } catch (err) {
-    console.warn(`[globalComponentLibrary] Failed to load active library for L${lesson.lessonNumber} (non-fatal): ${err.message}`);
+  if (COMPONENT_LIBRARY_ENABLED) {
+    const headerOwnNames = getHeaderExposedNames(generatedHeader);
+    try {
+      [activeLibrarySource, activeLibraryNames] = await Promise.all([
+        getActiveLibrarySource(courseId, [...headerOwnNames]),
+        getActiveNames(courseId, [...headerOwnNames]),
+      ]);
+    } catch (err) {
+      console.warn(`[globalComponentLibrary] Failed to load active library for L${lesson.lessonNumber} (non-fatal): ${err.message}`);
+    }
   }
 
   // Append the hand-written component library (never LLM-generated) AND
@@ -3066,10 +3111,15 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
       // One cheap regex pass over the FINAL code, once, fire-and-forget —
       // bumps usageCount only for library components this lesson actually
       // called, not just ones it had available. See globalComponentLibrary's
-      // own comment on why this is deliberately this cheap.
-      trackLibraryUsage(validatedCode, activeLibraryNames).catch((err) => {
-        console.warn(`[globalComponentLibrary] Failed to track usage for L${lesson.lessonNumber} (non-fatal): ${err.message}`);
-      });
+      // own comment on why this is deliberately this cheap. Skipped when
+      // disconnected — activeLibraryNames is always [] in that mode anyway
+      // (trackUsage would no-op on its own empty-names guard), but skipping
+      // the call outright avoids the wasted regex pass entirely.
+      if (COMPONENT_LIBRARY_ENABLED) {
+        trackLibraryUsage(validatedCode, activeLibraryNames).catch((err) => {
+          console.warn(`[globalComponentLibrary] Failed to track usage for L${lesson.lessonNumber} (non-fatal): ${err.message}`);
+        });
+      }
       return { code: validatedCode, totalFrames };
     }
 
@@ -3255,6 +3305,11 @@ module.exports = {
   generateCoursePlan,
   generateCourseQuiz,
   generateLessonCode,
+  // Whether the global reusable-component library is wired into generation
+  // at all — exported so courseController.js can skip logging the course-
+  // component-planning step when it's a guaranteed no-op instead of
+  // printing a misleading "planning..." line for something that never runs.
+  COMPONENT_LIBRARY_ENABLED,
   // Runs once per course, before any lesson starts building — see its own
   // comment for why this can't be folded into per-lesson header generation.
   generateCourseComponents,
