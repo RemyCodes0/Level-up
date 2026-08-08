@@ -11,11 +11,17 @@
 //   2. If the model genuinely needs something new and generic (not tied to
 //      this one lesson's specific facts), it marks it inline with a
 //      `// @reusable:` / `// @example:` comment pair right above the
-//      declaration — the same header, no separate call.
-//   3. After the header validates (same checks as every other header —
-//      nothing new there), extractReusableCandidates pulls out anything
-//      marked and persists it as a "candidate" — NOT yet visible to other
-//      lessons' catalogs.
+//      declaration — in the header (a shared helper) OR nested inside a
+//      scene's own function (a scene-local helper, per LESSON_CHUNK_RULES'
+//      declaration rules) — same marker pair, no separate call either way.
+//      Most of a lesson's actual visual work happens in scenes, not the
+//      header, so this is the path that catches most real candidates.
+//   3. After a header OR a scene chunk validates (same checks as every
+//      other one — nothing new there), extractReusableCandidates pulls out
+//      anything marked and persists it as a "candidate" — NOT yet visible
+//      to other lessons' catalogs. extractDeclaration brace-counts from the
+//      marked declaration regardless of nesting depth, so a scene-nested
+//      helper extracts the same way a top-level header one does.
 //   4. A human approves candidates on the admin Component Library page
 //      (with a live animated preview, built from the model's own
 //      `@example` usage) before they become "active" and start being

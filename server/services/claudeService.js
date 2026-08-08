@@ -1155,6 +1155,13 @@ ANIMATION QUALITY — THE MOST CRITICAL REQUIREMENT. A boring animation is a fai
 
 VISUAL CONTINUITY: reuse the header's palette/motif/helpers/ZONES by NAME — never invent your own colors or redeclare a name already declared. Render text through the header's Label helper, not a hand-styled <div>.
 
+REUSABLE COMPONENT LIBRARY (grown from real lessons): if the header code above already lists components under "AVAILABLE LIBRARY COMPONENTS", or declares AnimatedGraph/AnimatedArray, check those first and call one directly if it fits instead of hand-building the same thing again.
+  • If you build a local helper (nested inside your OWN scene function, per rule 1 — this does not change where you declare it) that is genuinely GENERIC — a shape/mechanism/animated element other lessons on OTHER subjects could plausibly reuse, NOT anything tied to this lesson's specific facts, labels, or data — you may mark it for the library by writing exactly these two comment lines immediately above its declaration:
+      // @reusable: ComponentName — one-line description of what it does and when to use it
+      // @example: <ComponentName someProp={123} otherProp={PALETTE.accent} .../>
+    For a marked component to actually be reusable elsewhere, it MUST be self-contained: call its OWN useCurrentFrame() internally rather than reading the enclosing scene's frame variable, and depend on nothing outside PALETTE.bg/.accent/.text, CLAMP/SAFE/ZONES/clampPos/SVG_FRAME, and its own props — never a variable local to your scene.
+  • Be conservative — most local helpers ARE lesson-specific and should NOT be marked. Reserve this for something you'd genuinely expect a different lesson on a different subject to reuse. The @example line must be valid, working JSX using only props that component actually accepts.
+
 PREBUILT COMPONENTS — the header/library code below also already declares AnimatedGraph({nodes,edges,activeNodes,highlightEdges,area}) and AnimatedArray({values,highlightIndices,area}) (hand-built, tested, not something you write). If a scene's domainSkill is "algorithm-trace" — a graph/tree/network being traversed, or an array/list being sorted/searched/manipulated — STRONGLY PREFER calling one of these with data instead of hand-writing the diagram's SVG yourself: pass nodes/edges (or values/highlightIndices) as plain data objects/arrays, using each entry's revealAt (a frame number) to stage when it appears. If the header declared a shared example const for this exact algorithm/dataset (see CROSS-SCENE DATA CONSISTENCY above), pass ITS nodes/edges/values into AnimatedGraph/AnimatedArray — don't invent a parallel, different dataset just because you're also free to pass "plain data objects". Do not redeclare AnimatedGraph/AnimatedArray, and do not hand-roll an equivalent from raw <svg> when one of these already fits — that's exactly the free-form code this exists to replace. For scenes that don't fit either shape, build Layer 2 by hand as usual.
 
 INTERPOLATE SAFETY — these violations CRASH the video at runtime, no exceptions:
@@ -2434,6 +2441,24 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
 
       lastRawCode = rawCode;
       const validated = validateChunk(rawCode);
+
+      // Same fire-and-forget candidate extraction as generateLessonHeader,
+      // just scoped to scene-local helpers instead of header-level ones —
+      // most of a lesson's actual visual work happens here, in the scenes,
+      // not the header, so this is where a genuinely-generic one-off (a DNA
+      // strand, a particle, an orbit) is actually likely to get proposed.
+      // Never delays or fails the chunk: it already validated and is moving
+      // on with or without this succeeding.
+      try {
+        const candidates = extractReusableCandidates(validated);
+        if (candidates.length > 0) {
+          saveCandidates(candidates, { courseId, lessonNumber: lesson.lessonNumber }).catch((err) => {
+            console.warn(`[globalComponentLibrary] Failed to save candidates for ${label} (non-fatal): ${err.message}`);
+          });
+        }
+      } catch (err) {
+        console.warn(`[globalComponentLibrary] Failed to extract candidates for ${label} (non-fatal): ${err.message}`);
+      }
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
       logVerbose(`  [${label}] Valid code generated (${validated.length} chars)${patched ? " via targeted patch" : ""} — took ${elapsedSec}s`);
