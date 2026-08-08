@@ -43,6 +43,12 @@ const aiUsageLogSchema = new mongoose.Schema(
     // both null for level-assessment, which runs BEFORE a course exists.
     courseId: { type: mongoose.Schema.Types.ObjectId, ref: "Course", default: null, index: true },
     adId: { type: mongoose.Schema.Types.ObjectId, ref: "Ad", default: null },
+    // Set only for calls scoped to ONE lesson (header, chunk, scene-plan,
+    // TTS) — null for course-wide calls (course-plan, course-quiz, course
+    // components) and ad calls. What lets courseController.js sum "the
+    // total cost of THIS lesson" instead of only "this course" — see the
+    // summary logged at the end of buildLesson.
+    lessonNumber: { type: Number, default: null, index: true },
     // Text-generation calls (everything except "tts"):
     promptTokens: { type: Number, default: 0 },
     completionTokens: { type: Number, default: 0 },
@@ -54,6 +60,18 @@ const aiUsageLogSchema = new mongoose.Schema(
     characters: { type: Number, default: 0 },
     estimatedTokens: { type: Number, default: 0 },
     costUsd: { type: Number, required: true },
+    // true = costUsd came straight from the provider's own response
+    // (OpenRouter's usage.cost, requested via `usage: { include: true }` —
+    // see streamOpenAiCompatible/generateJson in claudeService.js) — the
+    // actual dollar amount billed, reflecting whichever provider handled
+    // this specific call and any cache discount actually applied. false =
+    // costUsd fell back to the static config/modelPricing.js table (only
+    // happens for TTS, which the Kokoro API returns no usage/cost data for
+    // at all, and the Anthropic-native direct path, which has no
+    // OpenRouter-style per-call cost field but IS billed at Anthropic's own
+    // fixed published rate — a small but real distinction from a genuine
+    // guess).
+    isRealCost: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

@@ -560,6 +560,11 @@ async function generateJson({ label, maxAttempts, maxTokens, buildMessages, vali
         model: provider.model,
         ...provider.extraParams,
         max_tokens: maxTokens,
+        // Real per-call $ cost in the response's usage.cost — see the
+        // identical field on streamOpenAiCompatible's request for the full
+        // reasoning. Every provider generateJson is called with routes
+        // through OpenRouter.
+        usage: { include: true },
         messages: buildMessages(feedback),
       })
     );
@@ -807,6 +812,7 @@ ${rules}
       promptTokens: usage.prompt_tokens,
       completionTokens: usage.completion_tokens,
       cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      costUsd: usage.cost ?? null,
     }),
   });
 
@@ -887,6 +893,7 @@ Rules:
       promptTokens: usage.prompt_tokens,
       completionTokens: usage.completion_tokens,
       cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      costUsd: usage.cost ?? null,
     }),
   });
 
@@ -944,6 +951,7 @@ Rules:
       promptTokens: usage.prompt_tokens,
       completionTokens: usage.completion_tokens,
       cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      costUsd: usage.cost ?? null,
     }),
   });
 }
@@ -993,6 +1001,7 @@ Rules:
       promptTokens: usage.prompt_tokens,
       completionTokens: usage.completion_tokens,
       cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      costUsd: usage.cost ?? null,
     }),
   });
 
@@ -1515,6 +1524,16 @@ async function streamOpenAiCompatible({ provider, systemPrompt, userContent, max
       // `usage` chunk at all, so cache hit/miss and completion tokens would
       // be invisible to this codebase entirely.
       stream_options: { include_usage: true },
+      // OpenRouter-specific: makes the final usage chunk carry a `cost`
+      // field — the ACTUAL dollar amount OpenRouter billed for this exact
+      // call, reflecting whichever provider ended up serving it (relevant
+      // now that CODE_PROVIDERS.glm/SCENE_PLAN_PROVIDER route on sort:
+      // "price" rather than a single pinned provider) and any cache
+      // discount really applied — not the static config/modelPricing.js
+      // estimate, which can't know either of those. Every caller of this
+      // function routes through OpenRouter (see this function's own
+      // top-of-section comment), so this is safe unconditionally.
+      usage: { include: true },
       // OpenRouter's provider-sticky-routing key (see buildLessonSessionId)
       // — routes every call sharing this id to the same backend instance,
       // which is what lets a cache written by an earlier call in this
@@ -1749,9 +1768,12 @@ async function generateCourseComponents(topic, lessons, { userId = null, courseI
           model: LESSON_CODE_PROVIDER_NO_REASONING.model,
           userId,
           courseId,
+          // No lessonNumber — this call is course-wide, not scoped to one
+          // lesson (see generateCourseComponents's own comment).
           promptTokens: usage.prompt_tokens,
           completionTokens: usage.completion_tokens,
           cachedTokens: usage.prompt_cache_hit_tokens || 0,
+          costUsd: usage.cost ?? null,
         });
       }
 
@@ -1834,9 +1856,11 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = 
         model: LESSON_CODE_PROVIDER_NO_REASONING.model,
         userId,
         courseId,
+        lessonNumber: lesson.lessonNumber,
         promptTokens: usage.prompt_tokens,
         completionTokens: usage.completion_tokens,
         cachedTokens: usage.prompt_cache_hit_tokens || 0,
+        costUsd: usage.cost ?? null,
       });
     }
 
@@ -1992,9 +2016,11 @@ async function patchSceneInChunk(lesson, targetSceneName, targetScene, brokenChu
       model: LESSON_CODE_PROVIDER_NO_REASONING.model,
       userId,
       courseId,
+      lessonNumber: lesson.lessonNumber,
       promptTokens: usage.prompt_tokens,
       completionTokens: usage.completion_tokens,
       cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      costUsd: usage.cost ?? null,
     });
   }
 
@@ -2323,9 +2349,11 @@ async function patchSceneFromRuntimeError(lesson, componentName, fullCode, scene
           model: LESSON_CODE_PROVIDER_NO_REASONING.model,
           userId,
           courseId,
+          lessonNumber: lesson.lessonNumber,
           promptTokens: usage.prompt_tokens,
           completionTokens: usage.completion_tokens,
           cachedTokens: usage.prompt_cache_hit_tokens || 0,
+          costUsd: usage.cost ?? null,
         });
       }
 
@@ -2434,9 +2462,11 @@ async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, erro
           model: LESSON_CODE_PROVIDER_NO_REASONING.model,
           userId,
           courseId,
+          lessonNumber: lesson.lessonNumber,
           promptTokens: usage.prompt_tokens,
           completionTokens: usage.completion_tokens,
           cachedTokens: usage.prompt_cache_hit_tokens || 0,
+          costUsd: usage.cost ?? null,
         });
       }
 
@@ -2501,9 +2531,11 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
         model: LESSON_CODE_PROVIDER_NO_REASONING.model,
         userId,
         courseId,
+        lessonNumber: lesson.lessonNumber,
         promptTokens: usage.prompt_tokens,
         completionTokens: usage.completion_tokens,
         cachedTokens: usage.prompt_cache_hit_tokens || 0,
+        costUsd: usage.cost ?? null,
       });
     }
 
@@ -2969,6 +3001,10 @@ async function generateAdCode(ad, componentName, scenes, totalFrames, maxAttempt
         promptTokens: usage.prompt_tokens,
         completionTokens: usage.completion_tokens,
         cachedTokens: usage.prompt_cache_hit_tokens || 0,
+        // undefined (not present) whenever AD_CODE_MODEL=claude routes this
+        // through streamAnthropicNative instead — recordAiUsage falls back
+        // to the static (but Anthropic-published, still not a guess) rate.
+        costUsd: usage.cost ?? null,
       });
     }
 

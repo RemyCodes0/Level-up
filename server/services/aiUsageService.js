@@ -20,17 +20,24 @@ async function recordAiUsage({
   userId = null,
   courseId = null,
   adId = null,
+  lessonNumber = null,
   promptTokens = 0,
   completionTokens = 0,
   cachedTokens = 0,
   characters = 0,
   estimatedTokens = 0,
+  // The REAL dollar cost for this exact call, straight from the provider's
+  // own response (OpenRouter's usage.cost) — pass this whenever the caller
+  // has it. `null`/omitted (not 0 — a genuinely free cached call IS 0) means
+  // "not available", which is the only case this falls back to the static
+  // config/modelPricing.js estimate.
+  costUsd: realCostUsd = null,
 }) {
   try {
-    const costUsd = computeCostUsd(model, {
-      promptTokens: promptTokens || estimatedTokens,
-      completionTokens,
-    });
+    const isRealCost = realCostUsd != null;
+    const costUsd = isRealCost
+      ? realCostUsd
+      : computeCostUsd(model, { promptTokens: promptTokens || estimatedTokens, completionTokens });
     await AiUsageLog.create({
       kind,
       provider,
@@ -38,12 +45,14 @@ async function recordAiUsage({
       userId,
       courseId,
       adId,
+      lessonNumber,
       promptTokens,
       completionTokens,
       cachedTokens,
       characters,
       estimatedTokens,
       costUsd,
+      isRealCost,
     });
   } catch (err) {
     console.warn(`[aiUsage] Failed to record usage for "${kind}" (non-fatal): ${err.message}`);

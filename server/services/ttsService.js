@@ -212,8 +212,12 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
         userId: context.userId ?? null,
         courseId: context.courseId ?? null,
         adId: context.adId ?? null,
+        lessonNumber: context.lessonNumber ?? null,
         characters: totalChars,
         estimatedTokens: estimateTokensFromChars(totalChars),
+        // No costUsd passed — Kokoro's audio.speech API returns no usage/
+        // cost data at all (see this function's own comment), so this
+        // always falls back to the static per-character estimate.
       });
 
       // Raw PCM concatenates byte-for-byte with no framing/header ambiguity

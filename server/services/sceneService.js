@@ -148,9 +148,11 @@ async function generateScenePlan(lesson, maxAttempts = 3, { userId = null, cours
           model: DEEPSEEK_SCENE_PLAN_PROVIDER.model,
           userId,
           courseId,
+          lessonNumber: lesson.lessonNumber,
           promptTokens: usage.prompt_tokens,
           completionTokens: usage.completion_tokens,
           cachedTokens: usage.prompt_cache_hit_tokens || 0,
+          costUsd: usage.cost ?? null,
         });
       }
 

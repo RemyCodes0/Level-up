@@ -22,6 +22,7 @@ const Course = require("../models/Course");
 const GenerationLog = require("../models/GenerationLog");
 const User = require("../models/User");
 const QuizAttempt = require("../models/QuizAttempt");
+const AiUsageLog = require("../models/AiUsageLog");
 const { grantCredits } = require("../services/creditService");
 const sendEmail = require("../services/emailService");
 
@@ -216,6 +217,46 @@ async function buildLesson(courseId, lesson, userId = null) {
     }
   }
 
+  // Prints the ACTUAL total tokens + $ cost this ONE lesson's generation
+  // used — scene plan + header + every chunk/patch attempt (including
+  // retries) + TTS — queried straight from AiUsageLog, the same ledger
+  // every recordAiUsage call already writes to (see aiUsageService.js),
+  // filtered to this course+lesson (see lessonNumber on AiUsageLog).
+  // Deliberately does NOT blend a real number with a guess: realCostUsd
+  // only sums rows OpenRouter itself billed a cost for (GLM/DeepSeek calls,
+  // via `usage: { include: true }` — see streamOpenAiCompatible/
+  // generateJson in claudeService.js), which is the actual dollar amount
+  // charged, not a static per-token-price estimate — that covers the large
+  // majority of a lesson's cost. estimatedCostUsd is called out separately,
+  // currently only ever TTS (Kokoro's API returns no cost/usage data at
+  // all, so there's no way to make that portion exact — see
+  // config/modelPricing.js's own comment on why).
+  async function logLessonUsageSummary() {
+    try {
+      const rows = await AiUsageLog.find({ courseId, lessonNumber: lesson.lessonNumber })
+        .select("promptTokens completionTokens costUsd isRealCost")
+        .lean();
+      if (rows.length === 0) return;
+
+      const promptTokens = rows.reduce((sum, r) => sum + (r.promptTokens || 0), 0);
+      const completionTokens = rows.reduce((sum, r) => sum + (r.completionTokens || 0), 0);
+      const realCostUsd = rows.filter((r) => r.isRealCost).reduce((sum, r) => sum + r.costUsd, 0);
+      const estimatedCostUsd = rows.filter((r) => !r.isRealCost).reduce((sum, r) => sum + r.costUsd, 0);
+      const totalCostUsd = realCostUsd + estimatedCostUsd;
+
+      const estimatedNote = estimatedCostUsd > 0
+        ? ` (includes $${estimatedCostUsd.toFixed(4)} ESTIMATED for TTS — Kokoro's API returns no real cost figure)`
+        : "";
+      console.log(
+        `[${courseId}] Lesson ${lesson.lessonNumber} usage: ${promptTokens} input tokens, ${completionTokens} output tokens, ` +
+        `$${totalCostUsd.toFixed(4)} total across ${rows.length} AI call(s) — $${realCostUsd.toFixed(4)} of that is the ACTUAL ` +
+        `OpenRouter-billed cost, not an estimate${estimatedNote}.`
+      );
+    } catch (err) {
+      console.error(`[${courseId}] Failed to compute lesson ${lesson.lessonNumber} usage summary (non-fatal):`, err.message);
+    }
+  }
+
   // ── Stage 1: scene plan ──────────────────────────────────────────────────
   // Previously NOT wrapped in try/catch — if this threw for a lesson built
   // in a parallel batch (Promise.allSettled), the rejection was silently
@@ -287,7 +328,7 @@ async function buildLesson(courseId, lesson, userId = null) {
       } catch (progressErr) {
         console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to save audio progress for scene ${index + 1} (non-fatal):`, progressErr.message);
       }
-    }, { userId, courseId }));
+    }, { userId, courseId, lessonNumber: lesson.lessonNumber }));
   } catch (err) {
     const stage = "scenes";
     const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
@@ -423,6 +464,7 @@ async function buildLesson(courseId, lesson, userId = null) {
       const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
       console.log(`[${courseId}] Lesson ${lesson.lessonNumber} ready — took ${elapsedMin} min total (scene plan + audio + code).`);
       await logAttempt({ status: "success", stage: "code", errorMessage: null, attemptNumber: attempt });
+      await logLessonUsageSummary();
 
       return;
 
@@ -455,6 +497,9 @@ async function buildLesson(courseId, lesson, userId = null) {
       [`lessons.${lesson.lessonNumber - 1}.error`]: lastError?.message || "Unknown error",
     },
   });
+  // Still worth knowing the real spend even on a lesson that never made it
+  // — every retry attempt already cost real tokens regardless of outcome.
+  await logLessonUsageSummary();
 }
 
 
