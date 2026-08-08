@@ -1704,6 +1704,22 @@ const HEADER_MAX_OUTPUT_TOKENS = Number(process.env.HEADER_MAX_OUTPUT_TOKENS) ||
 // keep total call count down. Starting point, not a derived optimum — tune
 // against real observed failure rates.
 const LESSON_CHUNK_SCENES = Number(process.env.LESSON_CHUNK_SCENES) || 3;
+// Attempt budgets raised from 3 (chunk) / 2 (header) to 10 — a patch-first
+// ladder (targeted fix first, full regeneration only as an escalation when
+// patching itself can't be constructed or keeps failing — see
+// CHUNK_PATCH_RETRY_LIMIT/HEADER_PATCH_RETRY_LIMIT below) makes most
+// individual attempts far cheaper than a full regeneration, so a much
+// higher ceiling costs far less than the old lower ceiling of
+// all-regeneration attempts did.
+const CHUNK_MAX_ATTEMPTS = Number(process.env.CHUNK_MAX_ATTEMPTS) || 10;
+const HEADER_MAX_ATTEMPTS = Number(process.env.HEADER_MAX_ATTEMPTS) || 10;
+// How many CONSECUTIVE targeted-patch failures to tolerate before forcing
+// one full regeneration (which then resets the counter — patching gets its
+// full budget again against the fresh code). Not the same as maxAttempts:
+// this bounds how long the ladder stays on the "patch" rung before
+// escalating, not the total attempt count.
+const CHUNK_PATCH_RETRY_LIMIT = Number(process.env.CHUNK_PATCH_RETRY_LIMIT) || 3;
+const HEADER_PATCH_RETRY_LIMIT = Number(process.env.HEADER_PATCH_RETRY_LIMIT) || 3;
 const CHUNK_MAX_OUTPUT_TOKENS = Number(process.env.CHUNK_MAX_OUTPUT_TOKENS) || 48000;
 
 // ── Course-level component pre-generation ───────────────────────────────────
@@ -1842,7 +1858,7 @@ async function generateCourseComponents(topic, lessons, { userId = null, courseI
 }
 
 // ── Header generation ───────────────────────────────────────────────────────
-async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = null, courseId = null } = {}) {
+async function generateLessonHeader(lesson, scenes, maxAttempts = HEADER_MAX_ATTEMPTS, { userId = null, courseId = null } = {}) {
   const label = `header L${lesson.lessonNumber}`;
   const start = Date.now();
   const sessionId = buildLessonSessionId(courseId, lesson.lessonNumber);
@@ -1860,9 +1876,7 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = 
     console.warn(`[globalComponentLibrary] Failed to load catalog for ${label} (non-fatal, continuing without it): ${err.message}`);
   }
 
-  return withRetries(label, maxAttempts, async ({ attempt, feedback }) => {
-    logVerbose(`  [${label}] Attempt ${attempt}/${maxAttempts}...`);
-
+  async function generateFullHeader(feedback) {
     const { text, stopReason, usage } = await streamCodeCompletion({
       limiter: limitLessonCodeCall,
       provider: LESSON_CODE_PROVIDER_NO_REASONING,
@@ -1891,39 +1905,103 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = 2, { userId = 
       if (stopReason === "length") {
         throw new Error("Header hit max_tokens — code was truncated. Generate more compact code.");
       }
-
       const code = stripCodeFences(text);
       if (!/^(import|const|function|\/\/|\/\*)/.test(code)) {
         throw new Error("Header output wasn't code — you MUST output only TSX code starting with `import`.");
       }
-
-      const fixed = autoFixCode(code, {});
-      const validated = validateHeaderFragment(fixed, { reservedNames: [...LESSON_COMPONENT_NAMES, ...libraryNames] });
-
-      // Side effect, fire-and-forget — pulls out any `// @reusable:` marked
-      // helper and persists it as a candidate for later admin review. Must
-      // never delay or fail the header itself: this header already
-      // validated and the lesson is moving on with or without this
-      // succeeding.
-      try {
-        const candidates = extractReusableCandidates(validated);
-        if (candidates.length > 0) {
-          saveCandidates(candidates, { courseId, lessonNumber: lesson.lessonNumber }).catch((err) => {
-            console.warn(`[globalComponentLibrary] Failed to save candidates for ${label} (non-fatal): ${err.message}`);
-          });
-        }
-      } catch (err) {
-        console.warn(`[globalComponentLibrary] Failed to extract candidates for ${label} (non-fatal): ${err.message}`);
-      }
-
-      const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
-      logVerbose(`  [${label}] Valid header generated (${validated.length} chars) — took ${elapsedSec}s`);
-      return validated;
+      return code;
     } catch (err) {
       err.isContentError = true;
       throw err;
     }
-  }, { keyEnv: LESSON_CODE_PROVIDER_NO_REASONING.keyEnv, stage: "header" });
+  }
+
+  function validateHeader(code) {
+    try {
+      const fixed = autoFixCode(code, {});
+      return validateHeaderFragment(fixed, { reservedNames: [...LESSON_COMPONENT_NAMES, ...libraryNames] });
+    } catch (err) {
+      err.isContentError = true;
+      throw err;
+    }
+  }
+
+  // Side effect, fire-and-forget — pulls out any `// @reusable:` marked
+  // helper and persists it as a candidate for later admin review. Must
+  // never delay or fail the header itself: this header already validated
+  // and the lesson is moving on with or without this succeeding.
+  function saveReusableCandidates(validated) {
+    try {
+      const candidates = extractReusableCandidates(validated);
+      if (candidates.length > 0) {
+        saveCandidates(candidates, { courseId, lessonNumber: lesson.lessonNumber }).catch((err) => {
+          console.warn(`[globalComponentLibrary] Failed to save candidates for ${label} (non-fatal): ${err.message}`);
+        });
+      }
+    } catch (err) {
+      console.warn(`[globalComponentLibrary] Failed to extract candidates for ${label} (non-fatal): ${err.message}`);
+    }
+  }
+
+  let lastError = null;
+  let lastHeaderCode = null; // last RAW (failed-validation) header text — the patch target
+  // Same patch-first ladder as generateSceneChunk's identical logic (see
+  // its own comment) — headers previously had NO targeted-patch option
+  // during generation at all (only patchHeaderFromRuntimeError, which only
+  // fires on a POST-generation runtime crash, a completely different code
+  // path). Every retry used to be a full rewrite, which is why a header
+  // failing on one small interpolate() mistake still cost a whole fresh
+  // generation instead of a cheap surgical fix.
+  let consecutivePatchFailures = 0;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      let rawCode = null;
+      let patched = false;
+
+      const canTryPatch = attempt > 1 && lastError?.isContentError && lastHeaderCode && consecutivePatchFailures < HEADER_PATCH_RETRY_LIMIT;
+      if (canTryPatch) {
+        try {
+          logVerbose(`  [${label}] Attempt ${attempt}/${maxAttempts} — targeted patch...`);
+          rawCode = await patchHeaderDuringGeneration(lesson, lastHeaderCode, lastError.message, libraryNames, { userId, courseId });
+          patched = true;
+        } catch (patchErr) {
+          consecutivePatchFailures++;
+          const willFallBack = consecutivePatchFailures >= HEADER_PATCH_RETRY_LIMIT;
+          console.warn(`  [${label}] Targeted patch failed (${describeError(patchErr)}) — ${willFallBack ? "falling back to full regeneration." : `will retry patching (${consecutivePatchFailures}/${HEADER_PATCH_RETRY_LIMIT} consecutive failures).`}`);
+        }
+      }
+
+      if (!patched) {
+        logVerbose(`  [${label}] Attempt ${attempt}/${maxAttempts}${attempt > 1 ? " (full regeneration)" : ""}...`);
+        rawCode = await generateFullHeader(lastError?.isContentError ? lastError.message : null);
+        consecutivePatchFailures = 0;
+      }
+
+      lastHeaderCode = rawCode;
+      // patchHeaderDuringGeneration already validates internally before
+      // returning — re-validating here would be redundant, not incorrect,
+      // but there's no reason to pay for it twice.
+      const validated = patched ? rawCode : validateHeader(rawCode);
+
+      saveReusableCandidates(validated);
+
+      const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
+      logVerbose(`  [${label}] Valid header generated (${validated.length} chars)${patched ? " via targeted patch" : ""} — took ${elapsedSec}s`);
+      return validated;
+    } catch (err) {
+      lastError = err;
+      if (isNonRetryable(err)) {
+        throw new Error(`${label} failed with a non-retryable error (check ${LESSON_CODE_PROVIDER_NO_REASONING.keyEnv}): ${describeError(err)}`);
+      }
+      console.warn(`  [${label}] Attempt ${attempt}/${maxAttempts} failed: ${describeError(err)}. Retrying...`);
+      if (attempt < maxAttempts) await backoffDelay(attempt);
+    }
+  }
+
+  const e = new Error(`${label} failed after ${maxAttempts} attempts: ${lastError ? describeError(lastError) : "unknown error"}`);
+  e.stage = "header";
+  throw e;
 }
 
 // ── One chunk of scenes ──────────────────────────────────────────────────────
@@ -2404,6 +2482,88 @@ async function patchSceneFromRuntimeError(lesson, componentName, fullCode, scene
   throw lastErr ?? new Error(`Runtime patch for ${targetSceneName} failed after ${maxAttempts} attempts`);
 }
 
+// Generation-time header patch — same <<<FIND>>>/<<<REPLACE>>> mechanism as
+// patchHeaderFromRuntimeError below, applied one step earlier: to a header
+// that just failed ITS OWN validation during generation, not one that
+// crashed at runtime after a lesson was already "ready" (that's the
+// separate, existing patchHeaderFromRuntimeError — a completely different
+// call site). No "locate within fullCode + splice back" step here, because
+// during generation the header IS the whole artifact being produced, not a
+// fragment inside an already-stitched larger file — the caller
+// (generateLessonHeader) just gets the validated header text straight
+// back. Never the sole fix path — generateLessonHeader's own ladder always
+// falls back to a full regeneration when this can't apply or keeps
+// failing (see HEADER_PATCH_RETRY_LIMIT).
+async function patchHeaderDuringGeneration(lesson, brokenHeaderCode, errorMessage, libraryNames, { userId = null, courseId = null } = {}) {
+  const label = `header-patch L${lesson.lessonNumber}`;
+  const start = Date.now();
+  const baseSessionId = buildLessonSessionId(courseId, lesson.lessonNumber);
+  const sessionId = baseSessionId ? `${baseSessionId}-patch` : null;
+
+  const { text, stopReason, usage } = await streamCodeCompletion({
+    limiter: limitLessonCodeCall,
+    provider: LESSON_CODE_PROVIDER_NO_REASONING,
+    systemPrompt: LESSON_HEADER_RULES,
+    userContent: buildHeaderGenerationPatchUserContent(lesson, brokenHeaderCode, errorMessage),
+    maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
+    sessionId,
+  });
+  logUsage(label, usage);
+  if (usage) {
+    recordAiUsage({
+      kind: "lesson-code",
+      provider: LESSON_CODE_PROVIDER_NO_REASONING.providerName,
+      model: LESSON_CODE_PROVIDER_NO_REASONING.model,
+      userId,
+      courseId,
+      lessonNumber: lesson.lessonNumber,
+      promptTokens: usage.prompt_tokens,
+      completionTokens: usage.completion_tokens,
+      cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      costUsd: usage.cost ?? null,
+    });
+  }
+
+  if (stopReason === "length") {
+    throw new Error("Header patch hit max_tokens — truncated.");
+  }
+
+  const blocks = parsePatchBlocks(text);
+  if (blocks.length === 0) {
+    throw new Error(`Header patch did not contain any ${PATCH_FIND_MARKER}/${PATCH_REPLACE_MARKER} block.`);
+  }
+
+  const patchedHeaderCode = applyPatchBlocks(brokenHeaderCode, blocks);
+  const fixed = autoFixCode(patchedHeaderCode, {});
+  const validated = validateHeaderFragment(fixed, { reservedNames: [...LESSON_COMPONENT_NAMES, ...libraryNames] });
+
+  const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
+  logVerbose(`  [${label}] Patched via ${blocks.length} targeted edit(s) (${validated.length} chars) — took ${elapsedSec}s`);
+  return validated;
+}
+
+function buildHeaderGenerationPatchUserContent(lesson, brokenHeaderCode, errorMessage) {
+  return `
+LESSON: ${lesson.title}
+
+This header just failed validation during generation — not a runtime crash, a mistake caught before the lesson ever finished building. You are making a SURGICAL fix: find the exact line(s) actually causing this error and change ONLY those. Do not rewrite, restyle, or "improve" anything else, even if you'd do it differently — every untouched line must come out byte-for-byte identical to what's below.
+
+CURRENT HEADER CODE (line-numbered for reference only — do not include the numbers in your output):
+${brokenHeaderCode.split("\n").map((l, i) => `${i + 1}| ${l}`).join("\n")}
+
+THE VALIDATION ERROR:
+${errorMessage}
+
+Output ONE find/replace block for each spot that needs to change (usually just one), in EXACTLY this format and nothing else — no explanation, no code fences:
+
+${PATCH_FIND_MARKER}
+<the EXACT original snippet to replace, copied character-for-character from the code above — no line numbers, exact whitespace/indentation, just enough surrounding lines to be unambiguous (matched only once)>
+${PATCH_REPLACE_MARKER}
+<the corrected replacement for exactly that snippet — nothing more>
+${PATCH_END_MARKER}
+`;
+}
+
 function buildHeaderRuntimePatchUserContent(lesson, componentName, currentHeaderCode, errorMessage, sceneNames, feedback) {
   return `
 LESSON: ${lesson.title} (component ${componentName})
@@ -2522,7 +2682,7 @@ async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, erro
 // chunk's actual generated code. Chunks now run in PARALLEL (see
 // generateLessonCode below), so no chunk can see any other chunk's output at
 // generation time.
-async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalScenes, headerCode, allScenes, availableNames, componentName, maxAttempts = 3, { userId = null, courseId = null } = {}) {
+async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalScenes, headerCode, allScenes, availableNames, componentName, maxAttempts = CHUNK_MAX_ATTEMPTS, { userId = null, courseId = null } = {}) {
   const chunkLabel = chunkScenes.length > 1
     ? `${chunkStartIndex + 1}-${chunkStartIndex + chunkScenes.length}`
     : `${chunkStartIndex + 1}`;
@@ -2590,6 +2750,16 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
 
   let lastError = null;
   let lastRawCode = null;
+  // Patch-first ladder: a single failed patch attempt used to fall straight
+  // back to a full regeneration, which meant patching only ever got
+  // considered on maybe 1-2 of maxAttempts (3) tries. With maxAttempts now
+  // much higher (see CHUNK_MAX_ATTEMPTS), that would waste most of the
+  // budget on full regenerations instead of cheap targeted fixes. Now:
+  // patching gets up to CHUNK_PATCH_RETRY_LIMIT CONSECUTIVE tries against
+  // whatever the current broken code is before forcing ONE full
+  // regeneration; a successful full regen resets the counter, so patching
+  // gets its full budget again against the fresh code if THAT also fails.
+  let consecutivePatchFailures = 0;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -2602,7 +2772,8 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       // for it: any uncertainty here falls straight through to the normal
       // full regeneration below, so correctness never depends on this path
       // working.
-      if (attempt > 1 && lastError?.isContentError && lastRawCode) {
+      const canTryPatch = attempt > 1 && lastError?.isContentError && lastRawCode && consecutivePatchFailures < CHUNK_PATCH_RETRY_LIMIT;
+      if (canTryPatch) {
         const errLine = extractErrorLine(lastError.message);
         const located = errLine ? locateSceneAtLine(lastRawCode, errLine, expectedNames) : null;
         if (located) {
@@ -2616,7 +2787,9 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
             rawCode = spliceScene(lastRawCode, located, patchedScene);
             patched = true;
           } catch (patchErr) {
-            console.warn(`  [${label}] Targeted patch failed (${describeError(patchErr)}) — falling back to full regeneration.`);
+            consecutivePatchFailures++;
+            const willFallBack = consecutivePatchFailures >= CHUNK_PATCH_RETRY_LIMIT;
+            console.warn(`  [${label}] Targeted patch failed (${describeError(patchErr)}) — ${willFallBack ? "falling back to full regeneration." : `will retry patching (${consecutivePatchFailures}/${CHUNK_PATCH_RETRY_LIMIT} consecutive failures).`}`);
           }
         }
       }
@@ -2624,6 +2797,7 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       if (!patched) {
         logVerbose(`  [${label}] Attempt ${attempt}/${maxAttempts}${attempt > 1 ? " (full regeneration)" : ""}...`);
         rawCode = await generateFullChunk(lastError?.isContentError ? lastError.message : null);
+        consecutivePatchFailures = 0;
       }
 
       lastRawCode = rawCode;
