@@ -1086,6 +1086,7 @@ SHARED TEXT + FRAMING HELPERS:
 CODE QUALITY: Inline styles only (no Tailwind, no className for styling, no external CSS). No registerRoot, no Composition, no export. Never leave a "TODO" — every const/component you declare must be complete, working code a scene could use immediately.
 
 REUSABLE COMPONENT LIBRARY (grown from real lessons, not hand-written, human-reviewed before reuse): a catalog of already-built, admin-approved components may be listed below, under "AVAILABLE LIBRARY COMPONENTS" — these are ALREADY IN SCOPE, do not redeclare or reimport them, just call them directly by name (e.g. <Gear radius={80} teeth={12} color={PALETTE.accent} cx={960} cy={540} />) exactly like you would call Backdrop or Label. Check that list FIRST — if one fits what this lesson needs, use it instead of building your own.
+  • Only mark an actual VISUAL COMPONENT (something that renders JSX and could be called as <Name .../> in a scene) — never PALETTE, CLAMP, SAFE, ZONES, clampPos, SVG_FRAME, or any other plain data/config const. Those already exist everywhere by contract and marking one is always rejected — it's not a component, there's nothing to preview or call.
   • For every OTHER shared helper you declare here that isn't just a trivial one-line wrapper — mark it for the library BY DEFAULT, not only ones you personally judge to be obviously reusable elsewhere. A human reviews every proposal on an admin page (with a live animated preview) before it's ever offered to another lesson — nothing you mark becomes visible to anyone else automatically — so your job is to PROPOSE, not to pre-filter. Write exactly these two comment lines immediately above its declaration:
       // @reusable: ComponentName — one-line description of what it does and when to use it
       // @example: <ComponentName someProp={123} otherProp={PALETTE.accent} .../>
@@ -2730,10 +2731,25 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
   // only needed names+descriptions for the prompt; this needs the actual
   // code, for runtime injection. activeLibraryNames is kept for the
   // usage-tracking call once this lesson's final code exists (see below).
+  //
+  // CONFIRMED BUG this excludeNames param fixes: generateLessonHeader
+  // fire-and-forgets any @reusable-marked piece straight to the DB as a
+  // same-course candidate. Same-course candidates are visible to catalog
+  // queries immediately (see getActiveLibrarySource's own comment) — so
+  // without excluding the header's OWN already-declared names here, a
+  // component this exact header just proposed gets spliced back in as a
+  // SECOND declaration of a name it already declares, a hard syntax error
+  // that permanently fails the lesson. Real, observed: "BaseChip" saved as
+  // a candidate for this lesson's course, then "Identifier 'BaseChip' has
+  // already been declared" crashed the very same lesson's final attempt.
+  const headerOwnNames = getHeaderExposedNames(generatedHeader);
   let activeLibrarySource = "";
   let activeLibraryNames = [];
   try {
-    [activeLibrarySource, activeLibraryNames] = await Promise.all([getActiveLibrarySource(courseId), getActiveNames(courseId)]);
+    [activeLibrarySource, activeLibraryNames] = await Promise.all([
+      getActiveLibrarySource(courseId, [...headerOwnNames]),
+      getActiveNames(courseId, [...headerOwnNames]),
+    ]);
   } catch (err) {
     console.warn(`[globalComponentLibrary] Failed to load active library for L${lesson.lessonNumber} (non-fatal): ${err.message}`);
   }

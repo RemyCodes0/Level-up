@@ -328,10 +328,23 @@ async function saveCandidates(candidates, { courseId = null, lessonNumber = null
 // header prompt small regardless of how large the library grows; the
 // actual code only gets pulled in by getActiveLibrarySource, server-side,
 // never sent back through the model.
-function catalogFilter(courseId) {
-  return courseId
+// excludeNames exists for exactly one real, confirmed bug: a candidate
+// saved from THIS SAME header (fire-and-forget, inside generateLessonHeader)
+// is visible to a same-course catalog query moments later inside
+// generateLessonCode — including the query that builds the runtime source
+// splice. Without excluding it, a component gets spliced back in as a
+// SECOND declaration of a name the header ALREADY declares (it's literally
+// where the candidate was extracted from), producing a hard "already been
+// declared" syntax error and permanently failing the lesson. Confirmed
+// against a real run: "BaseChip" saved as a candidate for course X, then
+// "Identifier 'BaseChip' has already been declared" crashed that exact
+// same lesson's final attempt. Callers pass the header's OWN already-
+// declared names (getHeaderExposedNames(generatedHeader)) here.
+function catalogFilter(courseId, excludeNames = []) {
+  const base = courseId
     ? { $or: [{ status: "active" }, { status: "candidate", sourceCourseId: courseId }] }
     : { status: "active" };
+  return excludeNames.length > 0 ? { $and: [base, { name: { $nin: excludeNames } }] } : base;
 }
 
 async function getActiveCatalog(courseId = null) {
@@ -341,8 +354,8 @@ async function getActiveCatalog(courseId = null) {
   return docs.map((d) => ({ name: d.name, description: d.description, propsDoc: d.propsDoc || "" }));
 }
 
-async function getActiveNames(courseId = null) {
-  const docs = await LibraryComponent.find(catalogFilter(courseId)).select("name").lean();
+async function getActiveNames(courseId = null, excludeNames = []) {
+  const docs = await LibraryComponent.find(catalogFilter(courseId, excludeNames)).select("name").lean();
   return docs.map((d) => d.name);
 }
 
@@ -352,8 +365,8 @@ async function getActiveNames(courseId = null) {
 // already is (see generateLessonCode), which is what makes these callable
 // at runtime with zero changes needed anywhere else in the compile/render
 // pipeline.
-async function getActiveLibrarySource(courseId = null) {
-  const docs = await LibraryComponent.find(catalogFilter(courseId)).select("code").lean();
+async function getActiveLibrarySource(courseId = null, excludeNames = []) {
+  const docs = await LibraryComponent.find(catalogFilter(courseId, excludeNames)).select("code").lean();
   if (docs.length === 0) return "";
   return "\n// ── Global reusable component library (grown from real lessons, admin-approved, plus this course's own pending candidates) ──\n" +
     docs.map((d) => d.code).join("\n\n");
