@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { CheckCircle, XCircle, Clock, Loader2, Play, X, Trash2, DollarSign } from "lucide-react";
+import { CheckCircle, XCircle, Clock, Loader2, Play, X, Trash2, DollarSign, Code2, Copy, Check } from "lucide-react";
 import { adminApi } from "../adminApi";
 import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, StatusBadge, Pagination, fmtDate, fmtUsd, fmtPosition } from "../components";
 import { DynamicPlayer } from "../../remotion/DynamicPlayer";
@@ -109,6 +109,8 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
   const [costs, setCosts] = useState<{ totalUsd: number; byKind: { kind: string; totalUsd: number; calls: number }[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [previewLesson, setPreviewLesson] = useState<number | null>(null);
+  const [showCode, setShowCode] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // Keyed by lessonNumber — this course's owner's watch/position state for
   // each lesson. A course belongs to exactly one userId (see Course.js), so
@@ -194,8 +196,33 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
             <div className="p-6">
               {previewLesson !== null && course.lessons[previewLesson]?.code ? (
                 <div className="mb-4">
-                  <button onClick={() => setPreviewLesson(null)} className="text-xs text-blue-600 mb-3">← Back to lessons</button>
+                  <div className="flex items-center justify-between mb-3">
+                    <button onClick={() => { setPreviewLesson(null); setShowCode(false); }} className="text-xs text-blue-600">← Back to lessons</button>
+                    <button
+                      onClick={() => setShowCode((v) => !v)}
+                      className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg"
+                    >
+                      <Code2 className="h-3.5 w-3.5" /> {showCode ? "Hide code" : "View code"}
+                    </button>
+                  </div>
                   <DynamicPlayer code={course.lessons[previewLesson].code} durationInFrames={course.lessons[previewLesson].totalFrames ?? 3600} />
+                  {showCode && (
+                    <div className="mt-3 relative">
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(course.lessons[previewLesson].code);
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 1500);
+                        }}
+                        className="absolute top-2 right-2 flex items-center gap-1 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded-lg"
+                      >
+                        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy"}
+                      </button>
+                      <pre className="text-[11px] leading-relaxed bg-slate-900 text-slate-200 rounded-lg p-4 pt-10 overflow-auto max-h-[500px] whitespace-pre">
+                        {course.lessons[previewLesson].code}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-2">
