@@ -30,6 +30,19 @@ const { recordAiUsage } = require("./aiUsageService");
 // needed anywhere else) to reconnect everything at once.
 const COMPONENT_LIBRARY_ENABLED = process.env.COMPONENT_LIBRARY_ENABLED === "true";
 
+// Deterministic geometry check (geometryCheckService.js) — off/disabled by
+// default. Built and proven this session to catch real, arithmetic-provable
+// bugs (off-frame drift, zone overlap, NaN positions), and it WAS finding
+// genuine issues, not false positives — but real generation runs surfaced
+// enough retry volume from it that the user asked to cut it off entirely
+// while keeping the option to re-enable later. Same "disconnect, don't
+// remove" pattern as COMPONENT_LIBRARY_ENABLED right above: every piece of
+// the check (geometryCheckService.js itself, all its rules/tolerances) is
+// left completely intact — this is the one flag that decides whether
+// generation ever CALLS it. Flip to "true" (no code changes needed
+// anywhere else) to reconnect it.
+const GEOMETRY_CHECK_ENABLED = process.env.GEOMETRY_CHECK_ENABLED === "true";
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CLIENTS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2897,8 +2910,9 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       // attempt (patched or freshly regenerated) before code is accepted,
       // a fix automatically gets re-checked before being trusted — nothing
       // extra was needed to satisfy "after targeting the issue, look at it
-      // again."
-      for (let i = 0; i < chunkScenes.length; i++) {
+      // again." Gated behind GEOMETRY_CHECK_ENABLED (default off) — see
+      // that flag's own comment for why.
+      for (let i = 0; GEOMETRY_CHECK_ENABLED && i < chunkScenes.length; i++) {
         const geomSceneName = expectedNames[i];
         const declStart = validated.indexOf(`function ${geomSceneName}(`);
         if (declStart === -1) continue; // shouldn't happen post-validation — never block on our own limitation
