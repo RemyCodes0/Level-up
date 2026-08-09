@@ -875,7 +875,23 @@ You are an expert educational assessment designer. Below is the FULL narrated co
 
 ${lessonContext}
 
-Generate a ${mcqCount}-question multiple-choice assessment testing comprehension of what these lessons ACTUALLY teach — ground each question in a specific fact, mechanism, or explanation that appears in the narration above, not generic knowledge about the topic. Distribute questions across all ${lessons.length} lessons (roughly evenly, weighted toward lessons with more content). Each question's "topic" field must be the EXACT title of the lesson it's drawn from (copy it character-for-character from "LESSON N: <title>" above), so results can be grouped back to the right lesson.
+Generate a ${mcqCount}-question multiple-choice assessment testing conceptual UNDERSTANDING of what these lessons teach — not recall of the specific examples, analogies, numbers, or wording narration happened to use to explain it. A learner who genuinely understood a concept should still get the question right even if they've forgotten the exact illustration the narration used; a learner who only memorized surface details of the narration's phrasing should NOT be able to pass by pattern-matching those details.
+
+Ground every question in a real fact, mechanism, or explanation that actually appears in the narration above (never invent something these lessons never covered, and never ask generic textbook trivia about the topic that these lessons happen not to teach) — but the question must test the CONCEPT itself, not the specific illustration used to teach it. When the narration illustrates a concept with a concrete example ("like a crowded room," "similar to how a river flows downhill," "for instance, a bank uses this to..."), do NOT write a question asking the learner to recall that example or its specific details. Instead, test whether they understood the underlying principle — e.g. by applying it to a different, unseen scenario, by asking what the principle predicts or implies, or by asking them to identify the mechanism/reasoning in their own right.
+
+BAD (tests memorization of the lesson's own illustration, not understanding):
+- "What analogy did the lesson use to explain how neurons communicate?"
+- "In the example given, what was the name of the company that used this strategy?"
+- "According to the lesson, what number did the narrator give for the average cost?"
+- "What did the narrator compare X to?"
+
+GOOD (tests whether the concept was actually understood):
+- "Why does increasing X typically cause Y to decrease, based on the mechanism this lesson explains?"
+- "Based on what this lesson taught about [concept], what would you expect to happen in [a new, unseen situation]?"
+- "Which of the following best describes what [concept] means?"
+- "What is the underlying reason [phenomenon] occurs, according to this lesson?"
+
+Distribute questions across all ${lessons.length} lessons (roughly evenly, weighted toward lessons with more content). Each question's "topic" field must be the EXACT title of the lesson it's drawn from (copy it character-for-character from "LESSON N: <title>" above), so results can be grouped back to the right lesson.
 
 Return ONLY valid JSON, no markdown, exactly this structure:
 ${jsonSchema}
