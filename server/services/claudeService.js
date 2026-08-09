@@ -1212,7 +1212,7 @@ REUSABLE COMPONENT LIBRARY (grown from real lessons, human-reviewed before reuse
     (4) If it renders SVG primitives, it MUST return its own <svg style={SVG_FRAME}>...</svg> root — a bare <g>/<path> as the top-level return is invisible (and rejected) the instant it's used outside an <svg> ancestor, which reuse elsewhere constantly does.
   • Skip marking ONLY a single trivial primitive with no meaningful structure, or a piece that hard-codes THIS lesson's specific facts/numbers/labels directly in its own body instead of taking them as props (genuinely can't be reused as-is). Everything else: build it as its own piece and mark it. The @example line must be valid, working JSX using only props that component actually accepts.
 `;
-
+ 
 const LESSON_CHUNK_RULES = `
 ⚠️ OUTPUT FORMAT: Respond with ONLY raw TypeScript/TSX code. No prose, no explanation, no markdown fences. The FIRST character of your response must be "f" (from "function"). Anything else fails the build and the user loses their course. CODE ONLY.
 
