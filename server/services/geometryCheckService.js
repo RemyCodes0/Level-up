@@ -53,6 +53,16 @@ const Babel = require("@babel/standalone");
 
 const FRAME = { w: 1920, h: 1080 };
 const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
+// Verbatim from LESSON_HEADER_RULES/LESSON_CHUNK_RULES's own contract —
+// rule 10 already tells the model "Layer 2's footprint [must be] centered/
+// sized to fit inside ZONES.stage... never drifting into title/caption."
+// The zone-intrusion check below enforces that EXISTING documented rule
+// with real geometry, not a new standard invented for this check.
+const ZONES = {
+  title: { x: 120, y: 120, w: 1680, h: 130 },
+  stage: { x: 120, y: 270, w: 1680, h: 580 },
+  caption: { x: 120, y: 870, w: 1680, h: 90 },
+};
 
 // Tolerances — generous on purpose. A few px of overshoot from rounding or
 // a glow/shadow filter's own bleed is normal and not worth flagging.
@@ -71,7 +81,11 @@ const OVERLAP_AREA_RATIO_THRESHOLD = 0.5;
 // a few px of a stroke/glow bleeding past the edge is normal.
 const CONTAINMENT_SLACK_RATIO = 0.15;
 
-const SAMPLE_COUNT = 5;
+// Raised from 5 — pure JS function calls, not LLM calls, so denser
+// sampling is nearly free and catches more of a motion path (an element
+// that only drifts off-screen briefly between two of the old, sparser
+// sample points was previously invisible to this check).
+const SAMPLE_COUNT = 8;
 
 // ── Step 1: compile header + one scene into a callable function ────────────
 // Mirrors useCompilation.ts's approach closely (same library, same shape of
@@ -401,6 +415,11 @@ function walkTree(node, matrix, role, out, depth) {
         box: absBox,
         role,
         isBackdropLike: area >= FRAME.w * FRAME.h * BACKDROP_AREA_RATIO,
+        // Raw props carried through so runChecks can look at paint
+        // (fill/stroke), raw pre-clamp size values (negative-size
+        // detection), and text content (undefined/NaN-as-text detection)
+        // without needing separate plumbing for each new check.
+        props,
       });
     }
   }
@@ -446,7 +465,44 @@ function runChecks(elements, frame) {
         issues.push(`A <${el.tag}> element rendered with essentially zero size at frame ${frame} — it computed to an invisible point instead of a visible shape.`);
       }
     }
-    if (el.isBackdropLike) continue; // full-bleed background elements are exempt from frame/SAFE checks below
+
+    // Negative size — always a bug (SVG doesn't render a negative width/
+    // height/radius, it's simply invalid), and diagnostically more useful
+    // to say so directly than to let it fall through as an ambiguous
+    // "zero size" message. Checked on the RAW prop values, before the
+    // bbox math below (which would otherwise just silently produce a
+    // flipped x1>x2 box that collapses to zero area).
+    const rawSizeProps = { r: el.props.r, rx: el.props.rx, ry: el.props.ry, width: el.props.width, height: el.props.height };
+    const negativeSizeProp = Object.entries(rawSizeProps).find(([, v]) => v !== undefined && Number(v) < 0);
+    if (negativeSizeProp) {
+      issues.push(`A <${el.tag}> element has a NEGATIVE ${negativeSizeProp[0]} (${negativeSizeProp[1]}) at frame ${frame} — SVG cannot render a negative size, this is always a formula/sign bug (e.g. subtracting the wrong way), not a valid shrink effect.`);
+    }
+
+    // Invisible despite having real size — fill explicitly turned off with
+    // no stroke to compensate. SVG's own default fill (black) means most
+    // elements ARE visible even with no fill prop at all, so this only
+    // fires when fill was explicitly disabled — a real, common mistake
+    // (e.g. copying a "fill: none, stroke: ..." pattern for an outline
+    // shape but forgetting the stroke half).
+    const fillOff = el.props.fill === "none" || el.props.fill === "transparent";
+    const hasStroke = el.props.stroke && el.props.stroke !== "none" && Number(el.props.strokeWidth ?? 1) > 0;
+    if (fillOff && !hasStroke && el.tag !== "line") {
+      issues.push(`A <${el.tag}> element has fill="${el.props.fill}" and no stroke at frame ${frame} — it occupies real space but paints nothing, so it will never actually be visible.`);
+    }
+
+    // A text element literally displaying "undefined"/"null"/"NaN" — a
+    // common symptom of an interpolated value that was never actually
+    // computed (a missing prop, a lookup that failed). Word-boundary
+    // matched so it catches both the whole string being exactly that AND
+    // a larger string with the bad token embedded ("Value: NaN").
+    if (el.tag === "text") {
+      const textContent = el.props.children != null ? String(Array.isArray(el.props.children) ? el.props.children.join("") : el.props.children) : "";
+      if (/\b(undefined|null|NaN)\b/.test(textContent)) {
+        issues.push(`A <text> element displays the literal word "${textContent.match(/\b(undefined|null|NaN)\b/)[0]}" at frame ${frame} (full text: "${textContent.slice(0, 60)}") — this is what an un-computed or missing value looks like on screen, not real content.`);
+      }
+    }
+
+    if (el.isBackdropLike) continue; // full-bleed background elements are exempt from frame/SAFE/zone checks below
 
     // <text> gets extra slack — its box comes from an ESTIMATED width (no
     // real font metrics available without an actual renderer, see
@@ -507,6 +563,35 @@ function runChecks(elements, frame) {
 // that were pushed consecutively from the SAME role (same parent group),
 // and only flags a child extending meaningfully past the container, not
 // minor edge bleed.
+// Zone intrusion — enforces LESSON_CHUNK_RULES' own rule 10 verbatim
+// ("Layer 2's footprint... never drifting into title/caption") with real
+// geometry instead of trusting the model followed it. Deliberately scoped
+// to non-text shapes only: <text> is EXPECTED to live inside the title/
+// caption zones (that's literally what those zones are for — Layer 1/3
+// text), so checking text against them would be checking the wrong thing
+// entirely. Only flags SUBSTANTIAL intrusion (>30% of the element's own
+// area inside a zone it doesn't belong in) — a shape's edge grazing a zone
+// boundary by a few px is normal and not what rule 10 is actually about.
+function checkZoneIntrusion(elements, frame) {
+  const issues = [];
+  const forbiddenZones = [
+    { name: "title", box: { x1: ZONES.title.x, y1: ZONES.title.y, x2: ZONES.title.x + ZONES.title.w, y2: ZONES.title.y + ZONES.title.h } },
+    { name: "caption", box: { x1: ZONES.caption.x, y1: ZONES.caption.y, x2: ZONES.caption.x + ZONES.caption.w, y2: ZONES.caption.y + ZONES.caption.h } },
+  ];
+  for (const el of elements) {
+    if (el.isBackdropLike || el.tag === "text") continue;
+    const elArea = boxArea(el.box);
+    if (elArea <= 0) continue;
+    for (const zone of forbiddenZones) {
+      const overlap = boxOverlapArea(el.box, zone.box);
+      if (overlap / elArea > 0.3) {
+        issues.push(`A <${el.tag}> element substantially overlaps the ${zone.name} zone at frame ${frame} — Layer 2's diagram is meant to stay inside ZONES.stage and never drift into title/caption, per this codebase's own layout rule.`);
+      }
+    }
+  }
+  return issues;
+}
+
 // Only these tags are geometrically sensible as a "container" (something
 // another element is meant to sit inside) — confirmed necessary against a
 // real false positive: a <text> label's WIDTH ESTIMATE (no real font
@@ -593,6 +678,7 @@ function checkSceneGeometry(headerCode, chunkCode, sceneName, sceneStartLine, du
       const elements = [];
       walkTree(tree, IDENTITY_MATRIX, "root", elements, 0);
       allIssues.push(...runChecks(elements, frame));
+      allIssues.push(...checkZoneIntrusion(elements, frame));
       // checkContainment is NOT wired in — kept defined, not deleted, for
       // the same reason as the "disconnect, don't remove" component-library
       // flag: tested against real generated scenes and caught producing
