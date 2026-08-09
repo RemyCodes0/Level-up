@@ -15,6 +15,7 @@ const Course = require("../models/Course");
 const AiUsageLog = require("../models/AiUsageLog");
 const PageView = require("../models/PageView");
 const Progress = require("../models/Progress");
+const GenerationLog = require("../models/GenerationLog");
 
 // GET /api/admin/overview
 // Returns the headline numbers + breakdowns for the dashboard, in one call.
@@ -321,6 +322,105 @@ exports.getCourseCosts = async (req, res) => {
   } catch (err) {
     console.error("admin getCourseCosts error:", err);
     res.status(500).json({ error: "Failed to load course costs" });
+  }
+};
+
+// GET /api/admin/courses/:courseId/generation-time
+// How long THIS course actually took to generate, broken down by lesson —
+// shown on the course detail view, same idea as getCourseCosts just above.
+//
+// Built entirely from GenerationLog (models/GenerationLog.js), which
+// already existed and needed no new instrumentation: buildLesson
+// (courseController.js) writes one entry per generation ATTEMPT for a
+// lesson, and — important for this aggregation — durationSec on every one
+// of those entries is `Date.now() - lessonStart`, i.e. CUMULATIVE from the
+// lesson's true start, not "how long did just this attempt take." So the
+// entry with the highest attemptNumber for a given lesson already IS that
+// lesson's total wall-clock generation time, retries included — summing
+// across every attempt would double-count. Sorting by attemptNumber desc
+// before grouping and taking $first per (courseId, lessonNumber) picks out
+// exactly that terminal entry.
+//
+// A lesson that failed every attempt still has a terminal entry (status
+// "failed") — it's included, since real time was genuinely spent on it,
+// same reasoning as counting it in the course total below.
+exports.getCourseGenerationTime = async (req, res) => {
+  try {
+    const courseId = new mongoose.Types.ObjectId(req.params.courseId);
+    const rows = await GenerationLog.aggregate([
+      { $match: { courseId } },
+      { $sort: { lessonNumber: 1, attemptNumber: -1 } },
+      {
+        $group: {
+          _id: "$lessonNumber",
+          lessonTitle: { $first: "$lessonTitle" },
+          durationSec: { $first: "$durationSec" },
+          status: { $first: "$status" },
+          attempts: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    const lessons = rows.map((r) => ({
+      lessonNumber: r._id,
+      lessonTitle: r.lessonTitle,
+      durationSec: r.durationSec,
+      status: r.status,
+      attempts: r.attempts,
+    }));
+    const totalSec = lessons.reduce((sum, l) => sum + l.durationSec, 0);
+
+    res.json({ totalSec, lessons });
+  } catch (err) {
+    console.error("admin getCourseGenerationTime error:", err);
+    res.status(500).json({ error: "Failed to load course generation time" });
+  }
+};
+
+// GET /api/admin/courses/generation-stats
+// Dashboard-wide "how long does a course take to generate, on average" —
+// the Courses section's summary stat, independent of pagination/filtering
+// on the activity list itself. Registered BEFORE /courses/:courseId in
+// routes/admin.js so "generation-stats" doesn't get swallowed as a
+// :courseId value.
+//
+// Same per-lesson terminal-duration logic as getCourseGenerationTime above,
+// just carried one level further: sum each course's lessons into that
+// course's own total, then average those totals across courses. Only
+// courses that have actually FINISHED (status "ready" or "failed", i.e.
+// not still "generating") are counted — an in-progress course's lessons so
+// far would understate its eventual total and bias the average down.
+exports.getCourseGenerationStats = async (req, res) => {
+  try {
+    const result = await GenerationLog.aggregate([
+      { $sort: { courseId: 1, lessonNumber: 1, attemptNumber: -1 } },
+      {
+        $group: {
+          _id: { courseId: "$courseId", lessonNumber: "$lessonNumber" },
+          durationSec: { $first: "$durationSec" },
+        },
+      },
+      { $group: { _id: "$_id.courseId", courseTotalSec: { $sum: "$durationSec" } } },
+      {
+        $lookup: {
+          from: "courses",
+          localField: "_id",
+          foreignField: "_id",
+          as: "course",
+          pipeline: [{ $project: { status: 1 } }],
+        },
+      },
+      { $match: { "course.0.status": { $in: ["ready", "failed"] } } },
+      { $group: { _id: null, avgSec: { $avg: "$courseTotalSec" }, coursesCounted: { $sum: 1 } } },
+    ]);
+
+    const avgSec = result[0]?.avgSec ?? null;
+    const coursesCounted = result[0]?.coursesCounted ?? 0;
+    res.json({ avgSec, coursesCounted });
+  } catch (err) {
+    console.error("admin getCourseGenerationStats error:", err);
+    res.status(500).json({ error: "Failed to load course generation stats" });
   }
 };
 

@@ -114,3 +114,16 @@ export function fmtPosition(lastFrame: number, totalFrames: number | null): stri
   const pct = Math.round((Math.min(lastFrame, totalFrames) / totalFrames) * 100);
   return `${fmtMMSS(lastFrame)} / ${fmtMMSS(totalFrames)} (${pct}%)`;
 }
+
+// Formats a duration given in SECONDS (generation-time stats, seconds
+// deliberately — GenerationLog's own durationSec — not frames like
+// fmtMMSS/fmtPosition above, which are playback positions at 30fps).
+export function fmtDuration(totalSec: number): string {
+  const s = Math.max(0, Math.round(totalSec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}

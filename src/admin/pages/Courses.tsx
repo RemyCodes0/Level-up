@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { CheckCircle, XCircle, Clock, Loader2, Play, X, Trash2, DollarSign, Code2, Copy, Check } from "lucide-react";
+import { CheckCircle, XCircle, Clock, Loader2, Play, X, Trash2, DollarSign, Code2, Copy, Check, Timer } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, StatusBadge, Pagination, fmtDate, fmtUsd, fmtPosition } from "../components";
+import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, StatusBadge, Pagination, fmtDate, fmtUsd, fmtPosition, fmtDuration } from "../components";
 import { DynamicPlayer } from "../../remotion/DynamicPlayer";
 
 interface ActivityItem {
@@ -30,6 +30,11 @@ export default function Courses() {
   const [status, setStatus] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Dashboard-wide, independent of pagination/status filter — see
+  // adminController.js's getCourseGenerationStats for how this is computed
+  // (average, across every FINISHED course, of that course's lessons'
+  // generation times summed together).
+  const [genStats, setGenStats] = useState<{ avgSec: number | null; coursesCounted: number } | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -45,6 +50,14 @@ export default function Courses() {
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page, status]);
+
+  // Fetched once, not tied to pagination/status — it's an "overall" figure.
+  useEffect(() => {
+    adminApi
+      .get<{ avgSec: number | null; coursesCounted: number }>("/api/admin/courses/generation-stats")
+      .then(setGenStats)
+      .catch((err) => console.error("Failed to load generation stats:", err));
+  }, []);
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
@@ -67,6 +80,14 @@ export default function Courses() {
           </div>
         }
       />
+
+      {genStats && genStats.avgSec != null && (
+        <div className="flex items-center gap-2 mb-4 text-sm text-slate-500">
+          <Timer className="h-4 w-4 text-slate-400" />
+          Avg. generation time: <span className="font-semibold text-slate-700">{fmtDuration(genStats.avgSec)}</span>
+          <span className="text-slate-400">(across {genStats.coursesCounted} finished course{genStats.coursesCounted === 1 ? "" : "s"})</span>
+        </div>
+      )}
 
       {loading ? <LoadingBlock /> : error ? <ErrorBlock message={error} /> : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -112,6 +133,14 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
     estimatedUsd: number;
     byKind: { kind: string; totalUsd: number; calls: number; realUsd: number; estimatedUsd: number }[];
   } | null>(null);
+  // Total time this course took to generate, broken down by lesson — see
+  // adminController.js's getCourseGenerationTime. null (not just absent)
+  // for a course that hasn't started generating yet / has no GenerationLog
+  // entries, so the UI can tell "no data yet" apart from "loading."
+  const [genTime, setGenTime] = useState<{
+    totalSec: number;
+    lessons: { lessonNumber: number; lessonTitle: string | null; durationSec: number; status: string; attempts: number }[];
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [previewLesson, setPreviewLesson] = useState<number | null>(null);
   const [showCode, setShowCode] = useState(false);
@@ -127,13 +156,16 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
     setLoading(true);
     setPreviewLesson(null);
     setProgressByLesson(null);
+    setGenTime(null);
     Promise.all([
       adminApi.get<{ course: any }>(`/api/admin/courses/${courseId}`),
       adminApi.get<{ totalUsd: number; realUsd: number; estimatedUsd: number; byKind: any[] }>(`/api/admin/courses/${courseId}/costs`),
+      adminApi.get<{ totalSec: number; lessons: any[] }>(`/api/admin/courses/${courseId}/generation-time`),
     ])
-      .then(([c, costData]) => {
+      .then(([c, costData, genTimeData]) => {
         setCourse(c.course);
         setCosts(costData);
+        setGenTime(genTimeData.lessons.length > 0 ? genTimeData : null);
         const ownerId = c.course?.userId?._id;
         if (!ownerId) return;
         adminApi
@@ -202,6 +234,31 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
                   {costs.byKind.map((k) => (
                     <span key={k.kind} className="text-xs px-2 py-1 rounded-lg bg-white border border-slate-200 text-slate-600">
                       {k.kind}: {fmtUsd(k.totalUsd)} ({k.calls}){k.estimatedUsd > 0 && k.realUsd > 0 && " · mixed"}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {genTime && (
+              <div className="px-6 py-4 border-b border-slate-100 bg-slate-50">
+                <div className="flex items-center gap-2 mb-2">
+                  <Timer className="h-4 w-4 text-slate-400" />
+                  <span className="text-sm font-semibold text-slate-700">Total generation time: {fmtDuration(genTime.totalSec)}</span>
+                </div>
+                {/* Sum of each lesson's own generation time, not literal
+                    wall-clock — lessons build concurrently (see
+                    buildLessonsConcurrently), so what the user actually
+                    waited is shorter than this total. See
+                    getCourseGenerationTime's own comment. */}
+                <p className="text-xs text-slate-400 mb-2">Sum of each lesson's own generation time — lessons build concurrently, so actual wait was shorter.</p>
+                <div className="flex flex-wrap gap-2">
+                  {genTime.lessons.map((l) => (
+                    <span
+                      key={l.lessonNumber}
+                      className={`text-xs px-2 py-1 rounded-lg bg-white border text-slate-600 ${l.status === "failed" ? "border-red-200" : "border-slate-200"}`}
+                    >
+                      L{l.lessonNumber}: {fmtDuration(l.durationSec)}{l.attempts > 1 && ` (${l.attempts} attempts)`}{l.status === "failed" && " · failed"}
                     </span>
                   ))}
                 </div>

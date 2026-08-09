@@ -6,6 +6,8 @@ const {
   getCourseDetail,
   getAiUsage,
   getCourseCosts,
+  getCourseGenerationTime,
+  getCourseGenerationStats,
   getPageViewStats,
   adminDeleteCourse,
   getUserProgress,
@@ -38,8 +40,13 @@ router.get("/overview", getOverview);
 router.get("/activity", getRecentActivity);
 router.get("/ai-usage", getAiUsage);
 router.get("/pageviews", getPageViewStats);
+// Must be registered BEFORE /courses/:courseId — otherwise Express would
+// match "generation-stats" as a :courseId value and this route would never
+// be reached.
+router.get("/courses/generation-stats", getCourseGenerationStats);
 router.get("/courses/:courseId", getCourseDetail);
 router.get("/courses/:courseId/costs", getCourseCosts);
+router.get("/courses/:courseId/generation-time", getCourseGenerationTime);
 router.delete("/courses/:courseId", adminDeleteCourse);
 router.get("/users/:userId/progress", getUserProgress);
 
