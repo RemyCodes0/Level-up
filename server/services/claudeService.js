@@ -2889,6 +2889,24 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
         const declLine = validated.slice(0, declStart).split("\n").length;
         const geomResult = checkSceneGeometry(headerCode, validated, geomSceneName, declLine, chunkScenes[i].durationInFrames);
         if (!geomResult.ok) {
+          // CONFIRMED real bug, from a real stuck course: this throw
+          // happens OUTSIDE the patch-generation try/catch above (lines
+          // ~2845-2858), which is the ONLY place consecutivePatchFailures
+          // used to get incremented. That meant a geometry failure on a
+          // successfully-PATCHED attempt never counted toward the ladder
+          // at all — canTryPatch kept evaluating true forever, so the
+          // chunk just retried the same patch path attempt after attempt
+          // with zero escalation. Confirmed against a real log: the
+          // identical "StrandedHelix... frame 114" violation repeated 9
+          // CONSECUTIVE times, verbatim, before this fix — the ladder was
+          // never actually escalating to a fresh full regeneration that
+          // could have broken the cycle. Now a geometry failure on a
+          // patched attempt counts the same as a patch-generation failure.
+          if (patched) {
+            consecutivePatchFailures++;
+            const willFallBack = consecutivePatchFailures >= CHUNK_PATCH_RETRY_LIMIT;
+            console.warn(`  [${label}] Patch passed generation but failed the geometry check — ${willFallBack ? "falling back to full regeneration." : `will retry patching (${consecutivePatchFailures}/${CHUNK_PATCH_RETRY_LIMIT} consecutive failures).`}`);
+          }
           const geomErr = new Error(geomResult.message);
           geomErr.isContentError = true;
           throw geomErr;
