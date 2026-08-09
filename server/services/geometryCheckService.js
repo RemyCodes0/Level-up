@@ -352,10 +352,10 @@ const SVG_PRIMITIVE_TAGS = new Set(["circle", "ellipse", "rect", "line", "text",
 // custom-component ancestor (or "root" if none), so instances from the SAME
 // .map()-generated repeat or the same reusable component call group
 // together, while genuinely different element types never get compared.
-function walkTree(node, matrix, role, out, depth) {
+function walkTree(node, matrix, role, out, depth, headerNames) {
   if (depth > 60 || node == null || typeof node !== "object") return; // guards against a pathological/cyclic tree
   if (Array.isArray(node)) {
-    node.forEach((child) => walkTree(child, matrix, role, out, depth + 1));
+    node.forEach((child) => walkTree(child, matrix, role, out, depth + 1, headerNames));
     return;
   }
   if (!("type" in node)) return;
@@ -363,9 +363,31 @@ function walkTree(node, matrix, role, out, depth) {
   const { type, props = {} } = node;
 
   if (typeof type === "function") {
-    // A custom component (Backdrop, Gear, a scene-local helper, an active
-    // library component) — call it directly, same as React would, and
-    // recurse into whatever it returns. Its OWN name becomes the role for
+    // CONFIRMED IN A REAL PRODUCTION RUN, not hypothetical: a header-
+    // declared component (Backdrop, Motif, any shared decoration) renders
+    // the SAME way in every single scene of a lesson, since every scene
+    // calls into the same header. If ONE of those happens to sit outside
+    // SAFE (a small corner element, similar in spirit to renderService.js's
+    // own real watermark, which is deliberately positioned near the edge,
+    // outside typical "content" bounds) — every scene in the WHOLE lesson
+    // gets flagged identically, and worse: the retry/patch mechanism can
+    // only ever regenerate SCENE code, never the header, so a header-
+    // caused violation can NEVER be fixed by patching or even fully
+    // regenerating the scene — every attempt just re-triggers the exact
+    // same unfixable flag until the entire retry budget is exhausted. A
+    // real course got stuck retrying every chunk up to its full budget
+    // this way before this exemption existed. Fix: a component whose name
+    // was declared in the HEADER (not this scene) is never descended
+    // into — whatever it renders is the header's responsibility, not
+    // something this check should ever hold a scene-level retry hostage
+    // to. Scene-declared helpers (including ones nested inside the scene
+    // function itself) are unaffected — only names that came from the
+    // header are exempted.
+    if (headerNames && headerNames.has(type.name)) return;
+
+    // A custom component (Gear, a scene-local helper, an active library
+    // component) — call it directly, same as React would, and recurse
+    // into whatever it returns. Its OWN name becomes the role for
     // everything nested inside it, so e.g. every <circle> inside repeated
     // <GraphNode> calls groups together for overlap checking, not with
     // unrelated circles elsewhere in the scene. EXCEPT a pass-through stub
@@ -384,7 +406,7 @@ function walkTree(node, matrix, role, out, depth) {
       return;
     }
     const nextRole = type.__isGeometryCheckPassthrough ? role : (type.name || role);
-    walkTree(rendered, matrix, nextRole, out, depth + 1);
+    walkTree(rendered, matrix, nextRole, out, depth + 1, headerNames);
     return;
   }
 
@@ -425,7 +447,7 @@ function walkTree(node, matrix, role, out, depth) {
   }
 
   const children = props.children;
-  if (children != null) walkTree(children, nextMatrix, role, out, depth + 1);
+  if (children != null) walkTree(children, nextMatrix, role, out, depth + 1, headerNames);
 }
 
 // ── Step 4: the four checks ─────────────────────────────────────────────
@@ -650,6 +672,16 @@ function checkSceneGeometry(headerCode, chunkCode, sceneName, sceneStartLine, du
     const sceneFn = scope[sceneName];
     if (typeof sceneFn !== "function") return { ok: true }; // couldn't resolve — don't block on our own limitation
 
+    // Names declared in the HEADER specifically (not the scene) — anything
+    // rendered by one of these gets exempted during the walk (see
+    // walkTree's own comment on why: a header-caused violation can never
+    // be fixed by patching or regenerating a scene, so flagging it just
+    // burns the entire retry budget on something structurally unfixable).
+    const headerNames = new Set();
+    const headerDeclPattern = /^(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/gm;
+    let hm;
+    while ((hm = headerDeclPattern.exec(headerCode)) !== null) headerNames.add(hm[1]);
+
     // Deliberately avoids frame 0 and the very last frame — confirmed
     // against real generated code that sampling frame 0 produces false
     // positives: entrance animations (a spring scale-in from 0, a fade from
@@ -676,7 +708,7 @@ function checkSceneGeometry(headerCode, chunkCode, sceneName, sceneStartLine, du
         continue; // a runtime exception here is a DIFFERENT bug class, already covered elsewhere — not this check's job
       }
       const elements = [];
-      walkTree(tree, IDENTITY_MATRIX, "root", elements, 0);
+      walkTree(tree, IDENTITY_MATRIX, "root", elements, 0, headerNames);
       allIssues.push(...runChecks(elements, frame));
       allIssues.push(...checkZoneIntrusion(elements, frame));
       // checkContainment is NOT wired in — kept defined, not deleted, for
