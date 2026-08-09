@@ -1212,7 +1212,7 @@ STRICT REQUIREMENTS — follow exactly or the browser compilation will fail:
 4. Do NOT render <Series>, <Series.Sequence>, or <Audio> — your scenes are combined with the header and every other chunk into those wrappers by other code after you return your functions.
 5. EACH SCENE'S DURATION is given to you as a literal number. Hardcode that literal directly in your interpolate() calls for pacing — do not read it from a variable, it does not exist in scope.
 6. FRAME NUMBERS ARE PER-SCENE. useCurrentFrame() resets to 0 at the start of EACH of your scenes — never offset a timing as if another scene's duration applies. Entrances live near [0, 30]; exits near [thisSceneDuration - 30, thisSceneDuration], written as literals of THAT scene's own duration.
-7. Aim for roughly 100-200 lines PER SCENE — rich, detailed animation, but concise: every extra line is extra generation time. Extract any local helper once near the top of that scene's function and reuse it within that scene.
+7. Aim for roughly 300-400 lines PER SCENE — rich, detailed animation, but concise: every extra line is extra generation time. Extract any local helper once near the top of that scene's function and reuse it within that scene.
 
 CROSS-SCENE DATA CONSISTENCY — chunks generate IN PARALLEL now, so you cannot copy another chunk's exact code byte-for-byte the way you could in the old sequential pipeline. FIRST check the HEADER CODE below: if your scene is part of a worked example that spans multiple scenes (an algorithm walkthrough, a sort/search trace, a running numeric example), the header may have ALREADY declared that example's exact data as a named top-level const (e.g. DIJKSTRA_GRAPH, SORT_ARRAY) specifically so every scene uses the identical example — if it's there, you MUST reference it by that exact name, never redeclare or invent your own version. Only if the header did NOT declare it (the example wasn't flagged as shared, or you're genuinely the only scene using it) do you fall back to independently building the SAME canonical version of that example from the shared subject matter — the standard/obvious textbook instance of it, not an arbitrary one you invent — so two independent derivations are likely to land on the same values even without seeing each other's code. Within YOUR OWN chunk, scenes CAN and should share exact values via rule 1a.
 
@@ -1443,6 +1443,26 @@ function autoFixCode(code, { totalFrames } = {}) {
   const backtickCount = (fixed.match(/`/g) || []).length;
   if (backtickCount % 2 !== 0) {
     throw contentError("Unterminated template literal detected — regenerating instead of guessing a fix.");
+  }
+
+  // Fix 6: literal \uXXXX escape sequences left as raw backslash-u-hex TEXT
+  // instead of an actual Unicode character — a real, observed bug: JSX text
+  // content (unlike a JS string literal) never interprets \u escapes at
+  // all, so a model reaching for − (minus sign) or ₀-₉
+  // (subscript digits) the way it habitually would inside a JS string
+  // produces literal "−" text on screen instead of "−". Decoding every
+  // literal \uXXXX sequence directly in the source text is safe regardless
+  // of where it appears: inside a real string literal it produces the
+  // identical string value either way (just spelled with the actual
+  // character instead of the escape), and in raw JSX text it fixes the bug
+  // outright.
+  let unicodeEscapeFixCount = 0;
+  fixed = fixed.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => {
+    unicodeEscapeFixCount++;
+    return String.fromCharCode(parseInt(hex, 16));
+  });
+  if (unicodeEscapeFixCount) {
+    notes.push(`decoded literal \\uXXXX escape sequence(s) left as raw text (x${unicodeEscapeFixCount})`);
   }
 
   if (notes.length) {
