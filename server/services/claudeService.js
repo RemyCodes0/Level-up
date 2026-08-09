@@ -1203,7 +1203,7 @@ ${sceneTable}
 }
 
 // Same reasoning as LESSON_HEADER_REUSABLE_SECTION above — extracted so
-// COMPONENT_LIBRARY_ENABLED can omit it entirely rather than leave the
+// COMPONENT_LIBRARY_ENABLED can omit it entirely rather than leave the 
 // decompose/mark-by-default instructions shaping scene structure even with
 // an empty catalog.
 const LESSON_CHUNK_REUSABLE_SECTION = `
