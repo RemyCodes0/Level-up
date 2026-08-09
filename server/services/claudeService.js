@@ -13,6 +13,7 @@ const {
   trackUsage: trackLibraryUsage,
   PREVIEW_HEADER_CONTRACT,
 } = require("./globalComponentLibrary");
+const { checkSceneGeometry } = require("./geometryCheckService");
 const { reviewGeneratedCode } = require("./codeCriticService");
 const { createLimiter } = require("../utils/concurrencyLimiter");
 const { recordAiUsage } = require("./aiUsageService");
@@ -2866,6 +2867,33 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
 
       lastRawCode = rawCode;
       const validated = validateChunk(rawCode);
+
+      // Deterministic geometry check — off-frame/off-SAFE positions,
+      // NaN/absurd or zero-sized elements, unwanted overlap between
+      // same-kind repeated siblings. Explicitly NOT a subjective quality
+      // judgment (see geometryCheckService.js's own comment for the full
+      // reasoning) — pure arithmetic on real bounding boxes, run once per
+      // scene in this chunk. A violation is tagged isContentError with a
+      // "(line N)" reference to that scene's own declaration line, so it
+      // plugs directly into the SAME extractErrorLine/locateSceneAtLine
+      // patch-first ladder every other content error already uses here —
+      // no separate retry path needed. Because this check runs on EVERY
+      // attempt (patched or freshly regenerated) before code is accepted,
+      // a fix automatically gets re-checked before being trusted — nothing
+      // extra was needed to satisfy "after targeting the issue, look at it
+      // again."
+      for (let i = 0; i < chunkScenes.length; i++) {
+        const geomSceneName = expectedNames[i];
+        const declStart = validated.indexOf(`function ${geomSceneName}(`);
+        if (declStart === -1) continue; // shouldn't happen post-validation — never block on our own limitation
+        const declLine = validated.slice(0, declStart).split("\n").length;
+        const geomResult = checkSceneGeometry(headerCode, validated, geomSceneName, declLine, chunkScenes[i].durationInFrames);
+        if (!geomResult.ok) {
+          const geomErr = new Error(geomResult.message);
+          geomErr.isContentError = true;
+          throw geomErr;
+        }
+      }
 
       // Same fire-and-forget candidate extraction as generateLessonHeader,
       // just scoped to scene-local helpers instead of header-level ones —
