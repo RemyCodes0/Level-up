@@ -42,6 +42,21 @@ export interface SceneProgressItem {
   previewCode: string | null;
 }
 
+// One entry per FINAL scene in an already-built lesson (as opposed to
+// SceneProgressItem above, which only exists mid-generation) — the frame
+// range each scene occupies in the stitched playback timeline. See
+// Course.js's sceneMetaSchema for the backend side, and courseController.js's
+// retrySceneHandler for the existing server-side "which scene is this crash
+// frame in" lookup (`lesson.scenes.find(s => crashFrame >= s.startFrame &&
+// crashFrame < s.endFrame)`) that DynamicPlayer's own auto-skip mirrors on
+// the client to find the NEXT scene to jump to.
+export interface SceneMetaItem {
+  index: number;
+  startFrame: number;
+  endFrame: number;
+  label: string;
+}
+
 export interface LessonFromAPI {
   lessonNumber: number;
   title: string;
@@ -52,6 +67,10 @@ export interface LessonFromAPI {
   code: string | null;
   totalFrames: number | null;
   sceneProgress?: SceneProgressItem[];
+  // Only present once the lesson has actually finished building (same
+  // "final vs mid-generation" split as sceneProgress above) — see
+  // SceneMetaItem's own comment.
+  scenes?: SceneMetaItem[];
   status: "rendering" | "ready" | "failed" | "locked";
   error?: string | null;
   // True for a lesson generated from a collaborative room's group quiz

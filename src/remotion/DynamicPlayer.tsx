@@ -52,6 +52,14 @@ interface DynamicPlayerProps {
   // here instead of the caller rendering its own absolutely-positioned div
   // next to <DynamicPlayer/> keeps it visible in both states.
   overlay?: ReactNode;
+  // Final scene frame ranges for THIS lesson (see SceneMetaItem in
+  // CourseApi.ts) — lets a render-time crash (one scene throwing mid-
+  // playback, NOT a compile error or a crash before <Player> ever mounted)
+  // auto-skip past the broken scene into the next one instead of dead-ending
+  // the whole lesson on a permanent error screen. Absent/empty just means
+  // "no skip data available" — falls back to the previous permanent-error
+  // behavior, never a hard requirement.
+  scenes?: { startFrame: number; endFrame: number }[];
 }
 
 const FPS = 30;
@@ -59,6 +67,10 @@ const SKIP_SECONDS = 10;
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 // How long controls stay visible after the last tap/move, while playing.
 const AUTO_HIDE_MS = 3000;
+// How long a render-time crash's countdown-to-auto-skip runs for, in
+// seconds — long enough to read the message and hit "Fix this scene now"
+// if wanted, short enough that a broken scene doesn't stall the lesson.
+const AUTO_SKIP_SECONDS = 5;
 
 // Pulls every audio URL out of the lesson's generated code (each scene has
 // its own <Audio src="..."/> tag) so they can all be prefetched up front.
@@ -74,13 +86,31 @@ function formatTime(frame: number, fps: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+// Finds the scene a render-time crash happened in (mirrors
+// courseController.js's own retrySceneHandler: `lesson.scenes.find(s =>
+// crashFrame >= s.startFrame && crashFrame < s.endFrame)`) and returns the
+// FOLLOWING scene's startFrame to auto-skip to — or null if there's no scene
+// data, the crash frame doesn't land in any known scene, or it was already
+// the last scene (nothing to skip forward to).
+function resolveNextSceneStart(
+  crashFrame: number | null,
+  scenes: { startFrame: number; endFrame: number }[] | undefined
+): number | null {
+  if (crashFrame == null || !scenes || scenes.length === 0) return null;
+  const index = scenes.findIndex((s) => crashFrame >= s.startFrame && crashFrame < s.endFrame);
+  if (index === -1 || index + 1 >= scenes.length) return null;
+  return scenes[index + 1].startFrame;
+}
+
 // Shared crash UI — used both by DynamicPlayer's own render-time error state
 // below (compile errors, Remotion Player "error" events) AND by
 // PlayerErrorBoundary further down (crashes that happen BEFORE DynamicPlayer
 // even reaches those — see PlayerErrorBoundary's own comment). Factored out
 // once so both paths show the identical message instead of two near-copies
 // drifting apart over time.
-function PlayerErrorFallback({ onRetry, retrying, phase = "preparing", crashInfo, retryingLabel = "Regenerating…" }: {
+function PlayerErrorFallback({
+  onRetry, retrying, phase = "preparing", crashInfo, retryingLabel = "Regenerating…", skipCountdown,
+}: {
   onRetry?: (info?: LessonCrashInfo) => void;
   retrying?: boolean;
   phase?: "preparing" | "playing";
@@ -90,7 +120,16 @@ function PlayerErrorFallback({ onRetry, retrying, phase = "preparing", crashInfo
   // instead, so this component doesn't need to guess.
   crashInfo?: LessonCrashInfo | null;
   retryingLabel?: string;
+  // Seconds remaining before DynamicPlayer auto-skips past this scene —
+  // present only for a render-time crash where a next scene to jump to was
+  // actually found (see resolveNextSceneStart). null/undefined means the
+  // OLD permanent-error behavior: no countdown, no auto-skip, because
+  // either this isn't a mid-playback scene crash (a compile error or a
+  // crash before <Player> ever mounted has no "next scene" to skip to at
+  // all) or there's no scene-boundary data / no next scene to skip to.
+  skipCountdown?: number | null;
 }) {
+  const skipping = skipCountdown != null;
   return (
     <div
       style={{ aspectRatio: "16/9" }}
@@ -98,8 +137,11 @@ function PlayerErrorFallback({ onRetry, retrying, phase = "preparing", crashInfo
     >
       <p className="font-semibold mb-1">This animation hit an error</p>
       <p className="text-red-400/60 text-xs max-w-sm">
-        Something went wrong while {phase} this lesson's animation.
-        Regenerating it usually fixes this.
+        {skipping ? (
+          <>This scene hit an error — moving on to the next scene in <span className="text-red-300 font-semibold tabular-nums">{skipCountdown}s</span>.</>
+        ) : (
+          <>Something went wrong while {phase} this lesson's animation. Regenerating it usually fixes this.</>
+        )}
       </p>
       {onRetry && (
         <button
@@ -110,7 +152,7 @@ function PlayerErrorFallback({ onRetry, retrying, phase = "preparing", crashInfo
           {retrying ? (
             <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {retryingLabel}</>
           ) : (
-            <><RefreshCw className="h-3.5 w-3.5" /> Regenerate this lesson</>
+            <><RefreshCw className="h-3.5 w-3.5" /> {skipping ? "Fix this scene now" : "Regenerate this lesson"}</>
           )}
         </button>
       )}
@@ -328,6 +370,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   onSeekBack,
   onFrameUpdate,
   overlay,
+  scenes,
 }) => {
   const playerRef = useRef<PlayerRef>(null);
   // Wraps BOTH the Player and the controls overlay — this is the element we
@@ -617,6 +660,20 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   // regenerating the whole lesson. Not shown in the UI — see the existing
   // console-only convention on error details in this file.
   const [crashInfo, setCrashInfo] = useState<LessonCrashInfo | null>(null);
+  // Seconds left before a render-time crash auto-skips to the next scene —
+  // null whenever there's nothing counting down (no crash, a crash with no
+  // "next scene" to skip to, or the user already clicked to fix it now).
+  const [skipCountdown, setSkipCountdown] = useState<number | null>(null);
+  // Set the instant the countdown reaches zero; a separate effect below
+  // performs the actual seekTo/play once the Player has (re)mounted after
+  // renderError/crashInfo clear — doing it in the SAME tick as clearing
+  // those would race the Player unmounting the old, crashed instance.
+  const [pendingSkipFrame, setPendingSkipFrame] = useState<number | null>(null);
+  // Lets handleRetryClick below actually clearInterval() the running
+  // countdown instead of just zeroing the displayed state — otherwise the
+  // interval callback (below) would keep firing once a second, no-op'ing
+  // forever, until crashInfo eventually changes for an unrelated reason.
+  const skipIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // A successful retry replaces `code` with freshly generated code — clear the
   // crash state so the new lesson gets a clean mount instead of being stuck
@@ -624,7 +681,77 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   useEffect(() => {
     setRenderError(false);
     setCrashInfo(null);
+    setSkipCountdown(null);
+    setPendingSkipFrame(null);
   }, [code]);
+
+  // Drives the countdown: starts at AUTO_SKIP_SECONDS the moment a render-
+  // time crash lands somewhere a next scene actually exists to jump to,
+  // ticks down once a second, and triggers the skip itself at zero. A
+  // compile error (crashFrame null — nothing ever played) or a crash in the
+  // LAST scene (no next scene) resolves to null here, so no countdown starts
+  // and PlayerErrorFallback shows the old permanent "Regenerate" screen —
+  // this only ever activates when skipping forward is actually possible.
+  const nextSceneStart = renderError ? resolveNextSceneStart(crashInfo?.crashFrame ?? null, scenes) : null;
+  useEffect(() => {
+    if (nextSceneStart == null) {
+      setSkipCountdown(null);
+      return;
+    }
+    setSkipCountdown(AUTO_SKIP_SECONDS);
+    const interval = setInterval(() => {
+      setSkipCountdown((prev) => {
+        if (prev == null) return null;
+        if (prev <= 1) {
+          clearInterval(interval);
+          skipIntervalRef.current = null;
+          setPendingSkipFrame(nextSceneStart);
+          setRenderError(false);
+          setCrashInfo(null);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    skipIntervalRef.current = interval;
+    return () => {
+      clearInterval(interval);
+      skipIntervalRef.current = null;
+    };
+    // Re-keyed on the crash itself (via crashInfo), not just nextSceneStart —
+    // a second crash landing in the SAME scene span (same nextSceneStart)
+    // must still restart a fresh 5s countdown, not silently continue a timer
+    // that (from this effect's view) looks unchanged.
+  }, [nextSceneStart, crashInfo]);
+
+  // Performs the actual skip once the Player has remounted (renderError/
+  // crashInfo already cleared above swaps the JSX back to <Player/>) — keyed
+  // on Component too so this re-checks once the fresh instance is mounted
+  // and playerRef.current is guaranteed to point at it.
+  useEffect(() => {
+    if (pendingSkipFrame == null) return;
+    const player = playerRef.current;
+    if (!player) return;
+    player.seekTo(pendingSkipFrame);
+    player.play();
+    setPendingSkipFrame(null);
+  }, [pendingSkipFrame, Component]);
+
+  // Wraps the caller's onRetry so clicking "Fix this scene now" during a
+  // countdown cancels the auto-skip instead of racing it — without this, the
+  // countdown could still fire and jump the player forward a moment after
+  // the user asked to fix THIS scene instead. Clears the actual interval
+  // (not just the displayed countdown state) so it stops ticking entirely
+  // rather than firing no-op updates once a second until crashInfo next
+  // changes for an unrelated reason.
+  const handleRetryClick = useCallback((info?: LessonCrashInfo) => {
+    if (skipIntervalRef.current) {
+      clearInterval(skipIntervalRef.current);
+      skipIntervalRef.current = null;
+    }
+    setSkipCountdown(null);
+    onRetry?.(info);
+  }, [onRetry]);
 
   // The Player emits an "error" EVENT on its ref when the composition throws
   // while rendering a frame — the same event-listener mechanism as the
@@ -668,11 +795,12 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
       : crashInfo;
     return (
       <PlayerErrorFallback
-        onRetry={onRetry}
+        onRetry={onRetry ? handleRetryClick : undefined}
         retrying={retrying}
         phase={renderError ? "playing" : "preparing"}
         crashInfo={effectiveCrashInfo}
         retryingLabel={retryingLabel}
+        skipCountdown={skipCountdown}
       />
     );
   }

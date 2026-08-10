@@ -27,7 +27,7 @@ import {
   getNextSuggestions,
   getPricingConfig,
 } from "../api/CourseApi";
-import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, CourseTier, CreditPack } from "../api/CourseApi";
+import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, SceneMetaItem, CourseTier, CreditPack } from "../api/CourseApi";
 import { getProgress, markLessonWatched, logPosition } from "../api/ProgressApi";
 import { submitQuiz as submitQuizApi, getLatestAttempt } from "../api/QuizApi";
 import type { QuizResult } from "../api/QuizApi";
@@ -116,6 +116,10 @@ interface Lesson {
   // passive thumbnail filmstrip (no playback). Only ever consulted when
   // `code` is still null; once `code` exists, that's always used instead.
   sceneProgress?: SceneProgressItem[];
+  // Final scene frame ranges, once the lesson has actually finished
+  // building — lets DynamicPlayer find "the next scene" to auto-skip to
+  // after a render-time crash. See SceneMetaItem's own comment.
+  scenes?: SceneMetaItem[];
 }
 
 interface MCQQuestion {
@@ -994,6 +998,7 @@ function VideoPlayer({
             retrying={retrying}
             retryingLabel={retryingLabel}
             onFrameUpdate={handleFrameUpdate}
+            scenes={lesson.scenes}
             // Passed through as DynamicPlayer's `overlay` prop (rendered
             // INSIDE its fullscreened container) instead of a sibling div
             // here — a sibling only shows up in the non-fullscreen view,
@@ -1707,7 +1712,7 @@ export default function AILearningPage() {
       id: i + 1, title: l.title || `Lesson ${i + 1}`, duration: "~2:00", completed: false,
       description: l.description || "", keyPoints: l.keyPoints?.length ? l.keyPoints : ["", "", "", ""],
       videoUrl: l.videoUrl, code: l.code ?? null, totalFrames: l.totalFrames ?? null, error: l.error ?? null,
-      sceneProgress: l.sceneProgress ?? [],
+      sceneProgress: l.sceneProgress ?? [], scenes: l.scenes ?? [],
     }));
     const mappedStatuses: LessonStatus[] = (c.lessons || []).map((l) =>
       l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : l.status === "locked" ? "locked" : "generating"
