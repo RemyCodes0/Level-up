@@ -99,42 +99,44 @@ const CODE_PROVIDERS = {
     client: openRouterClient,
     model: "z-ai/glm-5.2",
     providerName: "glm",
-    // History: unpinned → pinned to z-ai (reverted, see old git history) →
-    // pinned to Decart specifically with allow_fallbacks:false (2026-08-06)
-    // → sort:"price" + preferred_min_throughput:40 (2026-08-08) →
-    // sort:"price", no throughput floor (2026-08-10) → briefly pinned to
-    // Baidu (2026-08-10) → reverted back to this same day, per explicit
-    // instruction: always route to whichever provider is cheapest.
-    //
-    // The Decart-only pin's hard-fail-if-unavailable choice turned out to
-    // cost more than it saved: under a real 6-lesson course's concurrency
-    // (header + several chunks per lesson, all firing at once, all forced
-    // onto ONE host with zero fallback), Decart's rate limit tripped
-    // repeatedly — confirmed live, 3 of 6 lessons in one course permanently
-    // failed on sustained 429s, each retry hitting the same saturated limit
-    // again immediately.
-    //
-    // The preferred_min_throughput:40 floor that replaced the Decart pin had
-    // its own cost problem, confirmed against real billing data: OpenRouter's
-    // docs (openrouter.ai/docs/features/provider-routing) are explicit that a
-    // throughput/latency floor DEPRIORITIZES (not excludes) any provider that
-    // doesn't clear it, even under sort:"price" — tracing this course's
-    // actual per-call cost against calls of IDENTICAL completion-token size
-    // (so genuinely comparable, not a retry-volume artifact) showed the
-    // effective $/1k-completion-token price roughly 5x'd over 3 days for the
-    // exact same model string, with no code change on our end — the floor
-    // was quietly pushing requests off the cheapest host onto pricier ones
-    // meeting the 40 tok/s bar.
-    //
-    // Pure sort:"price" (no throughput floor, no `order` — `order` overrides
-    // price sorting entirely, which is why the brief Baidu pin below had to
-    // be removed rather than combined with this) is what OpenRouter's own
-    // docs confirm as true lowest-price routing: it always tries the
-    // currently-cheapest live endpoint for this model first, falling through
-    // (allow_fallbacks: true) to the next-cheapest if that one is down —
-    // never hard-failing the way the Decart pin did, but also never settling
-    // for a pricier host the way the throughput floor quietly did.
-    extraParams: { reasoning: { enabled: false }, provider: { sort: "price", allow_fallbacks: true } },
+    // Deliberately UNPINNED again (no `provider: {...}` field at all) —
+    // full history, oldest to newest:
+    //   pinned to z-ai's own first-party host (until 2026-08-04)
+    //   -> fully unpinned (2026-08-04): this codebase's own commit message
+    //      at the time recorded it as "the cleanest observed run (5/5
+    //      codegen calls 'stop', no retries)"
+    //   -> pinned hard to Decart, allow_fallbacks:false (2026-08-06): a real
+    //      6-lesson course's concurrency (header + several chunks per
+    //      lesson, all firing at once, all forced onto ONE host with zero
+    //      fallback) tripped Decart's rate limit repeatedly — confirmed
+    //      live, 3 of 6 lessons in one course permanently failed on
+    //      sustained 429s
+    //   -> sort:"price" + preferred_min_throughput:40 (2026-08-08): fixed
+    //      the hard-fail, but OpenRouter's own docs (openrouter.ai/docs/
+    //      features/provider-routing) are explicit that a throughput floor
+    //      DEPRIORITIZES (not excludes) any provider that doesn't clear it,
+    //      even under sort:"price" — confirmed against real billing data
+    //      that this was quietly pushing requests off the cheapest host
+    //      onto pricier ones meeting the 40 tok/s bar
+    //   -> sort:"price", no floor (2026-08-10) -> briefly pinned to Baidu
+    //      (2026-08-10, same day) -> back to sort:"price" (still same day)
+    //   -> THIS (2026-08-10, later same day): a real OpenRouter activity
+    //      export for the day showed sort:"price" landing on 12 DIFFERENT
+    //      providers for GLM 5.2, including Fireworks at 5-7x Decart's
+    //      price during concurrent bursts — sort:"price" always tries the
+    //      cheapest host FIRST for every one of many simultaneous requests,
+    //      so it saturates that one host almost immediately under this
+    //      app's real concurrency (many chunks/headers firing at once,
+    //      unchanged this whole time — see buildLessonsConcurrently), then
+    //      dumps the overflow onto whatever's next, including premium
+    //      tiers. OpenRouter's own DEFAULT (unpinned) load balancing weighs
+    //      by inverse-square of price instead of strict cheapest-first,
+    //      which spreads a burst across several moderately-priced hosts
+    //      from the start rather than hammering one host into overflow —
+    //      exactly what this codebase's own 2026-08-04 unpinned run already
+    //      demonstrated empirically. Revisit only against comparably real
+    //      evidence, not on the strength of this comment alone.
+    extraParams: { reasoning: { enabled: false } },
     maxTokens: 100000,
     keyEnv: "OPENROUTER_API_KEY",
   },
@@ -312,10 +314,10 @@ const SCENE_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "z-ai/glm-5.2",
   providerName: "glm",
-  // Pure price routing, same as CODE_PROVIDERS.glm above (see its comment
-  // for the full reasoning/history) — every GLM 5.2 call site in this file
-  // should route the same way, not just the lesson-code path.
-  extraParams: { reasoning: { enabled: false }, provider: { sort: "price", allow_fallbacks: true } },
+  // Unpinned, same as CODE_PROVIDERS.glm above (see its comment for the
+  // full reasoning/history) — every GLM 5.2 call site in this file should
+  // route the same way, not just the lesson-code path.
+  extraParams: { reasoning: { enabled: false } },
   maxTokens: 40000,
   keyEnv: "OPENROUTER_API_KEY",
 };
@@ -1197,7 +1199,7 @@ function buildHeaderUserContent(lesson, scenes, catalog = []) {
       return `Scene ${i + 1}: visualType: ${s.visualType}${s.domainSkill && s.domainSkill !== "none" ? `, domainSkill: ${s.domainSkill}` : ""}
    onScreenText: ${s.onScreenText}${mechanismBlock ? `
    ${mechanismBlock}` : ""}
-   visualDescription: ${s.visualDescription}`;
+   visualDescription: ${s.visualDescription}`; 
     })
     .join("\n\n");
 
