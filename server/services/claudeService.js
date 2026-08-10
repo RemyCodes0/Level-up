@@ -102,8 +102,9 @@ const CODE_PROVIDERS = {
     // History: unpinned → pinned to z-ai (reverted, see old git history) →
     // pinned to Decart specifically with allow_fallbacks:false (2026-08-06)
     // → sort:"price" + preferred_min_throughput:40 (2026-08-08) →
-    // sort:"price", no throughput floor (2026-08-10) → this, pinned to
-    // Baidu (2026-08-10, same day, per explicit instruction).
+    // sort:"price", no throughput floor (2026-08-10) → briefly pinned to
+    // Baidu (2026-08-10) → reverted back to this same day, per explicit
+    // instruction: always route to whichever provider is cheapest.
     //
     // The Decart-only pin's hard-fail-if-unavailable choice turned out to
     // cost more than it saved: under a real 6-lesson course's concurrency
@@ -111,37 +112,29 @@ const CODE_PROVIDERS = {
     // onto ONE host with zero fallback), Decart's rate limit tripped
     // repeatedly — confirmed live, 3 of 6 lessons in one course permanently
     // failed on sustained 429s, each retry hitting the same saturated limit
-    // again immediately. This pin repeats the "one named provider" shape of
-    // that mistake on purpose but NOT the part that actually caused the
-    // failures — allow_fallbacks stays true, so Baidu being down/rate-
-    // limited falls through to OpenRouter's normal load-balanced pool
-    // instead of hard-failing the lesson.
+    // again immediately.
     //
-    // The preferred_min_throughput:40 floor that briefly replaced the
-    // Decart pin had its own cost problem, confirmed against real billing
-    // data: OpenRouter's docs (openrouter.ai/docs/features/provider-
-    // routing) are explicit that a throughput/latency floor DEPRIORITIZES
-    // (not excludes) any provider that doesn't clear it, even under
-    // sort:"price" — tracing this course's actual per-call cost against
-    // calls of IDENTICAL completion-token size (so genuinely comparable,
-    // not a retry-volume artifact) showed the effective $/1k-completion-
-    // token price roughly 5x'd over 3 days for the exact same model
-    // string, with no code change on our end — the floor was quietly
-    // pushing requests off the cheapest host onto pricier ones meeting the
-    // 40 tok/s bar. That's what pure sort:"price" (no floor) fixed.
+    // The preferred_min_throughput:40 floor that replaced the Decart pin had
+    // its own cost problem, confirmed against real billing data: OpenRouter's
+    // docs (openrouter.ai/docs/features/provider-routing) are explicit that a
+    // throughput/latency floor DEPRIORITIZES (not excludes) any provider that
+    // doesn't clear it, even under sort:"price" — tracing this course's
+    // actual per-call cost against calls of IDENTICAL completion-token size
+    // (so genuinely comparable, not a retry-volume artifact) showed the
+    // effective $/1k-completion-token price roughly 5x'd over 3 days for the
+    // exact same model string, with no code change on our end — the floor
+    // was quietly pushing requests off the cheapest host onto pricier ones
+    // meeting the 40 tok/s bar.
     //
-    // This pin to Baidu specifically is a DELIBERATE step away from pure
-    // lowest-price routing, per explicit instruction — Baidu
-    // ($1.40/$4.40 per M prompt/completion tokens, confirmed via
-    // OpenRouter's own /api/v1/models/z-ai/glm-5.2/endpoints) is NOT the
-    // cheapest option (Decart is, at roughly half that), so this trades
-    // some of the price-routing savings for whatever made Baidu the
-    // specific choice. `order` (not `sort`) is the correct field for a
-    // named pin — per OpenRouter's docs, setting `order` overrides price
-    // sorting entirely, and it takes the BARE provider slug ("baidu"), not
-    // the quantization-suffixed tag ("baidu/fp8") — same bare-slug pattern
-    // as DEEPSEEK_PROVIDER's `order: ["deepseek"]` below.
-    extraParams: { reasoning: { enabled: false }, provider: { order: ["baidu"], allow_fallbacks: true } },
+    // Pure sort:"price" (no throughput floor, no `order` — `order` overrides
+    // price sorting entirely, which is why the brief Baidu pin below had to
+    // be removed rather than combined with this) is what OpenRouter's own
+    // docs confirm as true lowest-price routing: it always tries the
+    // currently-cheapest live endpoint for this model first, falling through
+    // (allow_fallbacks: true) to the next-cheapest if that one is down —
+    // never hard-failing the way the Decart pin did, but also never settling
+    // for a pricier host the way the throughput floor quietly did.
+    extraParams: { reasoning: { enabled: false }, provider: { sort: "price", allow_fallbacks: true } },
     maxTokens: 100000,
     keyEnv: "OPENROUTER_API_KEY",
   },
@@ -319,10 +312,10 @@ const SCENE_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "z-ai/glm-5.2",
   providerName: "glm",
-  // Pinned to Baidu, same as CODE_PROVIDERS.glm above (see its comment for
-  // the full reasoning/history) — every GLM 5.2 call site in this file
+  // Pure price routing, same as CODE_PROVIDERS.glm above (see its comment
+  // for the full reasoning/history) — every GLM 5.2 call site in this file
   // should route the same way, not just the lesson-code path.
-  extraParams: { reasoning: { enabled: false }, provider: { order: ["baidu"], allow_fallbacks: true } },
+  extraParams: { reasoning: { enabled: false }, provider: { sort: "price", allow_fallbacks: true } },
   maxTokens: 40000,
   keyEnv: "OPENROUTER_API_KEY",
 };
