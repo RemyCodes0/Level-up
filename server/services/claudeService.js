@@ -101,28 +101,39 @@ const CODE_PROVIDERS = {
     providerName: "glm",
     // History: unpinned → pinned to z-ai (reverted, see old git history) →
     // pinned to Decart specifically with allow_fallbacks:false (2026-08-06)
-    // → this (2026-08-08). The Decart-only pin's hard-fail-if-unavailable
-    // choice turned out to cost more than it saved: under a real 6-lesson
-    // course's concurrency (header + several chunks per lesson, all firing
-    // at once, all forced onto ONE host with zero fallback), Decart's rate
-    // limit tripped repeatedly — confirmed live, 3 of 6 lessons in one
-    // course permanently failed on sustained 429s, each retry hitting the
-    // same saturated limit again immediately.
+    // → sort:"price" + preferred_min_throughput:40 (2026-08-08) → this
+    // (2026-08-10). The Decart-only pin's hard-fail-if-unavailable choice
+    // turned out to cost more than it saved: under a real 6-lesson course's
+    // concurrency (header + several chunks per lesson, all firing at once,
+    // all forced onto ONE host with zero fallback), Decart's rate limit
+    // tripped repeatedly — confirmed live, 3 of 6 lessons in one course
+    // permanently failed on sustained 429s, each retry hitting the same
+    // saturated limit again immediately.
     //
-    // sort:"price" + preferred_min_throughput replaces the single-provider
-    // pin: always prefers the cheapest host, but only among ones clearing a
-    // speed floor (matches the actual reasoning behind picking Decart
-    // before — cheap AND fast, not cheapest at any speed), and — the part
-    // the old pin didn't have — automatically falls through to the next
-    // cheapest-and-fast-enough host if the top pick 429s or is down, instead
-    // of hard-failing the whole lesson. allow_fallbacks TRUE here, matching
-    // every other provider.sort/order in this file (see SCENE_PLAN_PROVIDER,
-    // DEEPSEEK_*_PLAN_PROVIDER below) — the Decart pin was the one deliberate
-    // exception to that pattern, and it's exactly what caused the failures.
-    // 40 tokens/sec floor is a starting point (comfortably above the
-    // slowest hosts, well below the fastest) — tune against real observed
-    // throughput, not on the strength of this comment alone.
-    extraParams: { reasoning: { enabled: false }, provider: { sort: "price", preferred_min_throughput: 40, allow_fallbacks: true } },
+    // The preferred_min_throughput:40 floor added after that turned out to
+    // have its OWN cost problem, confirmed against real billing data:
+    // OpenRouter's own docs (openrouter.ai/docs/features/provider-routing)
+    // are explicit that a throughput/latency floor DEPRIORITIZES (not
+    // excludes) any provider that doesn't clear it, even under sort:"price"
+    // — "a cheaper provider lacking the required throughput gets
+    // deprioritized, potentially routing to a more expensive provider that
+    // meets your performance floor instead." That's exactly what happened:
+    // tracing this course's actual per-call cost against calls of IDENTICAL
+    // completion-token size (so genuinely comparable, not a retry-volume
+    // artifact) showed the effective $/1k-completion-token price roughly
+    // 5x'd over 3 days (Aug 8 -> Aug 10) for the exact same model string,
+    // with no code change on our end — the floor was quietly pushing
+    // requests off the cheapest host onto pricier ones meeting the 40 tok/s
+    // bar. Per that same doc, the only way to get PURE lowest-price routing
+    // is sort:"price" with NO throughput/latency floor and NO `order` (order
+    // overrides price sorting entirely) — allow_fallbacks stays true so a
+    // failed/down cheapest host still falls through to the next-cheapest
+    // one instead of hard-failing, which is the one part of the Decart
+    // lesson this keeps. Tradeoff, explicit and accepted: with no speed
+    // floor at all, a request can land on a genuinely slow host if that's
+    // the cheapest one up right now — cost, not throughput, is the priority
+    // here per explicit instruction.
+    extraParams: { reasoning: { enabled: false }, provider: { sort: "price", allow_fallbacks: true } },
     maxTokens: 100000,
     keyEnv: "OPENROUTER_API_KEY",
   },
@@ -300,11 +311,11 @@ const SCENE_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "z-ai/glm-5.2",
   providerName: "glm",
-  // sort:"price" + preferred_min_throughput, same as CODE_PROVIDERS.glm
-  // above (see its comment for the full reasoning, including why the
-  // earlier Decart-only pin was dropped) — every GLM 5.2 call site in this
-  // file should route the same way, not just the lesson-code path.
-  extraParams: { reasoning: { enabled: false }, provider: { sort: "price", preferred_min_throughput: 40, allow_fallbacks: true } },
+  // Pure price routing, same as CODE_PROVIDERS.glm above (see its comment
+  // for the full reasoning, including why the throughput floor that used to
+  // be here got removed) — every GLM 5.2 call site in this file should
+  // route the same way, not just the lesson-code path.
+  extraParams: { reasoning: { enabled: false }, provider: { sort: "price", allow_fallbacks: true } },
   maxTokens: 40000,
   keyEnv: "OPENROUTER_API_KEY",
 };
