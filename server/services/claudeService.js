@@ -1192,7 +1192,7 @@ function buildHeaderUserContent(lesson, scenes, catalog = []) {
   const sceneTable = scenes 
     .map((s, i) => {
       const m = s.mechanism;
-      const mechanismBlock =
+      const mechanismBlock = 
         m && m.before && m.after && m.driver
           ? `mechanism: starts at "${m.before}", ends at "${m.after}", driven by "${m.driver}"`
           : "";
