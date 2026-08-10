@@ -1194,7 +1194,7 @@ function buildLibraryCatalogBlock(catalog) {
 }
 
 function buildHeaderUserContent(lesson, scenes, catalog = []) {
-  const sceneTable = scenes
+  const sceneTable = scenes 
     .map((s, i) => {
       const m = s.mechanism;
       const mechanismBlock =
