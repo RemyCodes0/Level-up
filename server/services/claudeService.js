@@ -259,11 +259,76 @@ const CODE_PROVIDERS = {
     maxTokens: 32000,
     keyEnv: "OPENROUTER_API_KEY",
   },
+  // Model-quality spike (see LESSON_CODE_MODEL=qwen / AD_CODE_MODEL=qwen),
+  // 2026-08-14: Qwen3.8 27B via OpenRouter. Confirmed live (/api/v1/models/
+  // qwen/qwen3.8-27b/endpoints) before wiring blind: single-sourced from
+  // AkashML only (akashml/bf16) — no alternate host to pin against or fall
+  // back to if that one host has trouble, unlike glm/deepseek's multi-host
+  // pins above. Cheap-ish ($0.45/M in, $3.20/M out — pricier than GLM/
+  // DeepSeek, far below gpt56/claude). Real max_completion_tokens is
+  // 131072 — noticeably BELOW this project's current CHUNK_MAX_OUTPUT_
+  // TOKENS (250000 in .env as of this writing) — if you actually switch
+  // LESSON_CODE_MODEL to qwen, lower CHUNK_MAX_OUTPUT_TOKENS to at or under
+  // this maxTokens value too, or a chunk-gen call will request more output
+  // than the model can return. Reasoning off per request — confirmed via
+  // the same endpoint payload that this model supports the standard
+  // `reasoning`/`reasoning_effort` fields, so `{enabled: false}` is the
+  // correct shape, not a guess.
+  qwen: {
+    client: openRouterClient,
+    model: "qwen/qwen3.8-27b",
+    providerName: "qwen",
+    extraParams: { reasoning: { enabled: false } },
+    maxTokens: 131072,
+    keyEnv: "OPENROUTER_API_KEY",
+  },
+  // Model-quality spike (see LESSON_CODE_MODEL=gemini / AD_CODE_MODEL=gemini),
+  // 2026-08-14: Gemini 3.7 Flash, plain synchronous endpoint — the ":batch"
+  // variant was tried first and rejected (confirmed live against
+  // OpenRouter's own batch-quickstart docs: separate /api/beta/batches
+  // endpoint, 24h async completion window, no streaming — incompatible
+  // with this whole file's synchronous streamCodeCompletion path). This is
+  // the plain model instead. Single-sourced from Google itself (both
+  // "google-vertex" and "google-ai-studio" endpoints ARE Google's own
+  // infra, not third-party rehosts) — no quantization-risk pin needed,
+  // same reasoning as gpt56 above. Real max_completion_tokens is 65536 —
+  // BELOW this project's current CHUNK_MAX_OUTPUT_TOKENS (250000 in .env
+  // as of this writing) — lower that in .env before actually switching to
+  // this model, same caveat as qwen above, just a smaller ceiling.
+  //
+  // extraParams CORRECTED (2026-08-14, real failure): {enabled: false} —
+  // this codebase's usual "reasoning off" shape — produced a real, 100%
+  // reproducible 400 on every attempt: "Reasoning is mandatory for this
+  // endpoint and cannot be disabled." Confirmed live: this specific model
+  // genuinely cannot turn reasoning fully off, unlike every other entry in
+  // this file. Measured all the real named tiers on an identical prompt
+  // before picking one (reasoning_tokens / cost): low=1651/$0.00596,
+  // minimal=2100/$0.00760, default=2219/$0.00858, medium=2743/$0.00905,
+  // max=4368/$0.01169, high=4921/$0.01373. Two things confirmed afterward
+  // against OpenRouter's own docs (Gemini-3-specific effort->thinkingLevel
+  // mapping table): (1) "max" measuring BELOW "high" isn't a bug -- Gemini
+  // 3's native scale is only minimal/low/medium/high, "max" isn't in that
+  // table at all and gets silently remapped to something else, "high" is
+  // the actual, direct top of the real scale; (2) "minimal", unlike "max",
+  // IS on that native table (mapped 1:1) -- a clean, direct, unambiguous
+  // pick, even though it measured MORE reasoning than "low" above (a
+  // separate real quirk: "minimal" is not the actual cheapest option by
+  // measured tokens, "low" is -- this is the lowest tier on Gemini's own
+  // native scale, not necessarily this model's lowest possible spend).
+  // "minimal" (2026-08-14, was "max") -- per explicit request.
+  gemini: {
+    client: openRouterClient,
+    model: "google/gemini-3.7-flash",
+    providerName: "gemini",
+    extraParams: { reasoning: { effort: "minimal" } },
+    maxTokens: 65536,
+    keyEnv: "OPENROUTER_API_KEY",
+  },
 };
 
 function resolveProvider(envVar, defaultKey) {
   const requested = process.env[envVar];
-  const provider = CODE_PROVIDERS[["fable", "glm", "claude", "deepseek", "minimax", "gpt56", "mimo", "fusion"].includes(requested) ? requested : defaultKey];
+  const provider = CODE_PROVIDERS[["fable", "glm", "claude", "deepseek", "minimax", "gpt56", "mimo", "fusion", "qwen", "gemini"].includes(requested) ? requested : defaultKey];
   if (!process.env[provider.keyEnv]) {
     console.warn(`[codegen] WARNING: ${provider.keyEnv} is not set — ${envVar} generation will fail with an auth error.`);
   }
@@ -290,6 +355,19 @@ const AD_CODE_PROVIDER = resolveProvider("AD_CODE_MODEL", "fable");
 // can't be one hardcoded field for every provider.
 function withReasoningOff(provider) {
   const { thinking: _t, reasoning_effort: _r, reasoning: _ro, ...rest } = provider.extraParams;
+  // Gemini 3.7 Flash exemption (2026-08-14, real failure) — this function
+  // unconditionally strips whatever reasoning shape a provider defines and
+  // forces {enabled: false}. Confirmed live that this specific model
+  // rejects that outright: "400 Reasoning is mandatory for this endpoint
+  // and cannot be disabled." Kept in sync with CODE_PROVIDERS.gemini's own
+  // extraParams (see its comment for the real measured tiers, and the
+  // OpenRouter effort->thinkingLevel mapping table that explains why "max"
+  // isn't actually the top tier on this model but "minimal" genuinely is
+  // the bottom one) rather than hardcoding one tier here specifically.
+  // Currently "minimal" per explicit request.
+  if (provider.model === "google/gemini-3.7-flash") {
+    return { ...provider, extraParams: { ...rest, reasoning: { effort: "minimal" } } };
+  }
   const reasoningOffParam = provider.client === openRouterClient
     ? { reasoning: { enabled: false } }
     : { thinking: { type: "disabled" } };
@@ -394,8 +472,8 @@ const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 1
 const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 
 console.log(
-  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion to switch) | ` +
-  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion to switch)`
+  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini to switch) | ` +
+  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini to switch)`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
