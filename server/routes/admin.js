@@ -11,6 +11,7 @@ const {
   getPageViewStats,
   adminDeleteCourse,
   getUserProgress,
+  adjustUserCredits,
 } = require("../controllers/adminController");
 const {
   getAdminPricingConfig,
@@ -49,6 +50,7 @@ router.get("/courses/:courseId/costs", getCourseCosts);
 router.get("/courses/:courseId/generation-time", getCourseGenerationTime);
 router.delete("/courses/:courseId", adminDeleteCourse);
 router.get("/users/:userId/progress", getUserProgress);
+router.post("/users/:userId/credits", adjustUserCredits);
 
 // Course tiers + credit packs — admin-adjustable, not hardcoded (see
 // pricingConfigService.js's cache, invalidated on every PUT here).

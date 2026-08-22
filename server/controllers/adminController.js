@@ -16,6 +16,7 @@ const AiUsageLog = require("../models/AiUsageLog");
 const PageView = require("../models/PageView");
 const Progress = require("../models/Progress");
 const GenerationLog = require("../models/GenerationLog");
+const { grantCredits, spendCredits, getSpendableBalance, InsufficientCreditsError } = require("../services/creditService");
 
 // GET /api/admin/overview
 // Returns the headline numbers + breakdowns for the dashboard, in one call.
@@ -546,6 +547,53 @@ exports.getUserProgress = async (req, res) => {
   } catch (err) {
     console.error("admin getUserProgress error:", err);
     res.status(500).json({ error: "Failed to load user progress" });
+  }
+};
+
+// POST /api/admin/users/:userId/credits — the sanctioned way to hand-adjust
+// a user's balance from the dashboard. Deliberately NOT a raw
+// `user.courseCredits = X; user.save()` — routes through spendCredits/
+// grantCredits (creditService.js) like every other credit mutation in the
+// app, so an admin adjustment is race-safe, can never push the balance
+// negative on a removal, and leaves a real CreditTransaction ledger row
+// (source: "admin_adjustment", meta records which admin and why) instead of
+// being invisible on the user's transaction history.
+exports.adjustUserCredits = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { amount, direction, reason } = req.body;
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Amount must be a positive number" });
+    }
+    if (direction !== "add" && direction !== "remove") {
+      return res.status(400).json({ error: 'direction must be "add" or "remove"' });
+    }
+
+    const meta = { adminEmail: req.user.email, reason: reason || null };
+    const updated =
+      direction === "add"
+        ? await grantCredits(userId, amount, "admin_adjustment", meta)
+        : await spendCredits(userId, amount, "admin_adjustment", meta);
+
+    res.json({
+      user: {
+        _id: updated._id,
+        courseCredits: updated.courseCredits,
+        signupBonusCredits: updated.signupBonusCredits,
+        signupBonusExpiresAt: updated.signupBonusExpiresAt,
+        spendableBalance: getSpendableBalance(updated),
+      },
+    });
+  } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return res.status(400).json({ error: "This user doesn't have that many credits to remove" });
+    }
+    if (err.message === "User not found") {
+      return res.status(404).json({ error: "User not found" });
+    }
+    console.error("admin adjustUserCredits error:", err);
+    res.status(500).json({ error: "Failed to adjust credits" });
   }
 };
 
