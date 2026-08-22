@@ -4,6 +4,7 @@ import type React from "react";
 import axios from "axios";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
 import { analytics, identifyUser } from "../lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -64,17 +65,7 @@ export default function LoginPage() {
         email,
         password,
       });
-      localStorage.setItem("token", res.data.token);
-      const loggedInUser = {
-        _id: res.data._id,
-        name: res.data.name,
-        email: res.data.email,
-        role: res.data.role,
-      };
-      localStorage.setItem("user", JSON.stringify(loggedInUser));
-      identifyUser(loggedInUser);
-      analytics.loggedIn({ role: res.data.role });
-      navigate("/ai_tutor");
+      applyLoginResponse(res.data);
     } catch (err: any) {
       const data = err.response?.data;
       if (data?.needsVerification) {
@@ -84,6 +75,36 @@ export default function LoginPage() {
         setNeedsVerification(false);
         setError(data?.message || "Invalid email or password. Please try again.");
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Shared by the email/password submit above and handleGoogleSuccess below
+  // — both /api/auth/login and /api/auth/google return the exact same
+  // { _id, name, email, role, token } shape, so there's nothing
+  // provider-specific to branch on here.
+  const applyLoginResponse = (data: { _id: string; name: string; email: string; role: string; token: string }) => {
+    localStorage.setItem("token", data.token);
+    const loggedInUser = { _id: data._id, name: data.name, email: data.email, role: data.role };
+    localStorage.setItem("user", JSON.stringify(loggedInUser));
+    identifyUser(loggedInUser);
+    analytics.loggedIn({ role: data.role });
+    navigate("/ai_tutor");
+  };
+
+  const handleGoogleSuccess = async (credentialResponse: CredentialResponse) => {
+    if (!credentialResponse.credential) return;
+    setError("");
+    setNeedsVerification(false);
+    setLoading(true);
+    try {
+      const res = await axios.post(`${BASE_URL}/api/auth/google`, {
+        credential: credentialResponse.credential,
+      });
+      applyLoginResponse(res.data);
+    } catch (err: any) {
+      setError(err.response?.data?.message || "Google Sign-In failed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -290,6 +311,30 @@ export default function LoginPage() {
                     </>
                   )}
                 </Button>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.5, delay: 0.75 }}
+                className="w-full space-y-3"
+              >
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-200" />
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-4 bg-white text-gray-500">Or continue with</span>
+                  </div>
+                </div>
+
+                <div className="flex justify-center">
+                  <GoogleLogin
+                    onSuccess={handleGoogleSuccess}
+                    onError={() => setError("Google Sign-In failed. Please try again.")}
+                    width="100%"
+                  />
+                </div>
               </motion.div>
 
               <motion.div

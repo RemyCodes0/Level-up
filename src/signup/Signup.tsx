@@ -4,6 +4,7 @@ import type React from "react";
 import axios from "axios";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
 import { analytics, identifyUser } from "../lib/analytics";
 import { isPasswordAcceptable } from "../lib/passwordStrength";
 import { PasswordStrengthMeter } from "../components/PasswordStrengthMeter";
@@ -111,6 +112,31 @@ export default function SignupPage() {
       setResendMsg("Failed to resend. Please try again.");
     } finally {
       setResending(false);
+    }
+  };
+
+  // Unlike the email/password flow above, Google signup never goes through
+  // the "check your email" screen — Google has already verified the
+  // account's email, so /api/auth/google returns a real token immediately
+  // (see its own comment in authController.js), same as a normal login.
+  const handleGoogleSuccess = async (credentialResponse: CredentialResponse) => {
+    if (!credentialResponse.credential) return;
+    setError("");
+    setLoading(true);
+    try {
+      const res = await axios.post(`${BASE_URL}/api/auth/google`, {
+        credential: credentialResponse.credential,
+      });
+      const { token, ...user } = res.data;
+      localStorage.setItem("token", token);
+      localStorage.setItem("user", JSON.stringify(user));
+      identifyUser(user);
+      analytics.signedUp({ requires_verification: false });
+      router("/ai_tutor");
+    } catch (err: any) {
+      setError(err.response?.data?.message || "Google Sign-In failed. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -351,6 +377,30 @@ export default function SignupPage() {
                     </>
                   )}
                 </Button>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.5, delay: 0.75 }}
+                className="w-full space-y-3"
+              >
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-gray-200" />
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-4 bg-white text-gray-500">Or continue with</span>
+                  </div>
+                </div>
+
+                <div className="flex justify-center">
+                  <GoogleLogin
+                    onSuccess={handleGoogleSuccess}
+                    onError={() => setError("Google Sign-In failed. Please try again.")}
+                    width="100%"
+                  />
+                </div>
               </motion.div>
 
               <motion.div

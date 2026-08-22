@@ -1,0 +1,57 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project
+
+Despite the tutoring-platform framing in README.md (which describes an earlier, largely superseded v0/Next.js concept), the live product is **Level Up**, an AI course-generation platform for AUB students: a user describes a topic, the backend drives an LLM pipeline that produces a full multi-lesson course of programmatic narrated video lessons (Remotion), plus quizzes, and streams progress back to the client. Peer-tutoring (tutors, bookings, reviews) still exists as a separate, working feature area alongside it. Treat README.md's "Tech Stack"/"Database Schema"/"Mock Auth" sections as stale — this is a Vite + React SPA (not Next.js App Router) backed by an Express + MongoDB/Mongoose API (not Supabase/Postgres), with real JWT + Google OAuth auth.
+
+## Commands
+
+Frontend (repo root):
+- `npm run dev` — Vite dev server
+- `npm run build` — production build (runs `scripts/generate-sitemap.mjs` first via `prebuild`)
+- `npm run lint` — ESLint
+- `npm run preview` — preview a production build
+
+Backend (`server/`):
+- `npm run dev` — nodemon (restart required after any `.env` change — dotenv only reads it once at startup)
+- `npm start` — plain node
+
+There is no test framework/runner configured anywhere in this repo (no `test` script, no jest/vitest/mocha config, no `*.test.*`/`*.spec.*` files). Don't assume one exists.
+
+## Architecture
+
+### Course generation pipeline
+
+Entry point is `processCourse` in `server/controllers/courseController.js`, invoked from the course-creation route and streamed to the client as it progresses. Stages, in order:
+
+1. **Course plan** — one LLM call producing the lesson list/outline for the whole course.
+2. **Per-lesson scene plan** (`server/services/sceneService.js`) — one call per lesson, on a dedicated `GEMINI_SCENE_PLAN_PROVIDER` (Gemini 3.7 Flash, reasoning effort `"low"` — was DeepSeek V4 Flash, switched after DeepSeek's endpoint was observed hanging on this call in practice), producing structured JSON: each scene's narration, `visualType`, `domainSkill`, and a `mechanism` (`before`/`after`/`driver`) that is the actual contract the code generator has to build — vague mechanisms produce boring scenes downstream, so this prompt is deliberately strict about it (see the prompt text in `sceneService.js` for the exact constraints: word-count floors for narration, "no static legend" diagrams, etc). The course plan (`generateCoursePlan`) and the post-course quiz (`generateCourseQuiz`) run on the same model via `GEMINI_COURSE_PLAN_PROVIDER`, both in `claudeService.js`. All three deliberately use `{reasoning:{effort:"low"}}`, never `{enabled:false}` — see the `withReasoningOff` note below for why Gemini 3.7 Flash 400s on that shape.
+3. **Lesson code generation** (`generateLessonCode` in `server/services/claudeService.js`) — turns a lesson's scene plan into TSX. Two modes selected by `LESSON_CHUNK_SCENES` (env, default 3): if `scenes.length <= LESSON_CHUNK_SCENES`, `generateFullLessonCode` produces the header and every scene in a single call; otherwise scenes are grouped into chunks of `LESSON_CHUNK_SCENES` and a **separate header call plus one call per chunk** run, each chunk blind to every other chunk's actual output (only a compact spec of the other scenes, not their code). This chunking is the main lever on API-call count per lesson (roughly `1 + ceil(scenes/LESSON_CHUNK_SCENES)` calls when chunked, 1 when merged) — don't assume today's scene-count always maps to "7 calls," that was a specific past configuration.
+4. **Validation and repair** — generated code is checked by `server/services/validateCode.js` (deterministic AST-based checks — things like arrow-target references, not an LLM call) and `server/services/codeCriticService.js`. Failures go through *targeted* patch functions rather than full regeneration: `patchSceneInChunk` (compile/validation failure inside a chunked lesson), `patchSceneFromRuntimeError` (a scene that throws at actual render time), and header-equivalents — all reasoning-off, all scoped to find/replace the one broken scene/section rather than rewriting the lesson.
+5. **Render** — `server/services/renderService.js` / `server/queue/renderQueue.js` handle turning validated TSX into the deliverable via Remotion.
+
+### Multi-provider LLM routing (`server/services/claudeService.js`)
+
+All course-generation LLM calls funnel through this one file. Key pieces:
+- `CODE_PROVIDERS` — the model registry (OpenRouter-hosted models plus native Anthropic), each entry carrying `client`, `model` slug, `extraParams` (provider-specific reasoning/thinking shape), `maxTokens`, `keyEnv`. `resolveProvider(envVar, defaultKey)` picks an entry via env vars (`LESSON_CODE_MODEL`, `AD_CODE_MODEL`, etc), validated against a hardcoded allowlist that must be kept in sync with `CODE_PROVIDERS`'s keys.
+- `withReasoningOff(provider)` — used by header/chunk generation and all patch functions to force a given provider into its cheapest/no-reasoning mode. It is **not** a safe blanket transform: some models (e.g. Gemini 3.x family on OpenRouter) reject `{reasoning:{enabled:false}}` outright or silently ignore it and need an explicit `if (provider.model === "...")` exemption branch inside this function that returns their real minimum-effort shape instead. When adding or reconfiguring a Gemini-family provider, update its `CODE_PROVIDERS` entry's `extraParams` *and* the matching exemption in `withReasoningOff` together, or the exemption silently goes stale.
+- Before wiring in any new OpenRouter model: verify its real slug/hosting/pricing/`max_completion_tokens`/`supported_parameters` via `curl https://openrouter.ai/api/v1/models/<slug>/endpoints`, and test its reasoning-parameter behavior live — OpenRouter's `reasoning.effort` enum (`max, xhigh, high, medium, low, minimal, none`) does not map uniformly across providers (Gemini 3 models use a separate documented `effort → thinkingLevel` table that omits `"max"` entirely, and measured token cost does not monotonically follow the named tier — verify with real usage, don't assume from the name).
+- The static hand-written shared component library (`server/services/lessonComponentLibrary.js`, `AnimatedGraph`/`AnimatedArray`) is intentionally **not** shown to the code-generation model at all — only the separate, admin-approved dynamic library (gated by `COMPONENT_LIBRARY_ENABLED`) is. Scene-generation prompts also intentionally give no literal boilerplate/example code to follow — headers are told the *required exported names* (`CLAMP`, `FRAME`, `SAFE`, `clampPos`, `SVG_FRAME`, `ZONES`, plus `Arrow`/`AngleArc` for physics/math lessons) and their contract, not sample implementations, since scenes are generated separately/blind and call them by name.
+
+### Credits and pricing (`server/middleware/checkCredits.js`, `server/services/creditService.js`, `server/models/PricingConfig.js`)
+
+Course generation is gated by `checkCredits`, the sole point where credits are spent. Every user has two credit buckets combined via `getSpendableBalance`: `signupBonusCredits` (100 on signup, 30-day expiry, spent first) and non-expiring `courseCredits`; `spendCredits`/`grantCredits` are the only sanctioned mutators (atomic Mongo `$expr` guard against overspend, each writing a `CreditTransaction` ledger row). Course requests either name a tier (`quick_explainer`/`deeper_dive`/`full_mastery`, from `PricingConfig`, each with its own lesson/quiz/credit cost spent via `spendCredits`) or fall back to a legacy no-tier 1-credit path. There is no free-trial bypass — it was fully removed in favor of the signup bonus bucket; don't reintroduce `freeTrialUsed`/`isFreeTrialCourse`-gated logic for new courses (the field survives only for interpreting old, already-existing course records).
+
+### Auth (`server/controllers/authController.js`, `src/login/`, `src/signup/`)
+
+Standard email/password (bcrypt + JWT) plus Google Sign-In (`@react-oauth/google` on the frontend, `google-auth-library`'s `OAuth2Client.verifyIdToken` on the backend, audience-checked against `GOOGLE_CLIENT_ID`). `User.authProvider` (`local`/`google`) determines whether `password` is required and blocks password-login attempts on Google-only accounts. `GoogleOAuthProvider` is pinned to `locale="en"` in `src/main.tsx` — without it the Google button/popup can render in the visitor's browser locale rather than English.
+
+### Frontend video playback (`src/remotion/`)
+
+Generated TSX is compiled client-side with `@babel/standalone` (see `useCompilation.ts`) and played via `@remotion/player`, not pre-rendered to video for in-app preview — actual export/rendering goes through the backend `renderService`/`renderQueue` instead.
+
+### Deploy topology
+
+Production frontend calls `level-up-2-dka7.onrender.com`. `level-up-nnee.onrender.com` is a separate, non-live backend — don't assume it's the active API when investigating prod behavior.

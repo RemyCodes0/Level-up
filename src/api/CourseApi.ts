@@ -194,7 +194,6 @@ export async function updateAdminPricingConfig(
 // ── Credits dashboard ─────────────────────────────────────────────────────────
 export interface CreditsBalance {
   courseCredits: number;
-  freeTrialUsed: boolean;
   canGenerate: boolean;
   spendableBalance: number;
   signupBonusCredits: number;

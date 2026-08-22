@@ -137,7 +137,6 @@ interface QuizAnswer {
 
 interface Credits {
   courseCredits: number;
-  freeTrialUsed: boolean;
   canGenerate: boolean;
   // Combined spendable balance (unexpired signup bonus + non-expiring
   // courseCredits) — what actually determines whether a given course tier
@@ -378,12 +377,13 @@ function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
 
   const locked = (credits && !credits.canGenerate);
 
-  // Once the free trial is used up, generating a course requires picking one
-  // of the 3 paid tiers first — pendingSubmission holds the validated
-  // topic/file while that picker is shown, and onGenerate isn't called until
-  // a tier is chosen and confirmed. Before the trial is used, submitting
-  // still generates immediately (unchanged).
-  const tiersApply = !!credits?.freeTrialUsed;
+  // No more free trial (2026-08-21) — EVERY course generation requires
+  // picking one of the 3 tiers first, including a brand-new user's very
+  // first course (spent from their 100-credit signup bonus, same as any
+  // other credits). pendingSubmission holds the validated topic/file while
+  // the picker is shown; onGenerate isn't called until a tier is chosen and
+  // confirmed.
+  const tiersApply = true;
   const [pendingSubmission, setPendingSubmission] = useState<{ name: string; file: File | null } | null>(null);
   const [selectedTierKey, setSelectedTierKey] = useState<string | null>(null);
   const spendableBalance = credits?.spendableBalance ?? credits?.courseCredits ?? 0;
@@ -1396,30 +1396,32 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
         <div className={`px-3 py-3 border-b-2 ${
           !credits.canGenerate
             ? "border-amber-300 bg-amber-50"
-            : !credits.freeTrialUsed
+            : (credits.signupBonusCredits ?? 0) > 0
             ? "border-emerald-300 bg-emerald-50"
             : "border-blue-300 bg-blue-50"
         }`}>
+          {/* No more free-trial flag — every account gets 100 free credits on
+              signup instead (see server's signupBonusCredits/spendableBalance),
+              spent down per course exactly like purchased credits. Shown
+              separately here only while any of that bonus remains, so it's
+              explicit that it's free and expiring, not merged silently into
+              the regular balance below. */}
+          {(credits.signupBonusCredits ?? 0) > 0 && (
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-slate-700 font-semibold flex items-center gap-1.5">
+                <Zap className="h-3.5 w-3.5 text-emerald-600" /> Free credits
+              </span>
+              <span className="text-sm font-extrabold text-emerald-700">
+                {Math.max(credits.signupBonusCredits ?? 0, 0)} / 100
+              </span>
+            </div>
+          )}
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-slate-700 font-semibold flex items-center gap-1.5">
-              <Zap className="h-3.5 w-3.5 text-emerald-600" /> Free trial
+              <CreditCard className="h-3.5 w-3.5 text-blue-600" /> Credits
             </span>
-            {credits.freeTrialUsed ? (
-              <span className="text-xs font-bold text-slate-500 flex items-center gap-1">
-                <XCircle className="h-3.5 w-3.5 text-slate-400" /> Used
-              </span>
-            ) : (
-              <span className="text-xs font-bold text-emerald-700 flex items-center gap-1">
-                <CheckCircle className="h-3.5 w-3.5 text-emerald-600" /> Available
-              </span>
-            )}
-          </div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-slate-700 font-semibold flex items-center gap-1.5">
-              <CreditCard className="h-3.5 w-3.5 text-blue-600" /> Courses
-            </span>
-            <span className={`text-sm font-extrabold ${credits.courseCredits > 0 ? "text-blue-700" : "text-slate-500"}`}>
-              {Math.max(credits.courseCredits, 0)} remaining
+            <span className={`text-sm font-extrabold ${(credits.spendableBalance ?? credits.courseCredits) > 0 ? "text-blue-700" : "text-slate-500"}`}>
+              {Math.max(credits.spendableBalance ?? credits.courseCredits, 0)} remaining
             </span>
           </div>
           {!credits.canGenerate ? (
@@ -1430,7 +1432,7 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
           ) : (
             <button onClick={onBuy}
               className="w-full mt-1 py-2.5 rounded-xl border-2 border-blue-300 bg-white text-blue-700 hover:bg-blue-50 text-sm font-bold transition-all flex items-center justify-center gap-1.5">
-              <CreditCard className="h-4 w-4" /> {credits.freeTrialUsed ? "Top up courses" : "Buy more courses"}
+              <CreditCard className="h-4 w-4" /> Top up credits
             </button>
           )}
         </div>
@@ -1990,17 +1992,21 @@ export default function AILearningPage() {
     // the per-lesson progress bars in the course sidebar already show each
     // lesson generating live, so a full-screen generating phase is redundant.
     setFileName(name); setPhase("course");
-    // Determine free-trial status from credits BEFORE this call — this is
-    // the exact same condition the backend's checkCredits middleware uses
-    // (freeTrialUsed === false means this generation will consume the trial).
-    const willUseFreeTrial = !!(credits && !credits.freeTrialUsed);
-    setActiveCourseIsFreeTrial(willUseFreeTrial);
-    // The free trial (and any legacy no-tier request) is always 6 lessons/
+    // No more free trial — every generation is a real tier, spent from the
+    // user's actual balance (100-credit signup bonus first, same as any
+    // other credits). isFirstCourseEver stands in for the old free-trial
+    // check for the ONE thing that still cares about "first course" as a
+    // moment, not a payment method: the post-quiz feedback prompt below —
+    // signupBonusCredits still being the full, untouched 100 right before
+    // this call means nothing has ever been spent yet.
+    const isFirstCourseEver = credits?.signupBonusCredits === 100;
+    setActiveCourseIsFreeTrial(isFirstCourseEver);
+    // Legacy no-tier request (collab rooms) still falls back to 6 lessons/
     // 30-minute quiz; a selected tier sizes the loading skeleton and quiz
     // timer to match what's actually about to be generated.
     const selectedTier = tier ? courseTiers?.find((t) => t.key === tier) : null;
-    const lessonCount = willUseFreeTrial || !selectedTier ? 6 : selectedTier.lessonCount;
-    setActiveCourseQuizMinutes(willUseFreeTrial || !selectedTier ? 30 : selectedTier.timeAllocationMinutes);
+    const lessonCount = !selectedTier ? 6 : selectedTier.lessonCount;
+    setActiveCourseQuizMinutes(!selectedTier ? 30 : selectedTier.timeAllocationMinutes);
     // Show lessons in their loading state immediately while the request fires.
     setLessons(buildMockLessons(lessonCount).map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null })));
     setLessonStatuses(buildMockLessons(lessonCount).map(() => "generating"));
