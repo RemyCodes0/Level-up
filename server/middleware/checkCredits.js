@@ -1,20 +1,16 @@
 const User = require("../models/User");
-const { spendCredits, InsufficientCreditsError } = require("../services/creditService");
+const { spendCredits, getSpendableBalance, InsufficientCreditsError } = require("../services/creditService");
 const { getCourseTier } = require("../services/pricingConfigService");
 
-// The existing free-trial shape — 6 lessons, 20 questions, the existing
-// 30-minute quiz timer. Course tiers are a PAID-path-only concept (per spec,
-// "the existing 6-lesson free trial remains separate from this credit
-// system"), so the free trial always gets exactly this snapshot regardless
-// of any `tier` the client might send.
-const FREE_TRIAL_COURSE_SHAPE = {
-  tier: null,
-  tierName: "Free Trial",
-  lessonCount: 6,
-  mcqCount: 20,
-  timeAllocationMinutes: 30,
-  creditCost: 0,
-};
+// REMOVED (2026-08-21, per explicit request): the free-trial bypass — a
+// brand-new user's first course used to skip tier selection entirely and
+// get a fixed 6-lesson/20-MCQ course for $0, never touching their credit
+// balance. That's gone now that every account starts with a real, spendable
+// 100-credit signup bonus (see creditService.js's own comment on the two-
+// bucket balance model) — every course, including a user's very first one,
+// goes through the SAME tier-selection + spendCredits() path below, same as
+// a returning user. FREE_TRIAL_COURSE_SHAPE is deliberately not kept around
+// as dead code — nothing should construct that shape anymore.
 
 // Legacy/no-tier shape — this middleware is ALSO used by collab.js's room
 // creation route, which has no tier-selection UI and does its own flat
@@ -33,38 +29,39 @@ const LEGACY_COURSE_SHAPE = {
 };
 
 // Checks if the user can generate a course, and — for the tier-aware paid
-// path only (i.e. the request actually sent a `tier`) — atomically spends
-// the selected tier's credit cost right here, before generation starts.
+// path (i.e. the request sent a `tier`) — atomically spends the selected
+// tier's credit cost right here, before generation starts.
 // courseController.js persists req.courseTierSnapshot onto the new Course
 // and, for the tier path, does NOT deduct anything itself (already done
-// here); for the legacy no-tier path it still does its own deduction,
-// exactly as before this feature existed.
+// here); for the legacy no-tier path it still does its own deduction. Every
+// caller goes through one of these two branches now — there is no more
+// free bypass; a brand-new user spends down their signup-bonus balance the
+// same way anyone else spends credits.
 async function checkCredits(req, res, next) {
   try {
-    const user = await User.findById(req.user._id).select("courseCredits freeTrialUsed");
+    const user = await User.findById(req.user._id).select(
+      "courseCredits signupBonusCredits signupBonusExpiresAt"
+    );
     if (!user) return res.status(404).json({ error: "User not found" });
-
-    if (!user.freeTrialUsed) {
-      // First course is free — mark trial as used after generation starts
-      // (unchanged: courseController.js still does this itself).
-      req.usingFreeTrial = true;
-      req.courseTierSnapshot = FREE_TRIAL_COURSE_SHAPE;
-      return next();
-    }
 
     const tierKey = req.body.tier;
     if (!tierKey) {
-      // No tier selected — legacy caller (e.g. collab room creation).
-      // Preserve the exact old check: just require courseCredits > 0, let
-      // the calling controller deduct it itself.
-      if (user.courseCredits > 0) {
+      // No tier selected — legacy caller (e.g. collab room creation), which
+      // does its own flat deduction rather than a tier's real creditCost.
+      // FIX: this used to check only user.courseCredits > 0, missing the
+      // signup-bonus bucket entirely — a brand-new user with only their
+      // 100-credit signup bonus (courseCredits still 0) would be wrongly
+      // rejected here even though they have a real spendable balance.
+      // getSpendableBalance is the same combined-balance check the tier
+      // path below already uses via spendCredits.
+      if (getSpendableBalance(user) > 0) {
         req.usingFreeTrial = false;
         req.courseTierSnapshot = LEGACY_COURSE_SHAPE;
         return next();
       }
       return res.status(402).json({
         error: "no_credits",
-        message: "You have used your free course. Purchase a credit to generate more.",
+        message: "You're out of credits. Purchase more to generate another course.",
       });
     }
 
@@ -104,4 +101,4 @@ async function checkCredits(req, res, next) {
   }
 }
 
-module.exports = { checkCredits, FREE_TRIAL_COURSE_SHAPE, LEGACY_COURSE_SHAPE };
+module.exports = { checkCredits, LEGACY_COURSE_SHAPE };

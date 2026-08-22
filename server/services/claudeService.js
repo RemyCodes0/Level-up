@@ -362,11 +362,72 @@ const CODE_PROVIDERS = {
     maxTokens: 65535,
     keyEnv: "OPENROUTER_API_KEY",
   },
+  // Model-quality spike (see LESSON_CODE_MODEL=glmflash / AD_CODE_MODEL=
+  // glmflash), 2026-08-16: GLM 4.7 Flash, per explicit request. Confirmed
+  // live before wiring in: {enabled: false} IS accepted cleanly here (0
+  // reasoning tokens, unlike 3.7 Flash's mandatory-reasoning 400) — no
+  // exemption needed, standard withReasoningOff() shape works natively.
+  // No first-party host on OpenRouter for this one — only 4 third-party
+  // rehosts (DeepInfra, Venice, Cloudflare, Novita) — left UNPINNED,
+  // same "no confirmed quantized-backend incident on this one yet" call
+  // as minimax/mimo above, not the same situation GLM 5.2's own pin
+  // history was responding to. Extremely cheap: $0.06/M prompt, $0.40/M
+  // completion (cheaper than GLM 5.2's own cheapest host). Real
+  // max_completion_tokens is only 16384 though — well BELOW this
+  // project's current CHUNK_MAX_OUTPUT_TOKENS/HEADER_MAX_OUTPUT_TOKENS
+  // (60000 in .env as of this writing) — MUST lower both before actually
+  // switching to this model, a much tighter ceiling than any other spike
+  // in this file.
+  glmflash: {
+    client: openRouterClient,
+    model: "z-ai/glm-4.7-flash",
+    providerName: "glmflash",
+    extraParams: { reasoning: { enabled: false } },
+    maxTokens: 16384,
+    keyEnv: "OPENROUTER_API_KEY",
+  },
+  // Model-quality spike (see LESSON_CODE_MODEL=oxalpha / AD_CODE_MODEL=
+  // oxalpha), 2026-08-22: Ox Alpha, a "stealth" (cloaked/unbranded) preview
+  // model on OpenRouter — real slug/pricing confirmed live via
+  // /api/v1/models/stealth/ox-alpha/endpoints before wiring in, not
+  // guessed from the name. Single-sourced from one "Stealth" endpoint (no
+  // alternate host to pin against), 1M context, real max_completion_tokens
+  // 131072. Advertised as "a reasoning model designed for coding, sustained
+  // agentic work, and production workloads" — directly on-target for this
+  // codebase's lesson-code path, worth the trial. FREE while cloaked
+  // (prompt/completion pricing both $0 as of this writing) — typical for
+  // OpenRouter's stealth-model slots, expect this to change or the slug to
+  // disappear without notice once the model is unmasked or the free window
+  // ends; not something to leave as a long-term default without re-checking.
+  // Reasoning: same mandatory-reasoning case as Gemini 3.7 Flash above —
+  // confirmed live that BOTH {enabled: false} AND {effort: "none"} 400
+  // ("Reasoning is mandatory for this endpoint and cannot be disabled") —
+  // unlike Gemini 3.7 Flash, "none" isn't an escape hatch here either. Needs
+  // the matching withReasoningOff() exemption (see below) or every chunk/
+  // header/patch call would break the moment this is selected. All of
+  // minimal/low/medium/high/max were confirmed live to work (none error),
+  // every one reporting 0 reasoning_tokens on a trivial prompt — but
+  // latency did NOT scale with the named tier at all (minimal=2.0s,
+  // low=42.6s, medium=34.4s, high=61.1s, max=18.2s), so the tier name isn't
+  // a reliable cost/speed signal on this cloaked model, only real
+  // measurement is. "medium" (2026-08-22, was "high") per explicit request —
+  // "high" measured as the SLOWEST of the five tiers (61.1s on the one-line
+  // test prompt); "medium" measured 34.4s, still well above "minimal"'s
+  // 2.0s, so the lesson-code path's 90s idle-stream watchdog remains a real
+  // risk on a real multi-hundred-line scene chunk, just less of one.
+  oxalpha: {
+    client: openRouterClient,
+    model: "stealth/ox-alpha",
+    providerName: "oxalpha",
+    extraParams: { reasoning: { effort: "medium" } },
+    maxTokens: 131072,
+    keyEnv: "OPENROUTER_API_KEY",
+  },
 };
 
 function resolveProvider(envVar, defaultKey) {
   const requested = process.env[envVar];
-  const provider = CODE_PROVIDERS[["fable", "glm", "claude", "deepseek", "minimax", "gpt56", "mimo", "fusion", "qwen", "gemini", "geminilite"].includes(requested) ? requested : defaultKey];
+  const provider = CODE_PROVIDERS[["fable", "glm", "claude", "deepseek", "minimax", "gpt56", "mimo", "fusion", "qwen", "gemini", "geminilite", "glmflash", "oxalpha"].includes(requested) ? requested : defaultKey];
   if (!process.env[provider.keyEnv]) {
     console.warn(`[codegen] WARNING: ${provider.keyEnv} is not set — ${envVar} generation will fail with an auth error.`);
   }
@@ -417,6 +478,15 @@ function withReasoningOff(provider) {
   if (provider.model === "google/gemini-2.5-flash-lite") {
     return { ...provider, extraParams: { ...rest, reasoning: { effort: "minimal" } } };
   }
+  // Ox Alpha exemption (2026-08-22, real failure) — same mandatory-reasoning
+  // case as Gemini 3.7 Flash above: confirmed live that BOTH {enabled: false}
+  // AND {effort: "none"} 400 ("Reasoning is mandatory for this endpoint and
+  // cannot be disabled") on this model — see CODE_PROVIDERS.oxalpha's own
+  // comment for the full measured-tier table. Kept in sync with that entry's
+  // own extraParams (currently {effort: "medium"}, per explicit request).
+  if (provider.model === "stealth/ox-alpha") {
+    return { ...provider, extraParams: { ...rest, reasoning: { effort: "medium" } } };
+  }
   const reasoningOffParam = provider.client === openRouterClient
     ? { reasoning: { enabled: false } }
     : { thinking: { type: "disabled" } };
@@ -426,17 +496,17 @@ const LESSON_CODE_PROVIDER_NO_REASONING = withReasoningOff(LESSON_CODE_PROVIDER)
 
 // Remedial-lesson-plan / next-course-suggestions: bounded, fixed-shape JSON
 // (not code) on GLM 5.2 via OpenRouter — unchanged, lower-stakes calls not
-// worth reasoning tokens. Course plan and per-lesson scene plan both run on
-// DeepSeek V4 Flash instead (see DEEPSEEK_COURSE_PLAN_PROVIDER /
-// DEEPSEEK_SCENE_PLAN_PROVIDER below), reasoning at MAX effort — both set
-// the structure everything downstream depends on (the whole course's shape;
-// one lesson's scene breakdown, including each scene's mechanism), so the
-// extra latency is worth it. "max" is DeepSeek's own top reasoning tier
-// (its native `reasoning_effort` field only recognizes "high"/"max" —
-// "low"/"medium" are silently remapped up to "high"); confirmed live that
-// OpenRouter's unified `reasoning: {effort}` field forwards "max" through to
-// DeepSeek without erroring, even though OpenRouter's own documented enum is
-// only low/medium/high.
+// worth reasoning tokens. Course plan, the post-course quiz, and per-lesson
+// scene plan all run on Gemini 3.7 Flash instead (see
+// GEMINI_COURSE_PLAN_PROVIDER / GEMINI_SCENE_PLAN_PROVIDER below) — moved
+// off DeepSeek V4 Flash after DeepSeek's endpoint was observed hanging on
+// scene-plan generation in practice. Gemini 3.7 Flash REJECTS
+// `{reasoning:{enabled:false}}` outright (400 "Reasoning is mandatory for
+// this endpoint and cannot be disabled") — same exemption case as
+// `withReasoningOff` above — so both providers below use the same
+// known-working `{reasoning:{effort:"low"}}` shape as CODE_PROVIDERS.gemini,
+// and neither pins a `provider.order` (Gemini is single-sourced from Google
+// itself, no third-party-backend concern the way GLM/DeepSeek had).
 const SCENE_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "z-ai/glm-5.2",
@@ -449,30 +519,27 @@ const SCENE_PLAN_PROVIDER = {
   keyEnv: "OPENROUTER_API_KEY",
 };
 
-// `provider: { order: ["deepseek"] }` — same quantized-third-party-backend
-// concern as GLM's pin above, applied here as a precaution even though it
-// was only ever confirmed as an actual incident on GLM.
-const DEEPSEEK_COURSE_PLAN_PROVIDER = {
+// Course plan + post-course quiz. Reasoning effort "low" — same known-working
+// tier as CODE_PROVIDERS.gemini (see withReasoningOff's exemption for why
+// "enabled:false" 400s on this model). No provider.order pin — Gemini is
+// single-sourced from Google, not a quantized-third-party-backend concern.
+const GEMINI_COURSE_PLAN_PROVIDER = {
   client: openRouterClient,
-  model: "deepseek/deepseek-v4-flash",
-  providerName: "deepseek",
-  // Reasoning OFF — was { effort: "max" }, which drew a significant chunk
-  // of this call's latency (course plan is on the critical path before any
-  // lesson can start building) as invisible reasoning tokens from this same
-  // budget, on top of the actual JSON. Turned off deliberately for speed;
-  // if plan quality regresses, that's the tradeoff to revisit first.
-  extraParams: { reasoning: { enabled: false }, provider: { order: ["deepseek"], allow_fallbacks: true } },
-  maxTokens: 40000,
+  model: "google/gemini-3.7-flash",
+  providerName: "gemini",
+  extraParams: { reasoning: { effort: "low" } },
+  maxTokens: 65536,
   keyEnv: "OPENROUTER_API_KEY",
 };
-const DEEPSEEK_SCENE_PLAN_PROVIDER = {
+// Per-lesson scene plan. Was DeepSeek V4 Flash — switched after DeepSeek's
+// endpoint was observed hanging on this call in practice; see
+// GEMINI_COURSE_PLAN_PROVIDER above for the reasoning-shape rationale.
+const GEMINI_SCENE_PLAN_PROVIDER = {
   client: openRouterClient,
-  model: "deepseek/deepseek-v4-flash",
-  providerName: "deepseek",
-  // Reasoning OFF — see DEEPSEEK_COURSE_PLAN_PROVIDER above. This call in
-  // particular was measured at 113.6s with max-effort reasoning on.
-  extraParams: { reasoning: { enabled: false }, provider: { order: ["deepseek"], allow_fallbacks: true } },
-  maxTokens: 40000,
+  model: "google/gemini-3.7-flash",
+  providerName: "gemini",
+  extraParams: { reasoning: { effort: "low" } },
+  maxTokens: 65536,
   keyEnv: "OPENROUTER_API_KEY",
 };
 
@@ -509,20 +576,22 @@ const LESSON_CODE_MAX_CONCURRENT = Number(process.env.LESSON_CODE_MAX_CONCURRENT
 const limitLessonCodeCall = createLimiter(LESSON_CODE_MAX_CONCURRENT);
 const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;
 const limitAdCodeCall = createLimiter(AD_CODE_MAX_CONCURRENT);
-// Shared by every OpenRouter-routed DeepSeek call: course plan and
-// per-lesson scene plan (DEEPSEEK_COURSE_PLAN_PROVIDER /
-// DEEPSEEK_SCENE_PLAN_PROVIDER above) and the pre-course level assessment in
-// levelAssessmentService.js (which imports this limiter directly). DeepSeek's
-// own documented account-wide cap for deepseek-v4-flash was 2,500 concurrent
-// requests when hit directly — now mediated through OpenRouter's own
-// concurrency handling instead, so that figure is no longer a guaranteed
-// ceiling, just the best available evidence that 100 has ample headroom.
+// Originally "every OpenRouter-routed DeepSeek call"; course plan/quiz and
+// per-lesson scene plan (GEMINI_COURSE_PLAN_PROVIDER / GEMINI_SCENE_PLAN_
+// PROVIDER above) have since moved to Gemini 3.7 Flash and still share this
+// pool — only the pre-course level assessment in levelAssessmentService.js
+// (which imports this limiter directly) is still actual DeepSeek traffic.
+// Kept as one shared cap rather than splitting it: DeepSeek's own documented
+// account-wide cap for deepseek-v4-flash was 2,500 concurrent requests when
+// hit directly — now mediated through OpenRouter's own concurrency handling
+// instead, so that figure is no longer a guaranteed ceiling, just the best
+// available evidence that 100 has ample headroom either way.
 const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 100;
 const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 
 console.log(
-  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini | geminilite to switch) | ` +
-  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini | geminilite to switch)`
+  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini | geminilite | glmflash | oxalpha to switch) | ` +
+  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini | geminilite | glmflash | oxalpha to switch)`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -709,8 +778,8 @@ function safeParseJson(text) {
 // parse, caller-supplied shape validation, and corrective feedback on retry
 // (a shape-validation failure message rides into the next attempt's prompt
 // exactly like code-gen does). `provider`/`limiter` are overridable (used to
-// route course-plan/scene-plan generation to DeepSeek — see
-// DEEPSEEK_COURSE_PLAN_PROVIDER above) but remedial/next-course use the
+// route course-plan/scene-plan generation to Gemini — see
+// GEMINI_COURSE_PLAN_PROVIDER above) but remedial/next-course use the
 // GLM defaults.
 // `onUsage(usage)` is optional — fires with the raw OpenAI-SDK `usage`
 // object right before returning, once validation has already succeeded, so
@@ -944,7 +1013,7 @@ ${rules}
   const plan = await generateJson({
     label: `plan`,
     maxAttempts,
-    provider: DEEPSEEK_COURSE_PLAN_PROVIDER,
+    provider: GEMINI_COURSE_PLAN_PROVIDER,
     limiter: limitDeepSeekCall,
     // FIX: was a flat 8000, which a large tier (e.g. 10 lessons from
     // courseController's tier-priced path) could genuinely exceed — scale the
@@ -971,8 +1040,8 @@ ${rules}
     },
     onUsage: (usage) => recordAiUsage({
       kind: "course-plan",
-      provider: DEEPSEEK_COURSE_PLAN_PROVIDER.providerName,
-      model: DEEPSEEK_COURSE_PLAN_PROVIDER.model,
+      provider: GEMINI_COURSE_PLAN_PROVIDER.providerName,
+      model: GEMINI_COURSE_PLAN_PROVIDER.model,
       userId,
       courseId,
       promptTokens: usage.prompt_tokens,
@@ -1058,7 +1127,7 @@ Rules:
   const result = await generateJson({
     label: `quiz`,
     maxAttempts,
-    provider: DEEPSEEK_COURSE_PLAN_PROVIDER,
+    provider: GEMINI_COURSE_PLAN_PROVIDER,
     limiter: limitDeepSeekCall,
     maxTokens: Math.min(40000, 8000 + mcqCount * 250),
     buildMessages: (feedback) => [{ role: "user", content: basePrompt + feedbackSuffix(feedback) }],
@@ -1073,8 +1142,8 @@ Rules:
     },
     onUsage: (usage) => recordAiUsage({
       kind: "course-quiz",
-      provider: DEEPSEEK_COURSE_PLAN_PROVIDER.providerName,
-      model: DEEPSEEK_COURSE_PLAN_PROVIDER.model,
+      provider: GEMINI_COURSE_PLAN_PROVIDER.providerName,
+      model: GEMINI_COURSE_PLAN_PROVIDER.model,
       userId,
       courseId,
       promptTokens: usage.prompt_tokens,
@@ -1308,47 +1377,136 @@ REUSABLE COMPONENT LIBRARY (grown from real lessons, not hand-written, human-rev
 // comment) into the compact "name — description (props)" listing shown to
 // the header prompt — never the actual code, so this stays small regardless
 // of how large the library grows.
+// const LESSON_HEADER_RULES = `
+// OUTPUT: Raw TypeScript/TSX only. No prose, no markdown fences. First character must be "i" (import).
+
+// ROLE: Build the SHARED FOUNDATION for one lesson — imports, palette, motif, reusable helpers. No scene content, no <Series> wrapper.
+
+// VISUAL IDENTITY:
+// - PALETTE: 3-4 colors matched to the subject (not generic). Include a background base, hero accent, 1-2 supporting hues, and PALETTE.text (guaranteed high-contrast vs. base). Declare as a const PALETTE object.
+// - MOTIF: one recurring visual idea tied to the subject, built as a component named EXACTLY \`Backdrop\`. Must be in continuous motion (no static frame).
+// - TONE: motion energy should match subject mood.
+
+// HARD API RULES:
+// 1. No \`export\` anywhere — only imports, consts, helper function components.
+// 2. Imports: from "remotion" any named export except staticFile; from "react" ONLY useMemo, useCallback, useRef (no useState). Nothing else, ever.
+// 3. No props, no external data. Never shadow JS built-ins (Math, Array, etc). Never name anything \`Scene<number>\`.
+// 4. Never render <Series>, <Series.Sequence>, or <Audio>.
+// 5. SVG shapes (<circle>, <rect>, <path>, etc.) only work inside <svg>. Any shared helper using them must be a full-frame \`<svg style={SVG_FRAME}>\` (never spread as \`{...SVG_FRAME}\` — must be \`style=\`). Helpers wrapping content must accept/render \`{ children }\` with no type annotation (React isn't imported).
+// 6. Anything using useCurrentFrame() must animate correctly from frame 0 (use Math.sin(frame/k) style patterns), since it remounts per scene.
+
+// REQUIRED CONSTS (copy verbatim):
+// const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
+// const FRAME = { w: 1920, h: 1080 };
+// const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
+// const clampPos = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// const SVG_FRAME = { position: "absolute", left: 0, top: 0, width: 1920, height: 1080, pointerEvents: "none", overflow: "visible" };
+// const ZONES = {
+//   title:   { x: 120, y: 120, w: 1680, h: 130, cx: 960, cy: 185 },
+//   stage:   { x: 120, y: 270, w: 1680, h: 580, cx: 960, cy: 560 },
+//   caption: { x: 120, y: 870, w: 1680, h: 90, cx: 960, cy: 915 },
+// };
+
+// IF PHYSICS/MATH/VECTORS: also build Arrow({from,to,color,width}) and AngleArc({vertex,angle1,angle2,radius,color}), using Math.atan2(dy,dx). Points are always {x,y} objects (never arrays or {cx,cy}) — destructure as const {x,y} = point.
+
+// IF SCENES SHARE ONE WORKED EXAMPLE (same graph/array/dataset across steps): declare that literal data here as a named const (e.g. DIJKSTRA_GRAPH), sized to cover every state any scene needs. Skip if not applicable.
+
+// INTERPOLATE SAFETY: interpolate()/interpolateColors() need 3-4 args; input/output ranges must be same-length array literals of number literals; inputRange strictly increasing.
+
+// TEXT HELPERS: Label({children, size}) using PALETTE.text + textShadow. Panel({children, width, height}) or Glow({color, size}) — pick one.
+
+// STYLE: Inline styles only. No Tailwind/className/CSS. No registerRoot/Composition/export. No TODOs — every declared const/component must be complete.
+
+// ORDER: imports → CLAMP/FRAME/SAFE/clampPos/ZONES (verbatim) → palette → helpers. Response = code only, starts with "import".
+// `;
 const LESSON_HEADER_RULES = `
-OUTPUT: Raw TypeScript/TSX only. No prose, no markdown fences. First character must be "i" (import).
+OUTPUT: Raw code only. No prose, no markdown fences, no explanatory comments.
+First character must be "i" (import).
 
-ROLE: Build the SHARED FOUNDATION for one lesson — imports, palette, motif, reusable helpers. No scene content, no <Series> wrapper.
+TASK: Write the shared visual foundation for one animated lesson file — imports, palette,
+a backdrop motif, and reusable helper components. Nothing else: no scene content, no
+<Series>, no composition wiring, no exports.
 
-VISUAL IDENTITY:
-- PALETTE: 3-4 colors matched to the subject (not generic). Include a background base, hero accent, 1-2 supporting hues, and PALETTE.text (guaranteed high-contrast vs. base). Declare as a const PALETTE object.
-- MOTIF: one recurring visual idea tied to the subject, built as a component named EXACTLY \`Backdrop\`. Must be in continuous motion (no static frame).
-- TONE: motion energy should match subject mood.
+=== IMPORTS (exactly these, nothing more) ===
+import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, interpolateColors, spring, Easing, random } from "remotion";
+import { useMemo, useCallback, useRef } from "react";
 
-HARD API RULES:
-1. No \`export\` anywhere — only imports, consts, helper function components.
-2. Imports: from "remotion" any named export except staticFile; from "react" ONLY useMemo, useCallback, useRef (no useState). Nothing else, ever.
-3. No props, no external data. Never shadow JS built-ins (Math, Array, etc). Never name anything \`Scene<number>\`.
-4. Never render <Series>, <Series.Sequence>, or <Audio>.
-5. SVG shapes (<circle>, <rect>, <path>, etc.) only work inside <svg>. Any shared helper using them must be a full-frame \`<svg style={SVG_FRAME}>\` (never spread as \`{...SVG_FRAME}\` — must be \`style=\`). Helpers wrapping content must accept/render \`{ children }\` with no type annotation (React isn't imported).
-6. Anything using useCurrentFrame() must animate correctly from frame 0 (use Math.sin(frame/k) style patterns), since it remounts per scene.
-
-REQUIRED CONSTS (copy verbatim):
+=== FIXED CONSTS (copy verbatim, immediately after imports) ===
 const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
 const FRAME = { w: 1920, h: 1080 };
 const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
 const clampPos = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const SVG_FRAME = { position: "absolute", left: 0, top: 0, width: 1920, height: 1080, pointerEvents: "none", overflow: "visible" };
 const ZONES = {
-  title:   { x: 120, y: 120, w: 1680, h: 130, cx: 960 },
+  title:   { x: 120, y: 120, w: 1680, h: 130, cx: 960, cy: 185 },
   stage:   { x: 120, y: 270, w: 1680, h: 580, cx: 960, cy: 560 },
-  caption: { x: 120, y: 870, w: 1680, h: 90,  cx: 960 },
+  caption: { x: 120, y: 870, w: 1680, h: 90, cx: 960, cy: 915 },
 };
 
-IF PHYSICS/MATH/VECTORS: also build Arrow({from,to,color,width}) and AngleArc({vertex,angle1,angle2,radius,color}), using Math.atan2(dy,dx). Points are always {x,y} objects (never arrays or {cx,cy}) — destructure as const {x,y} = point.
+=== THEN, IN THIS ORDER ===
 
-IF SCENES SHARE ONE WORKED EXAMPLE (same graph/array/dataset across steps): declare that literal data here as a named const (e.g. DIJKSTRA_GRAPH), sized to cover every state any scene needs. Skip if not applicable.
+1. PALETTE — a const object, 3-4 colors chosen for THIS subject specifically. A lesson on
+   ocean currents and a lesson on Roman law must not look alike. Required keys:
+     base    — background ground tone, dark or light
+     accent  — hero color, highest saturation, reserved for what matters most
+     support — 1-2 secondary hues that harmonize with accent
+     text    — near-white (~#F2F4F8) if base is dark, near-black (~#0B0D12) if light.
+               Never a mid-tone, never a saturated accent. This is a contrast guarantee.
 
-INTERPOLATE SAFETY: interpolate()/interpolateColors() need 3-4 args; input/output ranges must be same-length array literals of number literals; inputRange strictly increasing.
+2. Backdrop — a component named EXACTLY \`Backdrop\` expressing one recurring visual idea
+   tied to the subject. Mandatory contract:
+     - Full-frame, position:"absolute", left/top 0, zIndex 0, pointerEvents:"none"
+     - Continuously in motion; no frame is static. Oscillation period 4-10 seconds.
+     - Must look correct starting at frame 0 with no entrance animation. Use continuous
+       functions like Math.sin(frame / k), never a one-shot interpolate ramping from 0.
+     - Opacity ceiling: under 0.25 alpha anywhere it overlaps ZONES.stage, under 0.40
+       elsewhere. It sits behind content and must never compete with it.
 
-TEXT HELPERS: Label({children, size}) using PALETTE.text + textShadow. Panel({children, width, height}) or Glow({color, size}) — pick one.
+3. HELPERS — all three, always, fully implemented:
+     Label({ children, size })           — text in PALETTE.text with a textShadow for legibility
+     Panel({ children, width, height })  — soft container surface for grouping content
+     Glow({ color, size })               — radial emphasis halo
+   Destructure props directly. No type annotations — React types are not available.
 
-STYLE: Inline styles only. No Tailwind/className/CSS. No registerRoot/Composition/export. No TODOs — every declared const/component must be complete.
+4. CONDITIONAL — include ONLY if the subject involves physics, geometry, vectors, or forces:
+     Arrow({ from, to, color, width })
+     AngleArc({ vertex, angle1, angle2, radius, color })
+   Use Math.atan2(dy, dx) for direction. Points are ALWAYS { x, y } objects — never arrays,
+   never { cx, cy }. Destructure as: const { x, y } = point;
 
-ORDER: imports → CLAMP/FRAME/SAFE/clampPos/ZONES (verbatim) → palette → helpers. Response = code only, starts with "import".
+5. SHARED DATA — if the lesson walks through ONE worked example (the same graph, array,
+   dataset, circuit, or timeline throughout), declare that literal here as a named const
+   (e.g. DIJKSTRA_GRAPH), sized to cover every state the lesson will need. Omit entirely
+   if there is no single running example.
+
+=== HARD RULES ===
+- No \`export\` anywhere. No registerRoot, no <Composition>.
+- No useState. No props carrying lesson data. No external data, no fetch, no staticFile,
+  no <Img>, <Video>, <OffthreadVideo>, <Audio>, <IFrame>, no delayRender.
+- Never render <Series> or <Series.Sequence>.
+- Never shadow a JS built-in (Math, Array, Object, Number...). Never name anything
+  \`Scene\` followed by a number.
+- SVG primitives (<circle>, <rect>, <path>, <line>, <polygon>) render ONLY inside an <svg>.
+  Any helper using them must open a full-frame <svg style={SVG_FRAME}> — written as
+  style={SVG_FRAME}, never spread as {...SVG_FRAME}.
+- Any id inside <defs> (gradients, filters, masks) must be prefixed "hdr-".
+- interpolate() and interpolateColors() take 3-4 arguments. Input and output ranges must be
+  same-length array literals of number literals; inputRange strictly increasing. Pass CLAMP
+  as the options argument on anything with a bounded range.
+- Inline style objects only. No className, no Tailwind, no CSS strings, no imported fonts —
+  system font stack only.
+- Every declared const and component must be complete and working. No TODOs, no stubs.
+
+=== TONE ===
+Pick exactly one motion character and hold it for the whole file:
+  calm     — slow drift, period 8-10s, low-contrast movement.
+             History, literature, biology, philosophy.
+  precise  — measured easing, period 5-7s, geometric regularity.
+             Math, algorithms, engineering, economics.
+  kinetic  — energetic, period 4-5s, overlapping frequencies, visible momentum.
+             Physics, chemistry, sports science, current events.
+
+Response = code only, first character "i".
 `;
 
 function buildLibraryCatalogBlock(catalog) {
@@ -1410,45 +1568,620 @@ REUSABLE COMPONENT LIBRARY (grown from real lessons, human-reviewed before reuse
   • Skip marking ONLY a single trivial primitive with no meaningful structure, or a piece that hard-codes THIS lesson's specific facts/numbers/labels directly in its own body instead of taking them as props (genuinely can't be reused as-is). Everything else: build it as its own piece and mark it. The @example line must be valid, working JSX using only props that component actually accepts.
 `;
  
+// const LESSON_CHUNK_RULES = `
+// OUTPUT: Raw TypeScript/TSX only. No prose, no fences. First char must be "f" (function).
+
+// ROLE: Write a group of scenes for a lesson. Header code (already generated) has imports/palette/helpers in scope — use those exact names, never redeclare. Other chunks are written in parallel with no visibility into each other — never assume a name exists unless it's in the header or your own chunk.
+
+// RULES:
+// 1. One top-level \`function SceneN() {}\` per scene, exact numbers given, no params. Helpers used by only one scene go NESTED inside it — never a second top-level declaration. Exception: 1a.
+// 1a. Data shared between two of YOUR OWN scenes → top-level const (sibling, not nested). Doesn't cross chunks.
+// 2. No imports. From "react": only useMemo, useCallback, useRef (no useState).
+// 3. No external/dynamic data — only locally declared names, header names, or 1a consts. Never invent a header helper name (e.g. GroundLine) that isn't actually shown in the header — build it nested instead. Never shadow JS built-ins.
+// 4. No <Series>, <Series.Sequence>, <Audio>.
+// 5. Duration is a literal given to you — hardcode it in interpolate(), it's not a variable in scope.
+// 6. useCurrentFrame() resets to 0 each scene. Entrances ~[0,30]; exits ~[duration-30, duration] using that scene's own literal.
+// 7. ~100-200 lines/scene, rich.
+
+// SHARED EXAMPLE DATA: if scenes trace one worked example (algorithm/sort/dataset) across steps, use the header's named const if declared (e.g. DIJKSTRA_GRAPH) — never redeclare. If not declared there, build the standard canonical version yourself so parallel chunks converge. Within your chunk, share via 1a.
+
+// ANIMATION QUALITY (critical):
+// 8. Continuous motion always — frame 0, mid, and final frame all move. Use Math.sin/cos(frame/k), (frame*speed)%360.
+// 9. Animate the EXACT given mechanism (start state → end state → visible action) — not generic particles.
+// 10. Three layers, anchored to header's ZONES: (1) header's Backdrop as base, (2) main diagram fit in ZONES.stage, (3) text in ZONES.caption/.title, springing/fading in, never overlapping layer 2.
+// 11. Minimum: 3+ animated elements, one spring() entrance, one continuous sin/cos motion, glow (boxShadow), staggered text. Title-only scenes with no diagram get rejected.
+
+// Reuse header's palette/motif/helpers/ZONES by name only — never invent colors or redeclare. Text via header's Label helper.
+
+// INTERPOLATE SAFETY (crashes if violated):
+// 12. interpolate()/interpolateColors() need exactly 3 args; 2nd/3rd args are INLINE array literals of numbers (never variables), same length, inputRange strictly increasing. Hold-final: 2 values + CLAMP.
+//    WRONG: \`const p=[10,50,90]; interpolate(frame,[0,dur],p)\`. RIGHT: inline every time: \`interpolate(frame,[0,dur],[10,50,90])\`.
+// 13. Guard against NaN in SVG attrs (safe division, filter NaN from points).
+// 14. CLAMP entrance/exit anims with header's CLAMP const; continuous sin/cos doesn't need it.
+// 15. Route final x/y/cx/cy/top/left through header's clampPos() to SAFE, as the last step.
+// 16. SVG primitives only inside <svg> — wrap in header's \`<svg style={SVG_FRAME}>\` (reuse by name). ALWAYS \`style={SVG_FRAME}\`, NEVER \`{...SVG_FRAME}\` (spreading breaks positioning, stacks elements off-screen with no error).
+// 17. No comma-expressions in JSX braces — \`{a, b}\` is invalid.
+
+// Write only the scene functions given, in order, back to back. No import/export/<Series>/<Audio>. Code only, starts with "function".
+// `;
 const LESSON_CHUNK_RULES = `
-OUTPUT: Raw TypeScript/TSX only. No prose, no fences. First char must be "f" (function).
+OUTPUT: Raw code only — plain JavaScript syntax in a .tsx file. No prose, no fences, no type
+annotations (React types are not available). First character must be "c" or "f".
 
-ROLE: Write a group of scenes for a lesson. Header code (already generated) has imports/palette/helpers in scope — use those exact names, never redeclare. Other chunks are written in parallel with no visibility into each other — never assume a name exists unless it's in the header or your own chunk.
+ROLE: Write a group of scenes for one animated lesson. The header code shown to you is already
+in scope — imports, PALETTE, Backdrop, Label, Panel, Glow, CLAMP, SVG_FRAME, ZONES, SAFE,
+clampPos, and any data consts it declares. Use those exact names, never redeclare them.
+Other chunks are written in parallel with no visibility into yours. Never assume a name exists
+unless it appears in the header above or in your own chunk.
 
-RULES:
-1. One top-level \`function SceneN() {}\` per scene, exact numbers given, no params. Helpers used by only one scene go NESTED inside it — never a second top-level declaration. Exception: 1a.
-1a. Data shared between two of YOUR OWN scenes → top-level const (sibling, not nested). Doesn't cross chunks.
-2. No imports. From "react": only useMemo, useCallback, useRef (no useState).
-3. No external/dynamic data — only locally declared names, header names, or 1a consts. Never invent a header helper name (e.g. GroundLine) that isn't actually shown in the header — build it nested instead. Never shadow JS built-ins.
-4. No <Series>, <Series.Sequence>, <Audio>.
-5. Duration is a literal given to you — hardcode it in interpolate(), it's not a variable in scope.
-6. useCurrentFrame() resets to 0 each scene. Entrances ~[0,30]; exits ~[duration-30, duration] using that scene's own literal.
-7. ~100-200 lines/scene, rich.
+=== SCENE SHAPE (every scene returns exactly this skeleton) ===
+function SceneN() {
+  const frame = useCurrentFrame();
+  ...animation math...
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+      <Backdrop />
+      <svg style={SVG_FRAME}>
+        {/* main diagram — every element inside ZONES.stage */}
+      </svg>
+      <div style={{ position: "absolute", left: ZONES.title.x, top: ZONES.title.y, width: ZONES.title.w }}>
+        <Label size={64}>...</Label>
+      </div>
+      <div style={{ position: "absolute", left: ZONES.caption.x, top: ZONES.caption.y, width: ZONES.caption.w }}>
+        <Label size={34}>...</Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+Backdrop is always first child. The diagram layer never enters ZONES.title or ZONES.caption.
+Text never overlaps the diagram.
 
-SHARED EXAMPLE DATA: if scenes trace one worked example (algorithm/sort/dataset) across steps, use the header's named const if declared (e.g. DIJKSTRA_GRAPH) — never redeclare. If not declared there, build the standard canonical version yourself so parallel chunks converge. Within your chunk, share via 1a.
+=== STRUCTURE ===
+1. One top-level \`function SceneN() {}\` per scene, using the exact scene numbers given, no
+   params. A helper used by only one scene goes NESTED inside that scene — never a second
+   top-level function.
+2. Data shared between two of YOUR OWN scenes may be a top-level const, but its name MUST be
+   prefixed with your first scene number: S3_STEP_LABELS, S3_NODES. This prevents collisions
+   with chunks written in parallel. Every top-level name you introduce carries this prefix.
+3. No imports, no export. From React only useMemo, useCallback, useRef — never useState.
+4. No external or dynamic data. Only header names, your own prefixed consts, and locally
+   declared values. Never invent a header helper that isn't shown above (e.g. GroundLine) —
+   build it nested inside the scene instead. Never shadow a JS built-in.
+5. Never render <Series>, <Series.Sequence>, or <Audio>.
+6. Duration is given to you as a literal number. Hardcode it — it is not a variable in scope.
+7. useCurrentFrame() restarts at 0 in every scene. Entrances land in ~[0, 30]; exits in
+   ~[duration - 30, duration] using that scene's own literal.
+8. ~100-200 lines per scene. Dense and specific, not padded.
 
-ANIMATION QUALITY (critical):
-8. Continuous motion always — frame 0, mid, and final frame all move. Use Math.sin/cos(frame/k), (frame*speed)%360.
-9. Animate the EXACT given mechanism (start state → end state → visible action) — not generic particles.
-10. Three layers, anchored to header's ZONES: (1) header's Backdrop as base, (2) main diagram fit in ZONES.stage, (3) text in ZONES.caption/.title, springing/fading in, never overlapping layer 2.
-11. Minimum: 3+ animated elements, one spring() entrance, one continuous sin/cos motion, glow (boxShadow), staggered text. Title-only scenes with no diagram get rejected.
+=== SHARED EXAMPLE DATA ===
+If your scenes trace one worked example across steps and the header declares a const for it
+(e.g. DIJKSTRA_GRAPH), use that name and never redeclare it. If the header does NOT declare it,
+do not create a top-level version — parallel chunks would collide. Declare it nested inside
+each scene that needs it, or as an S{N}_-prefixed const if only your scenes use it.
 
-Reuse header's palette/motif/helpers/ZONES by name only — never invent colors or redeclare. Text via header's Label helper.
+=== ANIMATION QUALITY ===
+9. Continuous motion at all times. Frame 0, the midpoint, and the final frame must each show
+   movement. Drive it with Math.sin(frame / k), Math.cos(frame / k), or (frame * speed) % 360.
+10. Animate the EXACT mechanism described for the scene: start state → end state → the visible
+    action between them. Generic drifting particles do not count as the mechanism.
+11. Minimum bar per scene: 3+ animated elements, one spring() entrance, one continuous sin/cos
+    motion, one emphasis glow, and staggered text timing. A title-only scene with no diagram
+    is rejected.
+12. Glow depends on the element type: boxShadow on HTML/div elements, and either
+    filter: "drop-shadow(...)" or the header's Glow helper for SVG content. boxShadow has no
+    effect on SVG primitives.
+13. Every id inside <defs> (gradients, filters, masks) must be prefixed with the scene number:
+    id="s3-glow", referenced as url(#s3-glow). Unprefixed ids silently collide across scenes
+    and render the wrong colors.
+14. Reuse the header's palette, motif, helpers, and ZONES by name. Never invent a hex color.
+    All text goes through the header's Label helper.
 
-PREBUILT: header also has AnimatedGraph({nodes,edges,activeNodes,highlightEdges,area}) and AnimatedArray({values,highlightIndices,area}). For "algorithm-trace" scenes (graph/array traversal/sort/search), prefer these over hand-rolled SVG — pass data with revealAt (frame) for staging. Use the header's shared example const as input if one exists. Don't redeclare these.
+=== CRASH-SAFETY ===
+15. interpolate() and interpolateColors() take 3 or 4 arguments. The 2nd and 3rd are INLINE
+    array literals of number literals — never variables, never spread, same length, and
+    inputRange strictly increasing. The optional 4th argument is CLAMP and nothing else.
+      WRONG: const p = [10, 50, 90]; interpolate(frame, [0, 150], p)
+      WRONG: interpolate(frame, [0, dur], [10, 50, 90])
+      RIGHT: interpolate(frame, [0, 60, 150], [10, 50, 90], CLAMP)
+16. Clamp entrance and exit animations with CLAMP. Continuous sin/cos motion does not need it.
+17. Guard against NaN in SVG attributes: no division by a value that can reach 0, and filter
+    NaN out of any generated point list before rendering.
+18. Route every final x / y / cx / cy / top / left through clampPos() against SAFE as the last
+    step before it reaches the element.
+19. SVG primitives (<circle>, <rect>, <path>, <line>, <polygon>, <text>) render only inside an
+    <svg>. Open it as <svg style={SVG_FRAME}> — always style={SVG_FRAME}, NEVER {...SVG_FRAME}.
+    Spreading it breaks positioning and stacks elements off-screen with no error.
+20. No comma expressions inside JSX braces — {a, b} is invalid syntax.
 
-INTERPOLATE SAFETY (crashes if violated):
-12. interpolate()/interpolateColors() need exactly 3 args; 2nd/3rd args are INLINE array literals of numbers (never variables), same length, inputRange strictly increasing. Hold-final: 2 values + CLAMP.
-   WRONG: \`const p=[10,50,90]; interpolate(frame,[0,dur],p)\`. RIGHT: inline every time: \`interpolate(frame,[0,dur],[10,50,90])\`.
-13. Guard against NaN in SVG attrs (safe division, filter NaN from points).
-14. CLAMP entrance/exit anims with header's CLAMP const; continuous sin/cos doesn't need it.
-15. Route final x/y/cx/cy/top/left through header's clampPos() to SAFE, as the last step.
-16. SVG primitives only inside <svg> — wrap in header's \`<svg style={SVG_FRAME}>\` (reuse by name). ALWAYS \`style={SVG_FRAME}\`, NEVER \`{...SVG_FRAME}\` (spreading breaks positioning, stacks elements off-screen with no error).
-17. No comma-expressions in JSX braces — \`{a, b}\` is invalid.
+Write only the scene functions you were given, in order, back to back, preceded by your
+S{N}_-prefixed consts if any. Code only.
+`; 
+// const LESSON_CHUNK_RULES = `
+// OUTPUT: Raw code only — plain JavaScript syntax in a .tsx file. No prose, no fences, no type
+// annotations (React types are not available). First character must be "c" or "f".
 
-Write only the scene functions given, in order, back to back. No import/export/<Series>/<Audio>. Code only, starts with "function".
-`;
+// ROLE: Write TWO adjacent scenes for one animated lesson. The header code shown to you is already
+// in scope — imports, PALETTE, Backdrop, Label, Panel, Glow, CLAMP, SVG_FRAME, ZONES, SAFE,
+// clampPos, and any data consts it declares. Use those exact names, never redeclare them.
+// Other chunks are written in parallel with no visibility into yours. Never assume a name exists
+// unless it appears in the header above or in your own chunk.
 
+// === SCENE SHAPE (every scene returns exactly this skeleton) ===
+// function SceneN() {
+//   const frame = useCurrentFrame();
+//   ...animation math...
+//   return (
+//     <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+//       <Backdrop />
+//       <svg style={SVG_FRAME}>
+//         {/* main diagram — every element inside ZONES.stage */}
+//       </svg>
+//       <div style={{ position: "absolute", left: ZONES.title.x, top: ZONES.title.y, width: ZONES.title.w }}>
+//         <Label size={64}>...</Label>
+//       </div>
+//       <div style={{ position: "absolute", left: ZONES.caption.x, top: ZONES.caption.y, width: ZONES.caption.w }}>
+//         <Label size={34}>...</Label>
+//       </div>
+//     </AbsoluteFill>
+//   );
+// }
+// Backdrop is always first child. The diagram layer never enters ZONES.title or ZONES.caption.
+// Text never overlaps the diagram.
+
+// === STRUCTURE ===
+// 1. One top-level \`function SceneN() {}\` per scene, using the exact scene numbers given, no
+//    params. A helper used by only one scene goes NESTED inside that scene — never a second
+//    top-level function.
+// 2. Every top-level name you introduce MUST be prefixed with your two scene numbers joined by an
+//    underscore: for scenes 3 and 4, that is S3_4_NODES, S3_4_STEP_LABELS. This prevents
+//    collisions with chunks written in parallel. No exceptions, no bare top-level names.
+// 3. Hoist to a top-level const ONLY literal data that BOTH of your scenes read. Data used by one
+//    scene stays nested inside it. Never hoist a helper COMPONENT — helpers stay nested inside
+//    each scene even when both scenes use them, so a scene can be regenerated alone without
+//    breaking.
+// 4. No imports, no export. From React only useMemo, useCallback, useRef — never useState.
+// 5. No external or dynamic data. Only header names, your own S{a}_{b}_ consts, and locally
+//    declared values. Never invent a header helper that isn't shown above (e.g. GroundLine) —
+//    build it nested inside the scene instead. Never shadow a JS built-in.
+// 6. Never render <Series>, <Series.Sequence>, or <Audio>.
+// 7. Each scene's duration is given to you as a literal number, and the two may differ. Hardcode
+//    each scene's own literal — durations are not variables in scope, and never reuse one scene's
+//    duration in the other.
+// 8. useCurrentFrame() restarts at 0 in every scene. Entrances land in ~[0, 30]; exits in
+//    ~[duration - 30, duration] using that scene's own literal.
+// 9. ~100-200 lines PER SCENE — roughly 200-400 lines total for this chunk. Both scenes are
+//    equally dense; never write one rich scene and one thin one.
+
+// === CONTINUITY BETWEEN YOUR TWO SCENES ===
+// 10. Your two scenes play back to back in the final video. The visual state at the END of the
+//     first should be the state at the START of the second: same element positions, same colors,
+//     same scale at the cut. Carry the diagram forward and advance it rather than rebuilding it,
+//     unless the lesson content calls for a hard topic change.
+// 11. This continuity applies ONLY between your own two scenes. The scenes before and after your
+//     chunk are unknown to you — do not try to match them, and do not reference any state you were
+//     not given.
+
+// === SHARED EXAMPLE DATA ===
+// If your scenes trace one worked example across steps and the header declares a const for it
+// (e.g. DIJKSTRA_GRAPH), use that name and never redeclare it. If the header does NOT declare it,
+// build it as an S{a}_{b}_ prefixed top-level const so both of your scenes share one source of
+// truth. Never emit an unprefixed top-level version — parallel chunks would collide.
+
+// === ANIMATION QUALITY ===
+// 12. Continuous motion at all times. Frame 0, the midpoint, and the final frame must each show
+//     movement. Drive it with Math.sin(frame / k), Math.cos(frame / k), or (frame * speed) % 360.
+// 13. Animate the EXACT mechanism described for each scene: start state → end state → the visible
+//     action between them. Generic drifting particles do not count as the mechanism.
+// 14. Minimum bar per scene: 3+ animated elements, one spring() entrance, one continuous sin/cos
+//     motion, one emphasis glow, and staggered text timing. A title-only scene with no diagram
+//     is rejected.
+// 15. Glow depends on the element type: boxShadow on HTML/div elements, and either
+//     filter: "drop-shadow(...)" or the header's Glow helper for SVG content. boxShadow has no
+//     effect on SVG primitives.
+// 16. Every id inside <defs> (gradients, filters, masks) must be prefixed with the number of the
+//     SCENE it sits in — not the chunk: id="s3-glow" in Scene3, id="s4-glow" in Scene4, referenced
+//     as url(#s3-glow). Unprefixed or chunk-prefixed ids silently collide and render wrong colors.
+// 17. Reuse the header's palette, motif, helpers, and ZONES by name. Never invent a hex color.
+//     All text goes through the header's Label helper.
+
+// === CRASH-SAFETY ===
+// 18. interpolate() and interpolateColors() take 3 or 4 arguments. The 2nd and 3rd are INLINE
+//     array literals of number literals — never variables, never spread, same length, and
+//     inputRange strictly increasing. The optional 4th argument is CLAMP and nothing else.
+//       WRONG: const p = [10, 50, 90]; interpolate(frame, [0, 150], p)
+//       WRONG: interpolate(frame, [0, dur], [10, 50, 90])
+//       RIGHT: interpolate(frame, [0, 60, 150], [10, 50, 90], CLAMP)
+// 19. Clamp entrance and exit animations with CLAMP. Continuous sin/cos motion does not need it.
+// 20. Guard against NaN in SVG attributes: no division by a value that can reach 0, and filter
+//     NaN out of any generated point list before rendering.
+// 21. Route every final x / y / cx / cy / top / left through clampPos() against SAFE as the last
+//     step before it reaches the element.
+// 22. SVG primitives (<circle>, <rect>, <path>, <line>, <polygon>, <text>) render only inside an
+//     <svg>. Open it as <svg style={SVG_FRAME}> — always style={SVG_FRAME}, NEVER {...SVG_FRAME}.
+//     Spreading it breaks positioning and stacks elements off-screen with no error.
+// 23. No comma expressions inside JSX braces — {a, b} is invalid syntax.
+
+// Write only the two scene functions you were given, in order, back to back, preceded by your
+// S{a}_{b}_ prefixed consts if any. Code only.
+// `;
+
+// const LESSON_CHUNK_RULES = `
+// OUTPUT: Raw code only — plain JavaScript syntax in a .tsx file. No prose, no fences, no type
+// annotations (React types are not available). First character must be "c" or "f".
+
+// ROLE: Write THREE adjacent scenes for one animated lesson. The header code shown to you is
+// already in scope — imports, PALETTE, Backdrop, Label, Panel, Glow, CLAMP, SVG_FRAME, ZONES,
+// SAFE, clampPos, and any data consts it declares. Use those exact names, never redeclare them.
+// Other chunks are written in parallel with no visibility into yours. Never assume a name exists
+// unless it appears in the header above or in your own chunk.
+
+// === SCENE SHAPE (every scene returns exactly this skeleton) ===
+// function SceneN() {
+//   const frame = useCurrentFrame();
+//   ...animation math...
+//   return (
+//     <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+//       <Backdrop />
+//       <svg style={SVG_FRAME}>
+//         {/* main diagram — every element inside ZONES.stage */}
+//       </svg>
+//       <div style={{ position: "absolute", left: ZONES.title.x, top: ZONES.title.y, width: ZONES.title.w }}>
+//         <Label size={64}>...</Label>
+//       </div>
+//       <div style={{ position: "absolute", left: ZONES.caption.x, top: ZONES.caption.y, width: ZONES.caption.w }}>
+//         <Label size={34}>...</Label>
+//       </div>
+//     </AbsoluteFill>
+//   );
+// }
+// Backdrop is always first child. The diagram layer never enters ZONES.title or ZONES.caption.
+// Text never overlaps the diagram.
+
+// === STRUCTURE ===
+// 1. One top-level \`function SceneN() {}\` per scene, using the exact scene numbers given, no
+//    params. A helper used by only one scene goes NESTED inside that scene — never a second
+//    top-level function.
+// 2. Every top-level name you introduce MUST be prefixed with your first and last scene numbers
+//    joined by an underscore: for scenes 4, 5 and 6, that is S4_6_NODES, S4_6_STEP_LABELS. This
+//    prevents collisions with chunks written in parallel. No exceptions, no bare top-level names.
+// 3. Hoist to a top-level const ONLY literal data read by TWO OR MORE of your scenes. Data used by
+//    a single scene stays nested inside it. Never hoist a helper COMPONENT — helpers stay nested
+//    inside each scene even when all three use them, so a scene can be regenerated alone without
+//    breaking. Duplicating a small nested helper across your scenes is correct and expected.
+// 4. No imports, no export. From React only useMemo, useCallback, useRef — never useState.
+// 5. No external or dynamic data. Only header names, your own S{a}_{b}_ consts, and locally
+//    declared values. Never invent a header helper that isn't shown above (e.g. GroundLine) —
+//    build it nested inside the scene instead. Never shadow a JS built-in.
+// 6. Never render <Series>, <Series.Sequence>, or <Audio>.
+// 7. Each scene's duration is given to you as a literal number, and the three may differ. Hardcode
+//    each scene's own literal — durations are not variables in scope, and never reuse one scene's
+//    duration in another.
+// 8. useCurrentFrame() restarts at 0 in every scene. Entrances land in ~[0, 30]; exits in
+//    ~[duration - 30, duration] using that scene's own literal.
+// 9. ~100-200 lines PER SCENE — roughly 300-600 lines total for this chunk. All three scenes carry
+//    equal density. Do not front-load effort into the first scene and thin out by the third: the
+//    last scene you write must be as rich as the first. Never truncate, summarize, or stub a scene
+//    to save length.
+
+// === CONTINUITY ACROSS YOUR THREE SCENES ===
+// 10. Your three scenes play back to back in the final video and form one continuous progression.
+//     The visual state at the END of each should be the state at the START of the next: same
+//     element positions, same colors, same scale at each cut. Carry the diagram forward and
+//     advance it rather than rebuilding it, unless the lesson content calls for a hard topic
+//     change.
+// 11. Continuity is not stasis. Each scene must introduce a new element, transformation, or state
+//     change within its first 30 frames. A scene that opens on the previous scene's final frame
+//     and holds it is rejected.
+// 12. Continuity applies ONLY within your own three scenes. The scenes before and after your chunk
+//     are unknown to you — do not try to match them, and do not reference any state you were not
+//     given.
+
+// === SHARED EXAMPLE DATA ===
+// If your scenes trace one worked example across steps and the header declares a const for it
+// (e.g. DIJKSTRA_GRAPH), use that name and never redeclare it. If the header does NOT declare it,
+// build it as an S{a}_{b}_ prefixed top-level const so all three of your scenes share one source
+// of truth, sized to cover every state your three scenes need. Never emit an unprefixed top-level
+// version — parallel chunks would collide.
+
+// === ANIMATION QUALITY ===
+// 13. Continuous motion at all times. Frame 0, the midpoint, and the final frame must each show
+//     movement. Drive it with Math.sin(frame / k), Math.cos(frame / k), or (frame * speed) % 360.
+// 14. Animate the EXACT mechanism described for each scene: start state → end state → the visible
+//     action between them. Generic drifting particles do not count as the mechanism.
+// 15. Minimum bar per scene: 3+ animated elements, one spring() entrance, one continuous sin/cos
+//     motion, one emphasis glow, and staggered text timing. A title-only scene with no diagram
+//     is rejected.
+// 16. Glow depends on the element type: boxShadow on HTML/div elements, and either
+//     filter: "drop-shadow(...)" or the header's Glow helper for SVG content. boxShadow has no
+//     effect on SVG primitives.
+// 17. Every id inside <defs> (gradients, filters, masks) must be prefixed with the number of the
+//     SCENE it sits in — not the chunk: id="s4-glow" in Scene4, id="s5-glow" in Scene5, referenced
+//     as url(#s4-glow). Unprefixed or chunk-prefixed ids silently collide and render wrong colors.
+// 18. Reuse the header's palette, motif, helpers, and ZONES by name. Never invent a hex color.
+//     All text goes through the header's Label helper.
+
+// === CRASH-SAFETY ===
+// 19. interpolate() and interpolateColors() take 3 or 4 arguments. The 2nd and 3rd are INLINE
+//     array literals of number literals — never variables, never spread, same length, and
+//     inputRange strictly increasing. The optional 4th argument is CLAMP and nothing else.
+//       WRONG: const p = [10, 50, 90]; interpolate(frame, [0, 150], p)
+//       WRONG: interpolate(frame, [0, dur], [10, 50, 90])
+//       RIGHT: interpolate(frame, [0, 60, 150], [10, 50, 90], CLAMP)
+// 20. Clamp entrance and exit animations with CLAMP. Continuous sin/cos motion does not need it.
+// 21. Guard against NaN in SVG attributes: no division by a value that can reach 0, and filter
+//     NaN out of any generated point list before rendering.
+// 22. Route every final x / y / cx / cy / top / left through clampPos() against SAFE as the last
+//     step before it reaches the element.
+// 23. SVG primitives (<circle>, <rect>, <path>, <line>, <polygon>, <text>) render only inside an
+//     <svg>. Open it as <svg style={SVG_FRAME}> — always style={SVG_FRAME}, NEVER {...SVG_FRAME}.
+//     Spreading it breaks positioning and stacks elements off-screen with no error.
+// 24. No comma expressions inside JSX braces — {a, b} is invalid syntax.
+
+// Write all three scene functions you were given, in order, back to back, preceded by your
+// S{a}_{b}_ prefixed consts if any. Code only.
+// `;
+
+// const LESSON_CHUNK_RULES = `
+// OUTPUT: Raw code only — plain JavaScript syntax in a .tsx file. No prose, no fences, no type
+// annotations (React types are not available). First character must be "c" or "f".
+
+// ROLE: Write FOUR adjacent scenes for one animated lesson. The header code shown to you is
+// already in scope — imports, PALETTE, Backdrop, Label, Panel, Glow, CLAMP, SVG_FRAME, ZONES,
+// SAFE, clampPos, and any data consts it declares. Use those exact names, never redeclare them.
+// Other chunks are written in parallel with no visibility into yours. Never assume a name exists
+// unless it appears in the header above or in your own chunk.
+
+// === SCENE SHAPE (every scene returns exactly this skeleton) ===
+// function SceneN() {
+//   const frame = useCurrentFrame();
+//   ...animation math...
+//   return (
+//     <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+//       <Backdrop />
+//       <svg style={SVG_FRAME}>
+//         {/* main diagram — every element inside ZONES.stage */}
+//       </svg>
+//       <div style={{ position: "absolute", left: ZONES.title.x, top: ZONES.title.y, width: ZONES.title.w }}>
+//         <Label size={64}>...</Label>
+//       </div>
+//       <div style={{ position: "absolute", left: ZONES.caption.x, top: ZONES.caption.y, width: ZONES.caption.w }}>
+//         <Label size={34}>...</Label>
+//       </div>
+//     </AbsoluteFill>
+//   );
+// }
+// Backdrop is always first child. The diagram layer never enters ZONES.title or ZONES.caption.
+// Text never overlaps the diagram.
+
+// === STRUCTURE ===
+// 1. One top-level \`function SceneN() {}\` per scene, using the exact scene numbers given, no
+//    params. A helper used by only one scene goes NESTED inside that scene — never a second
+//    top-level function.
+// 2. Every top-level name you introduce MUST be prefixed with your first and last scene numbers
+//    joined by an underscore: for scenes 5 through 8, that is S5_8_NODES, S5_8_STEP_LABELS. This
+//    prevents collisions with chunks written in parallel. No exceptions, no bare top-level names.
+// 3. Hoist to a top-level const ONLY literal data read by TWO OR MORE of your scenes. Data used by
+//    a single scene stays nested inside it. Never hoist a helper COMPONENT — helpers stay nested
+//    inside each scene even when all four use them, so a scene can be regenerated alone without
+//    breaking. Duplicating a small nested helper across your scenes is correct and expected.
+// 4. No imports, no export. From React only useMemo, useCallback, useRef — never useState.
+// 5. No external or dynamic data. Only header names, your own S{a}_{b}_ consts, and locally
+//    declared values. Never invent a header helper that isn't shown above (e.g. GroundLine) —
+//    build it nested inside the scene instead. Never shadow a JS built-in.
+// 6. Never render <Series>, <Series.Sequence>, or <Audio>.
+// 7. Each scene's duration is given to you as a literal number, and the four may differ. Hardcode
+//    each scene's own literal — durations are not variables in scope, and never reuse one scene's
+//    duration in another.
+// 8. useCurrentFrame() restarts at 0 in every scene. Entrances land in ~[0, 30]; exits in
+//    ~[duration - 30, duration] using that scene's own literal.
+
+// === LENGTH DISCIPLINE (this chunk is long — read carefully) ===
+// 9. ~100-200 lines PER SCENE. All four scenes carry equal density. The fourth scene you write
+//    must be exactly as rich as the first: same element count, same animation depth, same text
+//    staggering. Do not front-load effort and taper.
+// 10. You are writing a long response. Do NOT economize as it grows. Never abbreviate a later
+//     scene, never collapse repeated structure into a shorter form, never write a comment standing
+//     in for content, never stub, never emit a scene that is a lighter variant of an earlier one.
+//     Every one of the four scenes is written out in full.
+// 11. If you find yourself shortening, stop and write the full scene instead. An incomplete fourth
+//     scene fails the entire chunk.
+
+// === CONTINUITY ACROSS YOUR FOUR SCENES ===
+// 12. Your four scenes play back to back in the final video and form one continuous progression.
+//     The visual state at the END of each should be the state at the START of the next: same
+//     element positions, same colors, same scale at each cut. Carry the diagram forward and
+//     advance it rather than rebuilding it, unless the lesson content calls for a hard topic
+//     change.
+// 13. Continuity is not stasis. Each scene must introduce a new element, transformation, or state
+//     change within its first 30 frames. A scene that opens on the previous scene's final frame
+//     and holds it is rejected.
+// 14. Across four scenes the progression must actually progress — the diagram at the end of your
+//     last scene should be visibly further along than at the start of your first. Do not cycle
+//     back to an earlier state or repeat the same transformation twice.
+// 15. Continuity applies ONLY within your own four scenes. The scenes before and after your chunk
+//     are unknown to you — do not try to match them, and do not reference any state you were not
+//     given.
+
+// === SHARED EXAMPLE DATA ===
+// If your scenes trace one worked example across steps and the header declares a const for it
+// (e.g. DIJKSTRA_GRAPH), use that name and never redeclare it. If the header does NOT declare it,
+// build it as an S{a}_{b}_ prefixed top-level const so all four of your scenes share one source of
+// truth, sized to cover every state your four scenes need. Never emit an unprefixed top-level
+// version — parallel chunks would collide.
+
+// === ANIMATION QUALITY ===
+// 16. Continuous motion at all times. Frame 0, the midpoint, and the final frame must each show
+//     movement. Drive it with Math.sin(frame / k), Math.cos(frame / k), or (frame * speed) % 360.
+// 17. Animate the EXACT mechanism described for each scene: start state → end state → the visible
+//     action between them. Generic drifting particles do not count as the mechanism.
+// 18. Minimum bar per scene: 3+ animated elements, one spring() entrance, one continuous sin/cos
+//     motion, one emphasis glow, and staggered text timing. A title-only scene with no diagram
+//     is rejected.
+// 19. Glow depends on the element type: boxShadow on HTML/div elements, and either
+//     filter: "drop-shadow(...)" or the header's Glow helper for SVG content. boxShadow has no
+//     effect on SVG primitives.
+// 20. Every id inside <defs> (gradients, filters, masks) must be prefixed with the number of the
+//     SCENE it sits in — not the chunk: id="s5-glow" in Scene5, id="s6-glow" in Scene6, referenced
+//     as url(#s5-glow). Unprefixed or chunk-prefixed ids silently collide and render wrong colors.
+// 21. Reuse the header's palette, motif, helpers, and ZONES by name. Never invent a hex color.
+//     All text goes through the header's Label helper.
+
+// === CRASH-SAFETY ===
+// 22. interpolate() and interpolateColors() take 3 or 4 arguments. The 2nd and 3rd are INLINE
+//     array literals of number literals — never variables, never spread, same length, and
+//     inputRange strictly increasing. The optional 4th argument is CLAMP and nothing else.
+//       WRONG: const p = [10, 50, 90]; interpolate(frame, [0, 150], p)
+//       WRONG: interpolate(frame, [0, dur], [10, 50, 90])
+//       RIGHT: interpolate(frame, [0, 60, 150], [10, 50, 90], CLAMP)
+// 23. Clamp entrance and exit animations with CLAMP. Continuous sin/cos motion does not need it.
+// 24. Guard against NaN in SVG attributes: no division by a value that can reach 0, and filter
+//     NaN out of any generated point list before rendering.
+// 25. Route every final x / y / cx / cy / top / left through clampPos() against SAFE as the last
+//     step before it reaches the element.
+// 26. SVG primitives (<circle>, <rect>, <path>, <line>, <polygon>, <text>) render only inside an
+//     <svg>. Open it as <svg style={SVG_FRAME}> — always style={SVG_FRAME}, NEVER {...SVG_FRAME}.
+//     Spreading it breaks positioning and stacks elements off-screen with no error.
+// 27. No comma expressions inside JSX braces — {a, b} is invalid syntax.
+
+// Write all four scene functions you were given, in order, back to back, preceded by your
+// S{a}_{b}_ prefixed consts if any. Code only.
+// `;
+
+
+// const LESSON_CHUNK_RULES = `
+// OUTPUT: Raw code only — plain JavaScript syntax in a .tsx file. No prose, no fences, no type
+// annotations (React types are not available). First character must be "c" or "f".
+
+// ROLE: Write FIVE adjacent scenes for one animated lesson. The header code shown to you is
+// already in scope — imports, PALETTE, Backdrop, Label, Panel, Glow, CLAMP, SVG_FRAME, ZONES,
+// SAFE, clampPos, and any data consts it declares. Use those exact names, never redeclare them.
+// Other chunks are written in parallel with no visibility into yours. Never assume a name exists
+// unless it appears in the header above or in your own chunk.
+
+// === SCENE SHAPE (every scene returns exactly this skeleton) ===
+// function SceneN() {
+//   const frame = useCurrentFrame();
+//   ...animation math...
+//   return (
+//     <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+//       <Backdrop />
+//       <svg style={SVG_FRAME}>
+//         {/* main diagram — every element inside ZONES.stage */}
+//       </svg>
+//       <div style={{ position: "absolute", left: ZONES.title.x, top: ZONES.title.y, width: ZONES.title.w }}>
+//         <Label size={64}>...</Label>
+//       </div>
+//       <div style={{ position: "absolute", left: ZONES.caption.x, top: ZONES.caption.y, width: ZONES.caption.w }}>
+//         <Label size={34}>...</Label>
+//       </div>
+//     </AbsoluteFill>
+//   );
+// }
+// Backdrop is always first child. The diagram layer never enters ZONES.title or ZONES.caption.
+// Text never overlaps the diagram.
+
+// === WORK ORDER (follow exactly) ===
+// Write the five scenes strictly in order, finishing each completely before starting the next.
+// Treat every scene as its own independent task with its own full effort budget. Do not plan the
+// whole chunk first and then render it thinly — the response length is not a budget you are
+// spending down.
+
+// === STRUCTURE ===
+// 1. One top-level \`function SceneN() {}\` per scene, using the exact scene numbers given, no
+//    params. A helper used by only one scene goes NESTED inside that scene — never a second
+//    top-level function.
+// 2. Every top-level name you introduce MUST be prefixed with your first and last scene numbers
+//    joined by an underscore: for scenes 2 through 6, that is S2_6_NODES, S2_6_STEP_LABELS. This
+//    prevents collisions with chunks written in parallel. No exceptions, no bare top-level names.
+// 3. Hoist to a top-level const ONLY literal data read by TWO OR MORE of your scenes. Data used by
+//    a single scene stays nested inside it. Never hoist a helper COMPONENT — helpers stay nested
+//    inside each scene even when all five use them, so a scene can be regenerated alone without
+//    breaking. Duplicating a small nested helper across your scenes is correct and expected.
+// 4. No imports, no export. From React only useMemo, useCallback, useRef — never useState.
+// 5. No external or dynamic data. Only header names, your own S{a}_{b}_ consts, and locally
+//    declared values. Never invent a header helper that isn't shown above (e.g. GroundLine) —
+//    build it nested inside the scene instead. Never shadow a JS built-in.
+// 6. Never render <Series>, <Series.Sequence>, or <Audio>.
+// 7. Each scene's duration is given to you as a literal number, and the five may differ. Hardcode
+//    each scene's own literal — durations are not variables in scope, and never reuse one scene's
+//    duration in another.
+// 8. useCurrentFrame() restarts at 0 in every scene. Entrances land in ~[0, 30]; exits in
+//    ~[duration - 30, duration] using that scene's own literal.
+
+// === LENGTH DISCIPLINE (this chunk is very long — read carefully) ===
+// 9. ~100-200 lines PER SCENE. All five scenes carry equal density. The fifth scene you write must
+//    be exactly as rich as the first: same element count, same animation depth, same text
+//    staggering. Do not front-load effort and taper.
+// 10. You are writing a long response. Do NOT economize as it grows. Never abbreviate a later
+//     scene, never collapse repeated structure into a shorter form, never write a comment standing
+//     in for content, never stub, never emit a scene that is a lighter variant of an earlier one.
+//     All five scenes are written out in full.
+// 11. Scenes 4 and 5 are where quality normally slips. Give them the same deliberate construction
+//     you gave scene 1: derive their animation math fresh rather than copying scene 1's with new
+//     numbers.
+// 12. If you find yourself shortening, stop and write the full scene instead. An incomplete fifth
+//     scene fails the entire chunk.
+
+// === CONTINUITY ACROSS YOUR FIVE SCENES ===
+// 13. Your five scenes play back to back in the final video and form one continuous progression.
+//     The visual state at the END of each should be the state at the START of the next: same
+//     element positions, same colors, same scale at each cut. Carry the diagram forward and
+//     advance it rather than rebuilding it, unless the lesson content calls for a hard topic
+//     change.
+// 14. Continuity is not stasis. Each scene must introduce a new element, transformation, or state
+//     change within its first 30 frames. A scene that opens on the previous scene's final frame
+//     and holds it is rejected.
+// 15. Across five scenes the progression must actually progress — the diagram at the end of your
+//     last scene should be visibly further along than at the start of your first. Do not cycle back
+//     to an earlier state, and do not repeat the same transformation twice with different labels.
+// 16. Continuity applies ONLY within your own five scenes. The scenes before and after your chunk
+//     are unknown to you — do not try to match them, and do not reference any state you were not
+//     given.
+
+// === SHARED EXAMPLE DATA ===
+// If your scenes trace one worked example across steps and the header declares a const for it
+// (e.g. DIJKSTRA_GRAPH), use that name and never redeclare it. If the header does NOT declare it,
+// build it as an S{a}_{b}_ prefixed top-level const so all five of your scenes share one source of
+// truth, sized to cover every state your five scenes need. Never emit an unprefixed top-level
+// version — parallel chunks would collide.
+
+// === ANIMATION QUALITY ===
+// 17. Continuous motion at all times. Frame 0, the midpoint, and the final frame must each show
+//     movement. Drive it with Math.sin(frame / k), Math.cos(frame / k), or (frame * speed) % 360.
+// 18. Animate the EXACT mechanism described for each scene: start state → end state → the visible
+//     action between them. Generic drifting particles do not count as the mechanism.
+// 19. Minimum bar per scene: 3+ animated elements, one spring() entrance, one continuous sin/cos
+//     motion, one emphasis glow, and staggered text timing. A title-only scene with no diagram
+//     is rejected.
+// 20. Glow depends on the element type: boxShadow on HTML/div elements, and either
+//     filter: "drop-shadow(...)" or the header's Glow helper for SVG content. boxShadow has no
+//     effect on SVG primitives.
+// 21. Every id inside <defs> (gradients, filters, masks) must be prefixed with the number of the
+//     SCENE it sits in — not the chunk: id="s2-glow" in Scene2, id="s3-glow" in Scene3, referenced
+//     as url(#s2-glow). Unprefixed or chunk-prefixed ids silently collide and render wrong colors.
+// 22. Reuse the header's palette, motif, helpers, and ZONES by name. Never invent a hex color.
+//     All text goes through the header's Label helper.
+
+// === CRASH-SAFETY ===
+// 23. interpolate() and interpolateColors() take 3 or 4 arguments. The 2nd and 3rd are INLINE
+//     array literals of number literals — never variables, never spread, same length, and
+//     inputRange strictly increasing. The optional 4th argument is CLAMP and nothing else.
+//       WRONG: const p = [10, 50, 90]; interpolate(frame, [0, 150], p)
+//       WRONG: interpolate(frame, [0, dur], [10, 50, 90])
+//       RIGHT: interpolate(frame, [0, 60, 150], [10, 50, 90], CLAMP)
+// 24. Clamp entrance and exit animations with CLAMP. Continuous sin/cos motion does not need it.
+// 25. Guard against NaN in SVG attributes: no division by a value that can reach 0, and filter
+//     NaN out of any generated point list before rendering.
+// 26. Route every final x / y / cx / cy / top / left through clampPos() against SAFE as the last
+//     step before it reaches the element.
+// 27. SVG primitives (<circle>, <rect>, <path>, <line>, <polygon>, <text>) render only inside an
+//     <svg>. Open it as <svg style={SVG_FRAME}> — always style={SVG_FRAME}, NEVER {...SVG_FRAME}.
+//     Spreading it breaks positioning and stacks elements off-screen with no error.
+// 28. No comma expressions inside JSX braces — {a, b} is invalid syntax.
+
+// Write all five scene functions you were given, in order, back to back, preceded by your
+// S{a}_{b}_ prefixed consts if any. Code only.
+// `;
 // Spec-only (never code) table of every OTHER scene in the lesson, for
 // CROSS-SCENE DATA CONSISTENCY context now that chunks generate in parallel
 // and can't see each other's actual output — see the "chunks generate IN
@@ -3254,13 +3987,21 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
     }
   }
 
-  // Append the hand-written component library (never LLM-generated) AND
-  // the dynamic, admin-approved one to the header text AFTER validation,
-  // before computing exposed names — this one splice makes both
-  // automatically visible to every chunk's availableNames AND automatically
-  // shown (signature-only, via compactHeaderForPrompt below) in every
-  // chunk's prompt, with no other plumbing needed.
-  const header = generatedHeader + "\n\n" + LESSON_COMPONENT_LIBRARY_SOURCE + activeLibrarySource;
+  // DETACHED (2026-08-21, per explicit request): the static hand-written
+  // library (AnimatedGraph/AnimatedArray, LESSON_COMPONENT_LIBRARY_SOURCE)
+  // used to be spliced in here unconditionally — the model should have no
+  // idea it exists, not even indirectly via seeing its signatures in the
+  // header context (compactHeaderForPrompt only strips BODIES, not
+  // declarations, so leaving the splice in would still let the model
+  // discover and call these names even without the old "PREBUILT" prompt
+  // line pointing at them — see LESSON_CHUNK_RULES' own history for that
+  // line's removal). Only the dynamic, admin-approved library
+  // (activeLibrarySource, still gated behind COMPONENT_LIBRARY_ENABLED,
+  // off by default) is appended now. Safe for already-generated lessons —
+  // this splice only ever affected code at GENERATION time; anything
+  // already saved to a lesson's `code` field has the library baked in
+  // permanently regardless of what this does going forward.
+  const header = generatedHeader + "\n\n" + activeLibrarySource;
   const headerAvailableNames = new Set(getHeaderExposedNames(header));
 
   // Chunks run IN PARALLEL, not sequentially — the old design awaited
@@ -3599,9 +4340,9 @@ module.exports = {
   // one place to change it.
   LESSON_CODE_PROVIDER,
   SCENE_PLAN_PROVIDER,
-  // sceneService.js's generateScenePlan runs on DeepSeek now (thinking high),
-  // not GLM — see the "DEEPSEEK" comment block above SCENE_PLAN_PROVIDER.
-  DEEPSEEK_SCENE_PLAN_PROVIDER,
+  // sceneService.js's generateScenePlan runs on Gemini 3.7 Flash now (was
+  // DeepSeek — see the comment block above GEMINI_SCENE_PLAN_PROVIDER).
+  GEMINI_SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
   // GLM concurrency limiter (serialized to 1) — remedial/next-course
   // generation (still GLM, via OpenRouter) uses this. Lesson code generation

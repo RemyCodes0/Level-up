@@ -10,7 +10,22 @@ const AvailabilitySchema = new mongoose.Schema({
 const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
+  // Only required for local (email/password) accounts — a Google account
+  // has no password at all, authProvider distinguishes the two. Enforced
+  // here (not just in the controller) so a stray direct-DB write or a
+  // future code path can't accidentally create a passwordless local
+  // account.
+  password: {
+    type: String,
+    required: function () { return this.authProvider !== 'google'; },
+  },
+  // 'google' accounts are created/authenticated via Google Sign-In
+  // (authController.googleAuth) — no password, googleId is Google's own
+  // stable per-account subject id ("sub" claim), unique per Google account,
+  // used to look the user up on subsequent logins instead of matching a
+  // password.
+  authProvider: { type: String, enum: ['local', 'google'], default: 'local' },
+  googleId: { type: String, unique: true, sparse: true, default: null },
   role: { type: String, enum: ['learner', 'tutor'], required: true },
   major: { type: String },
   year: { type: Number },

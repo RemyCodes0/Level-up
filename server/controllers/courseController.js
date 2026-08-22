@@ -152,11 +152,14 @@ async function generateCourseHandler(req, res) {
     // shape, which still needs its own deduction below exactly as before.
     const tierSnapshot = req.courseTierSnapshot;
 
+    // isFreeTrialCourse is no longer written as true for any new course —
+    // the free-trial bypass is gone (see checkCredits.js's own comment).
+    // The field stays on the schema for historical rows/analytics; the
+    // schema default (false) applies here.
     const course = await Course.create({
       userId: req.user._id,
       topic: topic || req.file?.originalname,
       status: "generating",
-      isFreeTrialCourse: !!req.usingFreeTrial,
       tier: tierSnapshot.tier,
       tierName: tierSnapshot.tierName,
       lessonCount: tierSnapshot.lessonCount,
@@ -167,9 +170,7 @@ async function generateCourseHandler(req, res) {
       questions: [],
     });
 
-    if (req.usingFreeTrial) {
-      await User.findByIdAndUpdate(req.user._id, { freeTrialUsed: true });
-    } else if (!tierSnapshot.tier) {
+    if (!tierSnapshot.tier) {
       // Legacy no-tier caller — checkCredits didn't spend anything for this
       // path, so deduct the flat 1 credit here exactly as this always did.
       await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
@@ -181,7 +182,7 @@ async function generateCourseHandler(req, res) {
       course._id.toString(),
       topic,
       pdfBuffer,
-      !!req.usingFreeTrial,
+      false, // isFreeTrialCourse — always false now, see comment above
       level,
       sourceFileName,
       tierSnapshot.lessonCount,

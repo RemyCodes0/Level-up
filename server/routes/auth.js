@@ -1,12 +1,13 @@
 const express = require('express')
 const router = express.Router();
 const {registerUser, loginUser, getUsers, deleteUser, getUser, updateUser, adminUpdateUser} = require("../controllers/authController")
-const { verifyEmail, resendVerification, forgotPassword, resetPassword } = require("../controllers/authController");
+const { verifyEmail, resendVerification, forgotPassword, resetPassword, googleAuth } = require("../controllers/authController");
 const { protect } = require("../middleware/authMiddleware");
 const { requireAdmin } = require("../middleware/requireAdmin");
 
 router.post('/register', registerUser);
 router.post('/login', loginUser);
+router.post('/google', googleAuth);
 // Admin-only: list/delete ANY user. Previously had no auth at all.
 router.get('/getUsers', protect, requireAdmin, getUsers)
 router.delete('/:id/delete', protect, requireAdmin, deleteUser)

@@ -1,15 +1,14 @@
-// Runs scene-plan generation on DEEPSEEK_SCENE_PLAN_PROVIDER (DeepSeek V4
-// Flash, reasoning HIGH, via OpenRouter — see claudeService.js) — a
-// deliberate, separate model choice from whichever
-// model handles the actual animation CODE, since this is lighter structured
-// JSON generation (scene timing, narration text, visual descriptions), not
-// code. Reasoning is on because this call decides each scene's mechanism
-// (before/after/driver) — the structural contract the code generator builds
-// exactly, worth the extra latency to get right.
+// Runs scene-plan generation on GEMINI_SCENE_PLAN_PROVIDER (Gemini 3.7
+// Flash, reasoning effort "low", via OpenRouter — see claudeService.js) — a
+// deliberate, separate model choice from whichever model handles the actual
+// animation CODE, since this is lighter structured JSON generation (scene
+// timing, narration text, visual descriptions), not code. Was DeepSeek V4
+// Flash; switched after DeepSeek's endpoint was observed hanging on this
+// call in practice.
 // No circular require risk: claudeService.js never requires this file (only
 // courseController.js does), so a top-level require here is safe.
 const {
-  DEEPSEEK_SCENE_PLAN_PROVIDER,
+  GEMINI_SCENE_PLAN_PROVIDER,
   streamCodeCompletion,
   limitDeepSeekCall,
   describeError,
@@ -128,12 +127,12 @@ async function generateScenePlan(lesson, maxAttempts = 3, { userId = null, cours
           : "");
 
       const { text, stopReason, usage } = await streamCodeCompletion({
-        // DeepSeek's own shared concurrency pool — see limitDeepSeekCall's
-        // definition in claudeService.js.
+        // Shared limiter pool — see limitDeepSeekCall's definition in
+        // claudeService.js (name is legacy; this traffic is Gemini now).
         limiter: limitDeepSeekCall,
-        // DeepSeek V4 Flash, reasoning high, via OpenRouter — see
-        // DEEPSEEK_SCENE_PLAN_PROVIDER's definition in claudeService.js.
-        provider: DEEPSEEK_SCENE_PLAN_PROVIDER,
+        // Gemini 3.7 Flash, reasoning effort "low", via OpenRouter — see
+        // GEMINI_SCENE_PLAN_PROVIDER's definition in claudeService.js.
+        provider: GEMINI_SCENE_PLAN_PROVIDER,
         systemPrompt: SCENE_PLAN_SYSTEM_PROMPT,
         userContent,
         // 40000 is generous headroom for a plain JSON scenes array — plenty
@@ -144,8 +143,8 @@ async function generateScenePlan(lesson, maxAttempts = 3, { userId = null, cours
       if (usage) {
         recordAiUsage({
           kind: "scene-plan",
-          provider: DEEPSEEK_SCENE_PLAN_PROVIDER.providerName,
-          model: DEEPSEEK_SCENE_PLAN_PROVIDER.model,
+          provider: GEMINI_SCENE_PLAN_PROVIDER.providerName,
+          model: GEMINI_SCENE_PLAN_PROVIDER.model,
           userId,
           courseId,
           lessonNumber: lesson.lessonNumber,
@@ -215,7 +214,7 @@ async function generateScenePlan(lesson, maxAttempts = 3, { userId = null, cours
     } catch (err) {
       lastError = err;
       if (isNonRetryable(err)) {
-        throw new Error(`Scene plan generation failed with a non-retryable error (check ${DEEPSEEK_SCENE_PLAN_PROVIDER.keyEnv}): ${describeError(err)}`);
+        throw new Error(`Scene plan generation failed with a non-retryable error (check ${GEMINI_SCENE_PLAN_PROVIDER.keyEnv}): ${describeError(err)}`);
       }
       contentFeedback = err.message;
       console.warn(

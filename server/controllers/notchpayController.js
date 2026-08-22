@@ -176,21 +176,24 @@ async function webhookHandler(req, res) {
 async function creditsHandler(req, res) {
   try {
     const user = await User.findById(req.user._id).select(
-      "courseCredits freeTrialUsed signupBonusCredits signupBonusExpiresAt"
+      "courseCredits signupBonusCredits signupBonusExpiresAt"
     );
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const credits = Math.max(user.courseCredits || 0, 0);
-    const freeTrialUsed = !!user.freeTrialUsed;
     const spendableBalance = getSpendableBalance(user);
-    // canGenerate: true if they have ANY spendable balance (course credits OR
-    // an unexpired signup bonus) OR haven't used the free trial yet.
-    const canGenerate = spendableBalance > 0 || !freeTrialUsed;
+    // No more free-trial bypass (see checkCredits.js's own comment) —
+    // canGenerate is just "do they have a real spendable balance", the
+    // signup bonus included via getSpendableBalance. FIX: this used to also
+    // read `|| !freeTrialUsed`, which meant a user who'd already spent
+    // their balance to zero but happened to still have freeTrialUsed:false
+    // (a residual field, never actively set true anymore) would be told
+    // they could still generate for free — stale/wrong under the new model.
+    const canGenerate = spendableBalance > 0;
 
-    console.log(`[credits] Returning: ${JSON.stringify({ courseCredits: credits, freeTrialUsed, canGenerate, spendableBalance })}`);
+    console.log(`[credits] Returning: ${JSON.stringify({ courseCredits: credits, canGenerate, spendableBalance })}`);
     res.json({
       courseCredits: credits,
-      freeTrialUsed,
       canGenerate,
       spendableBalance,
       signupBonusCredits: Math.max(user.signupBonusCredits || 0, 0),

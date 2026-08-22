@@ -6,10 +6,18 @@ const { completeReferral } = require("./referralController");
 const { validatePasswordStrength } = require("../utils/passwordStrength");
 const { grantCredits } = require("../services/creditService");
 const { isAdminUser } = require("../middleware/requireAdmin");
+const { OAuth2Client } = require("google-auth-library");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
 };
+
+// GOOGLE_CLIENT_ID must be set for googleAuth below to work at all — it's
+// both what the frontend's GoogleOAuthProvider is configured with AND the
+// "audience" ID-token verification checks against below, so a mismatched
+// or missing value fails closed (verifyIdToken throws) rather than
+// accepting a token meant for a different app.
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const ADMIN_NOTIFICATION_EMAIL = process.env.ADMIN_EMAIL || "tuyishimechristophe84@gmail.com";
 
@@ -309,6 +317,16 @@ exports.loginUser = async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
+    // A Google-only account has no password at all — user.matchPassword
+    // would call bcrypt.compare against undefined, which is at best a
+    // confusing "invalid credentials" and at worst throws. Give a clear,
+    // actionable message instead of either.
+    if (user.authProvider === "google") {
+      return res.status(400).json({
+        message: "This account uses Google Sign-In. Please continue with Google instead of a password.",
+      });
+    }
+
     const isMatch = await user.matchPassword(password);
     if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
 
@@ -333,6 +351,87 @@ exports.loginUser = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+// ── Google Sign-In — verifies the ID token the frontend got from Google,
+// then finds-or-creates the matching user ──────────────────────────────────
+// Body: { credential } — the raw ID token JWT from @react-oauth/google's
+// GoogleLogin component (its `credentialResponse.credential`), NOT an
+// access token and NOT anything the frontend should try to decode/trust
+// itself — verifyIdToken below is what actually proves it's real and was
+// issued for THIS app (checked against GOOGLE_CLIENT_ID as the audience).
+exports.googleAuth = async (req, res) => {
+  const { credential } = req.body;
+  if (!credential) return res.status(400).json({ message: "Missing Google credential" });
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    // Fails loudly rather than silently accepting unverifiable tokens —
+    // see googleClient's own comment above.
+    return res.status(500).json({ message: "Google Sign-In is not configured on this server." });
+  }
+
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    // email_verified: Google's own confirmation the account's email is
+    // real — lets a Google signup skip this app's own verification-email
+    // step entirely (see `verified: true` in the create() call below),
+    // the same trust an OAuth login is supposed to give you.
+    const { sub: googleId, email, name, email_verified } = payload;
+    if (!email || !email_verified) {
+      return res.status(400).json({ message: "Google account email is not verified." });
+    }
+
+    // Look up by googleId first (returning user), then by email (an
+    // existing LOCAL account signing in with Google for the first time —
+    // link it rather than erroring or creating a duplicate).
+    let user = await User.findOne({ googleId });
+    let isNewUser = false;
+
+    if (!user) {
+      user = await User.findOne({ email });
+      if (user) {
+        // Existing local account, same email — link Google as an
+        // additional way in without touching its password/authProvider,
+        // so the user can still also log in with their original password.
+        user.googleId = googleId;
+        await user.save();
+      } else {
+        isNewUser = true;
+        user = await User.create({
+          name: name || email.split("@")[0],
+          email,
+          googleId,
+          authProvider: "google",
+          role: "learner", // same fixed default the regular signup form already uses
+          verified: true, // Google already verified this email — see email_verified check above
+        });
+
+        // Same 100-credit signup bonus as a regular signup — see
+        // registerUser's own comment. Non-blocking for the same reason.
+        grantCredits(user._id, 100, "signup_bonus", { reason: "new_account" }).catch((err) =>
+          console.error("[signup] Failed to grant signup bonus credits for", user.email, "-", err.message)
+        );
+      }
+    }
+
+    // Fire-and-forget, same pattern as the local-auth paths above.
+    notifyAdminOfAuthEvent(isNewUser ? "Signup" : "Login", user);
+
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token: generateToken(user._id),
+    });
+  } catch (error) {
+    // verifyIdToken throws on an expired/forged/wrong-audience token —
+    // that's a real auth failure (401), not a server bug (500).
+    res.status(401).json({ message: "Google Sign-In failed: " + error.message });
   }
 };
 
