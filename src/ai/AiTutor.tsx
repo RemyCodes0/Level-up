@@ -27,7 +27,7 @@ import {
   getNextSuggestions,
   getPricingConfig,
 } from "../api/CourseApi";
-import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, SceneMetaItem, CourseTier, CreditPack } from "../api/CourseApi";
+import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, SceneMetaItem, CourseTier } from "../api/CourseApi";
 import { getProgress, markLessonWatched, logPosition } from "../api/ProgressApi";
 import { submitQuiz as submitQuizApi, getLatestAttempt } from "../api/QuizApi";
 import type { QuizResult } from "../api/QuizApi";
@@ -256,97 +256,41 @@ function useLessonProgress(statuses: LessonStatus[], sceneProgresses: (SceneProg
   return progresses;
 }
 
+// No payment processor is live right now (no registered business yet — see
+// notchpayController.js/stripeController.js, both unconfigured). Rather than
+// show a checkout flow that would just fail, this points people straight at
+// the WhatsApp community so they can ask for more credits directly. Revisit
+// once a real processor (Stripe, or Whop as a Merchant-of-Record path that
+// doesn't need a registered business) is actually wired up and working.
+const WHATSAPP_COMMUNITY_URL = "https://chat.whatsapp.com/CyuV45KQ9Au3awigE39jBC";
+
 function PaywallModal({ onClose }: { onClose: () => void; courseId?: string | null; courseName?: string }) {
-  const [packs, setPacks] = useState<CreditPack[] | null>(null);
-  const [loadingPackKey, setLoadingPackKey] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    getPricingConfig()
-      .then((cfg) => setPacks(cfg.creditPacks))
-      .catch((err) => { console.error("Failed to load credit packs:", err); setError("Failed to load credit packs."); });
-  }, []);
-
-  const handleBuy = async (packKey: string) => {
-    setLoadingPackKey(packKey);
-    setError(null);
-    try {
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${BASE_URL}/api/payment/stripe/checkout`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ packKey }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.checkoutUrl) throw new Error(data.message || "Failed to start checkout");
-      // Full-page redirect to Stripe's hosted Checkout — on success it
-      // returns to /ai_tutor?payment=success, which the existing effect in
-      // this component already picks up to re-fetch credits.
-      window.location.href = data.checkoutUrl;
-    } catch (err: any) {
-      console.error(err);
-      setError(err?.message || "Something went wrong. Please try again.");
-      setLoadingPackKey(null);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-8 relative">
         <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors">
           <X className="h-5 w-5" />
         </button>
 
-        <div className="w-14 h-14 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
-          <Zap className="h-7 w-7 text-amber-500" />
+        <div className="w-14 h-14 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
+          <MessageSquare className="h-7 w-7 text-emerald-600" />
         </div>
 
-        <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center mb-2">Top up your credits</h2>
+        <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center mb-2">Out of credits?</h2>
         <p className="text-slate-500 text-center text-sm mb-6">
-          Credits never expire, and MCQs are always included free — no hidden fees.
+          We're not set up to sell credit packs directly just yet — reach out and we'll sort you out. Join the Level Up WhatsApp community and send us a message.
         </p>
 
-        {error && <p className="text-xs text-red-500 mb-3 text-center">{error}</p>}
+        <a
+          href={WHATSAPP_COMMUNITY_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold py-3.5 rounded-xl transition-all shadow-md"
+        >
+          <MessageSquare className="h-4 w-4" /> Join the WhatsApp community
+        </a>
 
-        <div className="space-y-3">
-          {packs === null && !error && (
-            <p className="text-sm text-muted-foreground text-center py-6 flex items-center justify-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading credit packs…
-            </p>
-          )}
-          {(packs ?? []).map((p) => (
-            <button
-              key={p.key}
-              onClick={() => handleBuy(p.key)}
-              disabled={loadingPackKey !== null}
-              className="w-full flex items-center justify-between border border-slate-200 rounded-xl px-4 py-3.5 hover:border-blue-400 hover:bg-blue-50/40 transition-all disabled:opacity-60"
-            >
-              <div className="text-left">
-                <p className="font-semibold text-slate-900 text-sm flex items-center gap-2 flex-wrap">
-                  {p.credits} credits
-                  {p.badge && (
-                    <span className="text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700 rounded-full px-2 py-0.5">
-                      {p.badge}
-                    </span>
-                  )}
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  ${(p.priceCents / 100).toFixed(2)} · ${(p.priceCents / 100 / p.credits).toFixed(3)}/credit
-                </p>
-              </div>
-              {loadingPackKey === p.key ? (
-                <Loader2 className="h-4 w-4 animate-spin text-blue-600 shrink-0" />
-              ) : (
-                <span className="text-sm font-semibold text-blue-600 shrink-0">Buy →</span>
-              )}
-            </button>
-          ))}
-        </div>
-
-        <p className="text-xs text-slate-400 text-center mt-5">Secure checkout via Stripe.</p>
+        <p className="text-xs text-slate-400 text-center mt-5">You'll still have your 100 free signup credits and anything earned from referrals in the meantime.</p>
       </div>
     </div>
   );
@@ -445,6 +389,21 @@ function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [inputValue]);
 
+  // Picks up a topic typed into the landing page's hero input (see
+  // Landing.tsx's handleHeroSubmit) — it stashes the text in localStorage
+  // and sends the visitor here (straight here if already logged in, via
+  // /signup otherwise, which itself lands back on /ai_tutor after auth).
+  // Pre-filling and focusing means the ONLY thing left to do is press
+  // Enter — no retyping the topic they already committed to on the landing
+  // page. Removed immediately so it doesn't reappear on a later visit.
+  useEffect(() => {
+    const pending = localStorage.getItem("levelup_pending_prompt");
+    if (!pending) return;
+    localStorage.removeItem("levelup_pending_prompt");
+    setInputValue(pending);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
+
   const canSubmit = !locked && !exceedsPageLimit && !checkingPages && (!!uploadedFile || inputValue.trim().length > 0);
   const suggestions = ["Cell Biology lecture slides", "Calculus II integration techniques", "Data structures & algorithms", "Electromagnetic waves"];
 
@@ -529,7 +488,7 @@ function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
                           onClick={(e) => { e.stopPropagation(); onRequestTopUp(); }}
                           className="mt-2.5 text-xs font-semibold text-blue-600 hover:text-blue-800 underline underline-offset-2"
                         >
-                          Top up to unlock
+                          Need credits? Contact us
                         </button>
                       )}
                     </button>
@@ -600,7 +559,7 @@ function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
               )}
               <div className="px-4 pt-3 pb-2">
                 <textarea ref={textareaRef} value={inputValue} onChange={(e) => { if (!locked) setInputValue(e.target.value); }} onKeyDown={handleKeyDown}
-                  placeholder={locked ? "Free trial used — purchase courses to continue" : "Explain DNA replication and cell division…"} rows={1}
+                  placeholder={locked ? "Out of credits — contact us for more" : "Explain DNA replication and cell division…"} rows={1}
                   disabled={locked}
                   className={`w-full resize-none bg-transparent placeholder:text-slate-400 text-base focus:outline-none leading-relaxed ${locked ? "text-slate-400 cursor-not-allowed" : "text-slate-800"}`}
                   style={{ minHeight: "40px", maxHeight: "160px" }} />
@@ -1427,12 +1386,12 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
           {!credits.canGenerate ? (
             <button onClick={onBuy}
               className="w-full mt-1 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-sm font-bold transition-all shadow-md flex items-center justify-center gap-1.5">
-              <CreditCard className="h-4 w-4" /> Buy more courses
+              <MessageSquare className="h-4 w-4" /> Need more credits?
             </button>
           ) : (
             <button onClick={onBuy}
               className="w-full mt-1 py-2.5 rounded-xl border-2 border-blue-300 bg-white text-blue-700 hover:bg-blue-50 text-sm font-bold transition-all flex items-center justify-center gap-1.5">
-              <CreditCard className="h-4 w-4" /> Top up credits
+              <MessageSquare className="h-4 w-4" /> Need more credits?
             </button>
           )}
         </div>
@@ -2313,7 +2272,7 @@ export default function AILearningPage() {
                       {i + 1}. {lesson.title}
                     </p>
                     {isLockedStatus ? (
-                      <p className="text-xs text-amber-500 mt-0.5 flex items-center gap-1"><Lock className="h-3 w-3" /> Buy credits to unlock</p>
+                      <p className="text-xs text-amber-500 mt-0.5 flex items-center gap-1"><Lock className="h-3 w-3" /> Contact us to unlock</p>
                     ) : isGenerating ? (
                       <div className="mt-1.5">
                         <div className="flex items-center justify-between mb-1">
@@ -2441,7 +2400,7 @@ export default function AILearningPage() {
                         {unlockingCourse ? (
                           <><Loader2 className="h-4 w-4 sm:mr-2 animate-spin" /><span className="hidden sm:inline">Unlocking…</span></>
                         ) : (
-                          <><Lock className="h-4 w-4 sm:mr-2" /><span className="hidden sm:inline">Buy credits to continue</span><span className="sm:hidden">Unlock</span></>
+                          <><Lock className="h-4 w-4 sm:mr-2" /><span className="hidden sm:inline">Unlock (1 credit)</span><span className="sm:hidden">Unlock</span></>
                         )}
                       </Button>
                     ) : (

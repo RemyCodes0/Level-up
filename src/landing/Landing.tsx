@@ -4,13 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import {
-  Sparkles, ArrowRight, Check, Play, Upload, Wand2, Trophy,
-  X, Quote, Plus, Minus, Zap,
+  ArrowRight, Upload, Wand2, Trophy,
+  Quote, Plus, Minus, Zap,
 } from "lucide-react";
 import ShowcaseVideoGrid from "../components/ShowcaseVideoGrid";
 import VideoShowcaseSection from "./VideoShowcaseSection";
-import { getPricingConfig } from "../api/CourseApi";
-import type { CourseTier, CreditPack } from "../api/CourseApi";
 
 const STAGE = "#15131F";
 const STAGE_2 = "#1F1B2E";
@@ -20,19 +18,11 @@ const PHOSPHOR = "#3DE0A0";
 const AMBER = "#FFC24B";
 const MUTE = "#9A95AC";
 const HAIR = "rgba(246,241,231,0.10)";
+const HAIR_STRONG = "rgba(246,241,231,0.22)";
 
-function useInView<T extends HTMLElement>(threshold = 0.15) {
-  const ref = useRef<T>(null);
-  const [seen, setSeen] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) setSeen(true); }, { threshold });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [threshold]);
-  return { ref, seen };
-}
+const DISPLAY = "'Space Grotesk', sans-serif";
+const MONO = "'JetBrains Mono', monospace";
+
 function FaqItem({ q, a }: { q: string; a: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -46,29 +36,174 @@ function FaqItem({ q, a }: { q: string; a: string }) {
   );
 }
 
+// A live mm:ss readout, ticking once a second — the hero's chrome bar reads
+// like a monitor that's actually rolling, not a static screenshot of one.
+function useElapsedClock() {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setSeconds((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+  const s = (seconds % 60).toString().padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+// ── The hero's living background: a phosphor dot grid — literally what
+// PHOSPHOR names — that flickers ambiently, brightens near the pointer, and
+// gets swept by a slow scanline, like a broadcast monitor warming up.
+// Native canvas, no dependency; pauses its own rAF loop when off-screen or
+// tab-hidden, draws one static frame under reduced motion.
+function StudioCanvas() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [reduce, setReduce] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReduce(mq.matches);
+    const handler = () => setReduce(mq.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const container = canvas?.parentElement;
+    if (!canvas || !container) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let rect = container.getBoundingClientRect();
+    let raf = 0;
+    let running = false;
+    const mouse = { x: -9999, y: -9999 };
+
+    function resize() {
+      rect = container!.getBoundingClientRect();
+      canvas!.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas!.height = Math.max(1, Math.round(rect.height * dpr));
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resize();
+
+    function onMove(e: MouseEvent) { mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top; }
+    function onLeave() { mouse.x = -9999; mouse.y = -9999; }
+
+    const SPACING = 32;
+    function drawStatic() {
+      const w = rect.width, h = rect.height;
+      ctx!.clearRect(0, 0, w, h);
+      for (let x = SPACING / 2; x < w; x += SPACING) {
+        for (let y = SPACING / 2; y < h; y += SPACING) {
+          ctx!.beginPath();
+          ctx!.arc(x, y, 1, 0, Math.PI * 2);
+          ctx!.fillStyle = "rgba(246,241,231,0.16)";
+          ctx!.fill();
+        }
+      }
+    }
+
+    function draw(time: number) {
+      const w = rect.width, h = rect.height;
+      ctx!.clearRect(0, 0, w, h);
+      for (let x = SPACING / 2; x < w; x += SPACING) {
+        for (let y = SPACING / 2; y < h; y += SPACING) {
+          const dx = x - mouse.x, dy = y - mouse.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const glow = Math.max(0, 1 - dist / 230);
+          const flicker = 0.28 + 0.14 * Math.sin(time / 1500 + x * 0.018 + y * 0.021);
+          const alpha = Math.min(0.95, flicker + glow * 0.7);
+          const r = 1 + glow * 1.8;
+          ctx!.beginPath();
+          ctx!.arc(x, y, r, 0, Math.PI * 2);
+          ctx!.fillStyle = glow > 0.04 ? `rgba(61,224,160,${alpha})` : `rgba(246,241,231,${alpha * 0.55})`;
+          ctx!.fill();
+        }
+      }
+      const period = h + 260;
+      const sweepY = ((time / 14) % period) - 130;
+      const grad = ctx!.createLinearGradient(0, sweepY - 70, 0, sweepY + 70);
+      grad.addColorStop(0, "rgba(61,224,160,0)");
+      grad.addColorStop(0.5, "rgba(61,224,160,0.055)");
+      grad.addColorStop(1, "rgba(61,224,160,0)");
+      ctx!.fillStyle = grad;
+      ctx!.fillRect(0, sweepY - 70, w, 140);
+      raf = requestAnimationFrame(draw);
+    }
+
+    function start() {
+      if (running || reduce) return;
+      running = true;
+      window.addEventListener("mousemove", onMove, { passive: true });
+      container!.addEventListener("mouseleave", onLeave);
+      raf = requestAnimationFrame(draw);
+    }
+    function stop() {
+      running = false;
+      cancelAnimationFrame(raf);
+      window.removeEventListener("mousemove", onMove);
+      container!.removeEventListener("mouseleave", onLeave);
+    }
+
+    if (reduce) {
+      drawStatic();
+      const onResizeStatic = () => { resize(); drawStatic(); };
+      window.addEventListener("resize", onResizeStatic);
+      return () => window.removeEventListener("resize", onResizeStatic);
+    }
+
+    const io = new IntersectionObserver(([entry]) => { if (entry.isIntersecting) start(); else stop(); }, { threshold: 0.05 });
+    io.observe(container);
+    const onVis = () => { if (document.hidden) stop(); else start(); };
+    document.addEventListener("visibilitychange", onVis);
+    const onResize = () => resize();
+    window.addEventListener("resize", onResize);
+    return () => {
+      io.disconnect();
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("resize", onResize);
+      stop();
+    };
+  }, [reduce]);
+
+  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" aria-hidden="true" />;
+}
+
 export default function LandingPage() {
   const navigate = useNavigate();
-  const hero = useInView<HTMLDivElement>();
+  const clock = useElapsedClock();
+  const [heroLoaded, setHeroLoaded] = useState(false);
+  const [heroPrompt, setHeroPrompt] = useState("");
 
-  const [courseTiers, setCourseTiers] = useState<CourseTier[]>([]);
-  const [creditPacks, setCreditPacks] = useState<CreditPack[]>([]);
-  useEffect(() => {
-    getPricingConfig()
-      .then((cfg) => { setCourseTiers(cfg.courseTiers); setCreditPacks(cfg.creditPacks); })
-      .catch((err) => console.error("Failed to load pricing config:", err));
-  }, []);
+  useEffect(() => { const id = requestAnimationFrame(() => setHeroLoaded(true)); return () => cancelAnimationFrame(id); }, []);
+
+  // Sends the visitor straight to generating THIS topic instead of a bare
+  // "sign up, then figure out what to type" flow. Logged-in visitors land
+  // on /ai_tutor directly; everyone else goes through /signup, which
+  // already redirects to /ai_tutor on success — either way the topic is
+  // waiting in the input, pre-filled and focused (see AiTutor.tsx's pickup
+  // effect), so the only thing left to do is press Enter.
+  const handleHeroSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = heroPrompt.trim();
+    if (!value) return;
+    localStorage.setItem("levelup_pending_prompt", value);
+    const loggedIn = !!localStorage.getItem("token");
+    navigate(loggedIn ? "/ai_tutor" : "/signup");
+  };
 
   const testimonials = [
     { quote: "I uploaded my organic chem slides the night before an exam and had six lessons that actually made the reactions move. The quiz caught two topics I'd have walked in blind on.", name: "Amara O.", role: "Pre-med undergrad" },
     { quote: "I teach myself things constantly and reading docs is slow. Typing a topic and getting a narrated, animated explainer in minutes is genuinely how I want to learn now.", name: "Daniel K.", role: "Self-taught developer" },
-    { quote: "The free first lesson sold me — I could see exactly what I was paying for before spending anything. Bought three courses the same week.", name: "Priya R.", role: "Grad student" },
+    { quote: "The free first lesson sold me — I could see exactly what I'd get before using any credits. Went through three courses the same week.", name: "Priya R.", role: "Grad student" },
   ];
 
   const faqs = [
     { q: "How long does a course take to generate?", a: "Your first lesson is usually ready in about five minutes. The remaining lessons keep building in the background while you watch, so you're never stuck waiting for the whole thing." },
     { q: "What can I make a course about?", a: "Anything you can describe in a sentence, or anything in a PDF you upload — lecture slides, a textbook chapter, your own notes. The course is built specifically around that material." },
-    { q: "Is the first lesson really free?", a: "Yes. Every course's first lesson generates free, with no card required, so you can see exactly what you'd get before paying for the rest." },
-    { q: "Do I need a subscription?", a: "No. You buy a course only when you want one. There's no recurring charge — one price, one course, whenever you need it." },
+    { q: "Is the first lesson really free?", a: "Yes. Every course's first lesson generates free, with no card required, so you can see exactly what a course looks like before spending any credits." },
+    { q: "Do I need a subscription?", a: "No, and there's no purchase flow at all right now. Every new account starts with 100 free credits — need more after that, just message us." },
     { q: "What's actually in a course?", a: "Six animated video lessons with synced narration, plus a 20-question quiz that scores your readiness and breaks down what to review." },
   ];
 
@@ -112,13 +247,6 @@ export default function LandingPage() {
         "description": "AI-powered platform that generates personalized animated video courses from any topic or PDF. Includes 6 animated lessons with narration and a 20-question readiness quiz.",
         "applicationCategory": "EducationApplication",
         "operatingSystem": "Web",
-        "offers": {
-          "@type": "Offer",
-          "price": "4.99",
-          "priceCurrency": "USD",
-          "description": "1 full course — 6 animated lessons, narration, and a 20-question quiz",
-          "availability": "https://schema.org/InStock"
-        },
         "aggregateRating": {
           "@type": "AggregateRating",
           "ratingValue": "4.9",
@@ -173,7 +301,7 @@ export default function LandingPage() {
             "name": "Is the first lesson really free?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Yes. Every course's first lesson generates free, with no card required, so you can see exactly what you'd get before paying for the rest."
+              "text": "Yes. Every course's first lesson generates free, with no card required, so you can see exactly what a course looks like before spending any credits."
             }
           },
           {
@@ -181,7 +309,7 @@ export default function LandingPage() {
             "name": "Do I need a subscription?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "No. You buy a course only when you want one. There's no recurring charge — one price, one course, whenever you need it."
+              "text": "No, and there's no purchase flow at all right now. Every new account starts with 100 free credits — need more after that, just message us."
             }
           },
           {
@@ -198,16 +326,29 @@ export default function LandingPage() {
     <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif", minHeight: "100vh", width: "100%", maxWidth: "100vw" }} className="overflow-x-hidden">
       <style>{`
         ::selection { background: ${CORAL}; color: #fff; }
-        html, body, #root { 
-          margin: 0; 
-          padding: 0; 
-          width: 100%; 
+        html, body, #root {
+          margin: 0;
+          padding: 0;
+          width: 100%;
           min-height: 100vh;
-          scroll-behavior: smooth; 
+          scroll-behavior: smooth;
           overflow-x: hidden;
           background-color: ${STAGE};
         }
         * { box-sizing: border-box; }
+
+        @keyframes lu-rec-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+        .lu-hero-input { transition: border-color 0.2s ease, background-color 0.2s ease; }
+        .lu-hero-input:focus-within { border-color: rgba(61,224,160,0.5); background-color: rgba(31,27,46,0.85); }
+
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+            scroll-behavior: auto !important;
+          }
+        }
       `}</style>
 
       {/* Nav */}
@@ -220,7 +361,6 @@ export default function LandingPage() {
           <div className="hidden md:flex items-center gap-5 text-sm min-w-0 overflow-hidden" style={{ color: MUTE }}>
             <a href="#how" className="hover:opacity-80 whitespace-nowrap">How it works</a>
             <a href="#compare" className="hover:opacity-80 whitespace-nowrap">Why it's different</a>
-            <a href="#pricing" className="hover:opacity-80 whitespace-nowrap">Pricing</a>
             <a href="#faq" className="hover:opacity-80 whitespace-nowrap">FAQ</a>
           </div>
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
@@ -232,33 +372,62 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* Hero */}
-      <section ref={hero.ref} className="w-full px-4 sm:px-6 pt-14 sm:pt-20 pb-10">
-        <div className="max-w-3xl mx-auto text-center">
-          <div className={`transition-all duration-700 ${hero.seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
-            <div className="inline-flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full mb-6" style={{ backgroundColor: "rgba(255,92,73,0.13)", color: CORAL }}>
-              <Sparkles className="h-3 w-3 shrink-0" /> The first lesson is always free
+      {/* Hero — canvas-alive backdrop, prompt input as the sole CTA */}
+      <section className="relative w-full min-h-[90vh] flex flex-col px-4 sm:px-6 overflow-hidden">
+        <div className="absolute inset-0" style={{ background: `radial-gradient(70% 60% at 50% 30%, rgba(61,224,160,0.05), transparent 60%)` }} />
+        <StudioCanvas />
+        <div className="relative flex-1 flex items-center justify-center pt-16 pb-10">
+          <div
+            className="max-w-2xl mx-auto text-center transition-all duration-[900ms]"
+            style={{ opacity: heroLoaded ? 1 : 0, transform: heroLoaded ? "translateY(0)" : "translateY(16px)" }}
+          >
+            <div
+              className="inline-flex items-center gap-2.5 sm:gap-3 text-[11px] font-medium px-3 py-1.5 rounded-full mb-7 border"
+              style={{ backgroundColor: "rgba(21,19,31,0.6)", borderColor: HAIR_STRONG, color: MUTE, fontFamily: MONO }}
+            >
+              <span className="flex items-center gap-1.5">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full rounded-full" style={{ backgroundColor: CORAL, animation: "lu-rec-pulse 1.6s ease-in-out infinite" }} />
+                </span>
+                <span style={{ color: CORAL }}>REC</span>
+              </span>
+              <span className="w-px h-3" style={{ backgroundColor: HAIR_STRONG }} />
+              <span className="tabular-nums">{clock}:14</span>
+              <span className="w-px h-3 hidden sm:block" style={{ backgroundColor: HAIR_STRONG }} />
+              <span className="hidden sm:inline" style={{ color: PHOSPHOR }}>LESSON ONE — FREE</span>
             </div>
-            {/* clamp() makes the heading fluid at any zoom level */}
-            <h1 className="font-bold leading-[1.05] mb-6" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif", fontSize: "clamp(2rem, 6vw, 3.75rem)" }}>
-              Stop cramming. <br />
+
+            <h1 className="font-bold leading-[0.98] mb-6 tracking-tight" style={{ color: BEAM, fontFamily: DISPLAY, fontSize: "clamp(2.5rem, 8vw, 5rem)" }}>
+              Stop cramming.<br />
               <span style={{ color: CORAL }}>Learn visually.</span>
             </h1>
-            <p className="leading-relaxed mb-8 max-w-xl mx-auto" style={{ color: MUTE, fontSize: "clamp(0.95rem, 2vw, 1.125rem)" }}>
-              Type a topic or upload your notes. Level Up renders six narrated, animated video lessons and a readiness quiz — the kind of course you'd wish someone had made for you, built in minutes.
+            <p className="leading-relaxed mb-8 max-w-xl mx-auto" style={{ color: MUTE, fontSize: "clamp(0.95rem, 2vw, 1.15rem)" }}>
+              Tell us what you're studying — Level Up turns it into six narrated, animated video lessons and a readiness quiz, built in minutes.
             </p>
-            <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
-              <button onClick={() => navigate("/ai_tutor")} className="flex items-center gap-2 text-sm font-semibold px-5 sm:px-6 py-3 sm:py-3.5 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
-                Generate your first lesson <ArrowRight className="h-4 w-4" />
-              </button>
-              <button onClick={() => navigate("/ai_showcase")} className="flex items-center gap-2 text-sm font-medium px-4 sm:px-5 py-3 sm:py-3.5 rounded-xl border transition-colors" style={{ borderColor: HAIR, color: BEAM }}>
-                <Play className="h-4 w-4" /> See a live demo
-              </button>
-            </div>
-            <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 mt-8 text-xs" style={{ color: MUTE }}>
-              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 shrink-0" style={{ color: PHOSPHOR }} /> No card for lesson one</span>
-              <span className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 shrink-0" style={{ color: PHOSPHOR }} /> No subscription</span>
-            </div>
+
+            {/* The whole CTA: type it, hit enter. */}
+            <form onSubmit={handleHeroSubmit} className="max-w-lg mx-auto">
+              <div className="lu-hero-input flex items-center gap-2 rounded-2xl border p-1.5 sm:p-2" style={{ borderColor: HAIR_STRONG, backgroundColor: "rgba(31,27,46,0.6)" }}>
+                <input
+                  value={heroPrompt}
+                  onChange={(e) => setHeroPrompt(e.target.value)}
+                  placeholder="Explain photosynthesis, or upload your notes…"
+                  aria-label="What do you want to learn?"
+                  className="flex-1 bg-transparent border-0 outline-none px-3 sm:px-4 py-2.5 text-sm sm:text-base min-w-0"
+                  style={{ color: BEAM }}
+                />
+                <button
+                  type="submit"
+                  disabled={!heroPrompt.trim()}
+                  aria-label="Generate this lesson"
+                  className="shrink-0 flex items-center justify-center h-10 w-10 sm:h-11 sm:w-11 rounded-xl transition-all disabled:opacity-40 hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                  style={{ backgroundColor: CORAL, color: "#fff", outlineColor: BEAM }}
+                >
+                  <ArrowRight className="h-4 w-4 sm:h-5 sm:w-5" />
+                </button>
+              </div>
+            </form>
+            <p className="text-xs mt-4" style={{ color: MUTE }}>Free to start — we'll take you straight there.</p>
           </div>
         </div>
       </section>
@@ -466,65 +635,6 @@ export default function LandingPage() {
           ))}
         </div>
         <p className="text-xs mt-6 text-center" style={{ color: MUTE }}>Illustrative of early learner feedback.</p>
-      </section>
-
-      {/* Pricing */}
-      <section id="pricing" className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
-        <p className="text-xs font-semibold uppercase tracking-widest mb-4 text-center" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>Simple pricing</p>
-        <h2 className="text-2xl sm:text-3xl font-bold mb-10 text-center" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
-          Credits that never expire.
-        </h2>
-
-        {/* Free Trial + 3 credit packs */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 items-stretch mb-6">
-          <div className="rounded-2xl p-6 text-center border flex flex-col" style={{ backgroundColor: STAGE_2, borderColor: HAIR }}>
-            <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: PHOSPHOR, fontFamily: "'JetBrains Mono', monospace" }}>Free Trial</p>
-            <span className="text-4xl font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>$0</span>
-            <p className="text-xs mb-6" style={{ color: MUTE }}>Your first course, on us</p>
-            <p className="text-sm mb-6 flex-1" style={{ color: BEAM }}>1 full 6-lesson course + quiz — no card required.</p>
-            <button onClick={() => navigate("/signup")} className="w-full text-sm font-semibold py-3 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: PHOSPHOR, color: "#0a1f16" }}>
-              Start free
-            </button>
-          </div>
-
-          {creditPacks.map((p) => (
-            <div key={p.key} className="rounded-2xl p-6 text-center border flex flex-col relative" style={{ backgroundColor: STAGE_2, borderColor: p.badge ? CORAL : "rgba(255,92,73,0.3)" }}>
-              {p.badge && (
-                <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide px-3 py-1 rounded-full" style={{ backgroundColor: CORAL, color: "#fff" }}>
-                  {p.badge}
-                </span>
-              )}
-              <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>{p.credits} Credits</p>
-              <span className="text-4xl font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>${(p.priceCents / 100).toFixed(2)}</span>
-              <p className="text-xs mb-6" style={{ color: MUTE }}>${(p.priceCents / 100 / p.credits).toFixed(3)} per credit</p>
-              <div className="flex-1" />
-              <button onClick={() => navigate("/signup")} className="w-full text-sm font-semibold py-3 rounded-xl transition-transform hover:scale-[1.02]" style={{ backgroundColor: CORAL, color: "#fff" }}>
-                Get started
-              </button>
-            </div>
-          ))}
-        </div>
-        <p className="text-center text-xs mb-14" style={{ color: MUTE }}>
-          Credits never expire, except the 100 free signup credits, which expire 30 days after signup. MCQs are always included free — no hidden fees.
-        </p>
-
-        {/* Course tiers */}
-        <h3 className="text-lg sm:text-xl font-bold mb-6 text-center" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
-          What your credits buy
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 max-w-4xl mx-auto">
-          {courseTiers.map((t) => (
-            <div key={t.key} className="rounded-2xl p-5 border" style={{ backgroundColor: STAGE_2, borderColor: HAIR }}>
-              <h4 className="text-base font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>{t.name}</h4>
-              <p className="text-xs mb-3" style={{ color: MUTE }}>{t.description}</p>
-              <div className="space-y-1.5 text-xs mb-4" style={{ color: BEAM }}>
-                <div className="flex items-start gap-2"><Check className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t.lessonCount} lesson{t.lessonCount !== 1 ? "s" : ""}</div>
-                <div className="flex items-start gap-2"><Check className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t.mcqCount} MCQ ({t.timeAllocationMinutes} min), free</div>
-              </div>
-              <p className="text-xl font-bold" style={{ color: AMBER, fontFamily: "'Space Grotesk', sans-serif" }}>{t.creditCost} credits</p>
-            </div>
-          ))}
-        </div>
       </section>
 
       {/* FAQ */}

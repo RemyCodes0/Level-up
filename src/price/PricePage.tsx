@@ -2,14 +2,18 @@
 
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Check, ArrowRight, Sparkles, Plus, Minus, Loader2 } from "lucide-react";
+import { Check, ArrowRight, Sparkles, Plus, Minus, MessageSquare } from "lucide-react";
 import { Helmet } from "react-helmet-async";
 import { analytics } from "../lib/analytics";
 import { PageMeta } from "../components/PageMeta";
 import { getPricingConfig } from "../api/CourseApi";
-import type { CourseTier, CreditPack } from "../api/CourseApi";
+import type { CourseTier } from "../api/CourseApi";
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
+// No payment processor is live right now (no registered business yet — see
+// notchpayController.js/stripeController.js, both unconfigured). Rather than
+// show a checkout flow that would just fail, this page points people at the
+// WhatsApp community instead. Revisit once a real processor is wired up.
+const WHATSAPP_COMMUNITY_URL = "https://chat.whatsapp.com/CyuV45KQ9Au3awigE39jBC";
 
 // Same "Cutting Room" tokens used across the rest of the site, for
 // consistency when a visitor lands here directly (e.g. from an ad or a
@@ -39,48 +43,27 @@ function FaqItem({ q, a }: { q: string; a: string }) {
 export default function PricingPage() {
   const navigate = useNavigate();
   const [courseTiers, setCourseTiers] = useState<CourseTier[]>([]);
-  const [creditPacks, setCreditPacks] = useState<CreditPack[]>([]);
-  const [buyingPackKey, setBuyingPackKey] = useState<string | null>(null);
 
   useEffect(() => {
     analytics.pricingViewed();
     getPricingConfig()
-      .then((cfg) => { setCourseTiers(cfg.courseTiers); setCreditPacks(cfg.creditPacks); })
+      .then((cfg) => setCourseTiers(cfg.courseTiers))
       .catch((err) => console.error("Failed to load pricing config:", err));
   }, []);
 
-  const handleBuy = async (packKey: string) => {
-    const token = localStorage.getItem("token");
-    if (!token) { navigate("/signup"); return; }
-    setBuyingPackKey(packKey);
-    try {
-      const res = await fetch(`${BASE_URL}/api/payment/stripe/checkout`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ packKey }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.checkoutUrl) throw new Error(data.message || "Failed to start checkout");
-      window.location.href = data.checkoutUrl;
-    } catch (err) {
-      console.error("Failed to start checkout:", err);
-      setBuyingPackKey(null);
-    }
-  };
-
   const faqs = [
     { q: "Is the first lesson really free?", a: "Yes. Every new account gets one full 6-lesson course free, with no card required, so you can see exactly what you'd get before spending any credits." },
-    { q: "Do I need a subscription?", a: "No. There's no recurring charge. You buy a credit pack only when you want one, and (with one exception below) credits never expire." },
-    { q: "Do credits expire?", a: "Credits you buy or earn from referrals never expire. The only exception is the 100 free credits every new account gets on signup — those expire 30 days after signup if unused." },
+    { q: "Do I need a subscription?", a: "No. There's no recurring charge, ever." },
+    { q: "Do credits expire?", a: "Credits you earn from referrals never expire. The only exception is the 100 free credits every new account gets on signup — those expire 30 days after signup if unused." },
     { q: "Are quizzes extra?", a: "No — every course tier includes its MCQ quiz for free, bundled into the credit cost. There's never a separate charge for the quiz." },
-    { q: "Can I get a refund?", a: "Yes, within our refund policy window if a course didn't generate properly or doesn't match what was promised. See our refund policy for details." },
+    { q: "How do I get more credits?", a: "We're not set up to sell credit packs directly just yet. Join the Level Up WhatsApp community and message us — we'll sort you out. You can also earn credits for free by referring friends." },
   ];
 
   return (
     <div style={{ backgroundColor: STAGE, fontFamily: "'Inter', sans-serif" }} className="min-h-screen flex flex-col">
       <PageMeta
         title="Pricing — Credits for AI-Generated Courses | Level Up AI"
-        description="Buy credit packs for AI-generated courses: Quick Explainer, Deeper Dive, or Full Mastery. First course always free, no subscription, credits never expire."
+        description="Generate AI courses with Level Up: Quick Explainer, Deeper Dive, or Full Mastery. First course always free, no subscription — join our WhatsApp community for more credits."
         canonical="/price"
       />
       <Helmet>
@@ -123,17 +106,17 @@ export default function PricingPage() {
             <Sparkles className="h-3 w-3" /> No subscription, ever
           </div>
           <h1 className="text-4xl sm:text-5xl font-bold leading-[1.08] mb-4" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
-            Credits that never expire.
+            Your first course is on us.
           </h1>
           <p className="text-base sm:text-lg leading-relaxed" style={{ color: MUTE }}>
-            Buy credits once, spend them on any course tier, whenever you like. No recurring charge, no surprises.
+            No subscription, no card required. Need more after that? Just reach out.
           </p>
         </div>
 
-        {/* Free Trial + 3 credit packs, 4 columns */}
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-16">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 items-stretch">
-            {/* Free Trial — leftmost, entry point for new users */}
+        {/* Free Trial + WhatsApp contact, 2 columns */}
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 pb-16">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 items-stretch">
+            {/* Free Trial — entry point for new users */}
             <div className="rounded-2xl p-6 text-center border flex flex-col" style={{ backgroundColor: STAGE_2, borderColor: HAIR }}>
               <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: PHOSPHOR, fontFamily: "'JetBrains Mono', monospace" }}>Free Trial</p>
               <span className="text-4xl font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>$0</span>
@@ -144,30 +127,28 @@ export default function PricingPage() {
               </button>
             </div>
 
-            {creditPacks.map((p) => (
-              <div key={p.key} className="rounded-2xl p-6 text-center border flex flex-col relative" style={{ backgroundColor: STAGE_2, borderColor: p.badge ? CORAL : "rgba(255,92,73,0.3)" }}>
-                {p.badge && (
-                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide px-3 py-1 rounded-full" style={{ backgroundColor: CORAL, color: "#fff" }}>
-                    {p.badge}
-                  </span>
-                )}
-                <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: AMBER, fontFamily: "'JetBrains Mono', monospace" }}>{p.credits} Credits</p>
-                <span className="text-4xl font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>${(p.priceCents / 100).toFixed(2)}</span>
-                <p className="text-xs mb-6" style={{ color: MUTE }}>${(p.priceCents / 100 / p.credits).toFixed(3)} per credit</p>
-                <div className="flex-1" />
-                <button
-                  onClick={() => handleBuy(p.key)}
-                  disabled={buyingPackKey !== null}
-                  className="w-full text-sm font-semibold py-3 rounded-xl transition-transform hover:scale-[1.02] flex items-center justify-center gap-2 disabled:opacity-60"
-                  style={{ backgroundColor: CORAL, color: "#fff" }}
-                >
-                  {buyingPackKey === p.key ? <><Loader2 className="h-4 w-4 animate-spin" /> Redirecting…</> : <>Buy <ArrowRight className="h-4 w-4" /></>}
-                </button>
-              </div>
-            ))}
+            {/* We're not set up to sell credit packs directly yet (no
+                registered business / payment processor live) — point people
+                at the WhatsApp community to ask for more credits instead of
+                showing a checkout that would just fail. */}
+            <div className="rounded-2xl p-6 text-center border flex flex-col" style={{ backgroundColor: STAGE_2, borderColor: "rgba(61,224,160,0.35)" }}>
+              <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: PHOSPHOR, fontFamily: "'JetBrains Mono', monospace" }}>Need more?</p>
+              <span className="text-4xl font-bold mb-1" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>💬</span>
+              <p className="text-xs mb-6" style={{ color: MUTE }}>Just ask — we'll sort you out</p>
+              <p className="text-sm mb-6 flex-1" style={{ color: BEAM }}>Join our WhatsApp community and message us for more credits. You can also earn credits free by referring friends.</p>
+              <a
+                href={WHATSAPP_COMMUNITY_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full text-sm font-semibold py-3 rounded-xl transition-transform hover:scale-[1.02] flex items-center justify-center gap-2"
+                style={{ backgroundColor: PHOSPHOR, color: "#0a1f16" }}
+              >
+                <MessageSquare className="h-4 w-4" /> Join WhatsApp
+              </a>
+            </div>
           </div>
           <p className="text-center text-xs mt-6" style={{ color: MUTE }}>
-            Credits never expire, except the 100 free signup credits, which expire 30 days after signup. MCQs are always included free — no hidden fees.
+            The 100 free signup credits expire 30 days after signup if unused. MCQs are always included free — no hidden fees.
           </p>
         </div>
 
