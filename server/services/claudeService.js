@@ -1267,6 +1267,61 @@ Rules:
   return parsed.suggestions;
 }
 
+// ── TikTok automation: picks the topic + caption for one auto-posted lesson
+// (see automationService.js) — same lightweight-JSON GLM path as the two
+// functions above, not worth reasoning tokens. `recentTopics` is the last
+// N topics already posted (automationService.js pulls this from
+// AutomationPost history) so the model doesn't pick something just posted.
+async function generateAutomationTopic(recentTopics = [], { userId = null } = {}) {
+  const avoidContext = recentTopics.length
+    ? `Do NOT repeat or closely rehash any of these recently posted topics: ${recentTopics.map((t) => `"${t}"`).join(", ")}.`
+    : "";
+
+  const basePrompt = `
+You are picking the topic for a single short (1-lesson) AI-generated educational video that will be posted to TikTok for students.
+
+Pick ONE specific STEM topic (math, physics, chemistry, biology, computer science, or engineering) that students commonly find genuinely difficult or confusing — something with real "aha" potential when explained visually, not a broad subject name. "Why negative times negative is positive" is good; "Algebra" is not.
+${avoidContext}
+
+Then write a short, punchy TikTok caption for the finished video — hook the viewer in the first few words, plain conversational language (not textbook-formal), end with 3-5 relevant hashtags (mix of broad like #StudyTok and specific to the topic). Keep it under 150 characters before the hashtags.
+
+Return ONLY valid JSON, no markdown, exactly this structure:
+{
+  "topic": "string — the specific topic, phrased the way a learner would type it into a search/topic box",
+  "caption": "string — the full TikTok caption including hashtags"
+}
+
+Rules:
+- Pure JSON only, no backticks, no commentary
+`;
+
+  const parsed = await generateJson({
+    label: "automation-topic",
+    maxAttempts: 2,
+    maxTokens: 500,
+    buildMessages: (feedback) => [{ role: "user", content: basePrompt + feedbackSuffix(feedback) }],
+    validate: (p) => {
+      if (typeof p.topic !== "string" || !p.topic.trim() || typeof p.caption !== "string" || !p.caption.trim()) {
+        throw contentError("Automation topic/caption failed shape validation");
+      }
+      return p;
+    },
+    onUsage: (usage) => recordAiUsage({
+      kind: "automation-topic",
+      provider: SCENE_PLAN_PROVIDER.providerName,
+      model: SCENE_PLAN_PROVIDER.model,
+      userId,
+      courseId: null,
+      promptTokens: usage.prompt_tokens,
+      completionTokens: usage.completion_tokens,
+      cachedTokens: usage.prompt_cache_hit_tokens || 0,
+      costUsd: usage.cost ?? null,
+    }),
+  });
+
+  return parsed;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // LESSON CODE-GEN PROMPTS — header call + sequential scene chunks
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4334,6 +4389,7 @@ module.exports = {
   generateAdCode,
   generateRemedialLessonPlan,
   generateNextCourseSuggestions,
+  generateAutomationTopic,
   // Exposed so other lesson-pipeline services (sceneService, codeCriticService)
   // can run their own calls on whichever model is actually configured for
   // lesson code (LESSON_CODE_MODEL=glm|fable|claude) — one provider choice,

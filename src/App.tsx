@@ -29,6 +29,7 @@ import AdminFeedbackAndReviewsPage from './admin/pages/FeedbackAndReviews'
 import AdminTrafficPage from './admin/pages/Traffic'
 import AdminPricingConfigPage from './admin/pages/PricingConfigPage'
 import AdminEmailPage from './admin/pages/EmailComposerPage'
+import AdminAutomationPage from './admin/pages/Automation'
 import AdStudio from './ads/AdStudio'
 import TutorProfilePage from './tutors/tutors-detail/tutors-detail'
 import MessagesPage from './messages/Messages'
@@ -132,6 +133,7 @@ function App() {
         <Route path="traffic" element={<AdminTrafficPage/>}/>
         <Route path="pricing" element={<AdminPricingConfigPage/>}/>
         <Route path="emails" element={<AdminEmailPage/>}/>
+        <Route path="automation" element={<AdminAutomationPage/>}/>
       </Route>
       <Route path="/ad-studio" element={<AdStudio/>}/>
       <Route path="/messages" element={<MessagesPage/>}/>

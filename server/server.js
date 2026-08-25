@@ -10,9 +10,17 @@ require('dns').setDefaultResultOrder('ipv4first');
 
 const app = require('./app')
 const connectDB = require('./config/db')
+const { startAutomationScheduler } = require('./services/automationService')
 
 
-connectDB();
+connectDB().then(() => {
+  // Only after Mongo is actually connected — the scheduler's first act is
+  // reading AutomationConfig, which would hang/fail against a connection
+  // that isn't ready yet.
+  startAutomationScheduler().catch((err) =>
+    console.error('[automation] Failed to start scheduler:', err.message)
+  );
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, ()=>console.log(`Server is running on port: ${PORT}✨`))

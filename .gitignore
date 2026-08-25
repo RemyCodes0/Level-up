@@ -27,3 +27,5 @@ server/exports/
 remotion-render/public/audio/
 remotion-render/public/audio/**
 rendered-videos/
+# Generated video/image renders (dev-only; production serves a separate persistent disk, see app.js)
+remotion-render/public/uploads/

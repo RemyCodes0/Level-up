@@ -3,7 +3,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import {
   LayoutDashboard, DollarSign, BookOpen, Users, GraduationCap,
-  MessageSquare, LineChart, Settings, Mail, Blocks,
+  MessageSquare, LineChart, Settings, Mail, Blocks, Video,
 } from "lucide-react";
 import { PageMeta } from "@/components/PageMeta";
 import { RequireAdmin } from "./RequireAdmin";
@@ -19,6 +19,7 @@ const NAV = [
   { to: "/admin/traffic", label: "Traffic", icon: LineChart },
   { to: "/admin/pricing", label: "Pricing Config", icon: Settings },
   { to: "/admin/emails", label: "Emails", icon: Mail },
+  { to: "/admin/automation", label: "TikTok Automation", icon: Video },
 ];
 
 export default function AdminLayout() {
