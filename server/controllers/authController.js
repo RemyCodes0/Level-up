@@ -60,7 +60,7 @@ function notifyAdminOfAuthEvent(kind, user) {
 
 // ── Signup — creates user + sends verification email ────────────────────────
 exports.registerUser = async (req, res) => {
-  const { name, email, password, role, major, year, subjects, ref } = req.body;
+  const { name, email, password, ref } = req.body;
   try {
     const userExists = await User.findOne({ email });
     if (userExists) return res.status(400).json({ message: "User already exists" });
@@ -87,10 +87,6 @@ exports.registerUser = async (req, res) => {
       name,
       email,
       password,
-      role,
-      major,
-      year,
-      subjects,
       verificationToken,
       verificationTokenExpires,
       ...(referredBy ? { referredBy } : {}),
@@ -346,7 +342,6 @@ exports.loginUser = async (req, res) => {
       _id: user._id,
       name: user.name,
       email: user.email,
-      role: user.role,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -406,7 +401,6 @@ exports.googleAuth = async (req, res) => {
           email,
           googleId,
           authProvider: "google",
-          role: "learner", // same fixed default the regular signup form already uses
           verified: true, // Google already verified this email — see email_verified check above
         });
 
@@ -425,7 +419,6 @@ exports.googleAuth = async (req, res) => {
       _id: user._id,
       name: user.name,
       email: user.email,
-      role: user.role,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -493,7 +486,7 @@ exports.updateUser = async (req, res) => {
     let user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    const allowedFields = ["name", "email", "major", "year", "subjects", "password"];
+    const allowedFields = ["name", "email", "password"];
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
         user[field] = req.body[field];
@@ -506,10 +499,6 @@ exports.updateUser = async (req, res) => {
       _id: updatedUser._id,
       name: updatedUser.name,
       email: updatedUser.email,
-      role: updatedUser.role,
-      major: updatedUser.major,
-      year: updatedUser.year,
-      subjects: updatedUser.subjects,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -517,18 +506,17 @@ exports.updateUser = async (req, res) => {
 };
 
 // PATCH /api/auth/:id/admin — admin-only, broader than self-service
-// updateUser above (which deliberately can't touch role/verified/credits).
+// updateUser above (which deliberately can't touch verified/credits).
 // Route-gated with protect+requireAdmin, so no self-or-admin check needed
-// here the way getUser/updateUser need it.
+// here the way getUser/updateUser need it. Admin-ness itself is the
+// ADMIN_EMAIL check in middleware/requireAdmin.js, not a field on the user
+// document — there's no stored "admin" role to grant here.
 exports.adminUpdateUser = async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // role only ever "learner"/"tutor" — there is no stored "admin" role in
-    // this app (see User.js's enum); admin-ness is the ADMIN_EMAIL check in
-    // middleware/requireAdmin.js, not a field on the user document.
-    const allowedFields = ["name", "email", "role", "verified", "courseCredits"];
+    const allowedFields = ["name", "email", "verified", "courseCredits"];
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
         user[field] = req.body[field];
@@ -540,7 +528,6 @@ exports.adminUpdateUser = async (req, res) => {
       _id: updatedUser._id,
       name: updatedUser.name,
       email: updatedUser.email,
-      role: updatedUser.role,
       verified: updatedUser.verified,
       courseCredits: updatedUser.courseCredits,
     });

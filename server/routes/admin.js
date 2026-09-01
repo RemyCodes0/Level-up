@@ -29,12 +29,6 @@ const {
   rejectLibraryComponent,
   deleteLibraryComponent,
 } = require("../controllers/libraryComponentController");
-const {
-  getAutomationConfig,
-  updateAutomationConfig,
-  getAutomationHistory,
-  runAutomationNow,
-} = require("../controllers/automationController");
 const { protect } = require("../middleware/authMiddleware");
 const { requireAdmin } = require("../middleware/requireAdmin");
 
@@ -74,13 +68,6 @@ router.get("/library-components/:id/preview", getLibraryComponentPreview);
 router.post("/library-components/:id/approve", approveLibraryComponent);
 router.post("/library-components/:id/reject", rejectLibraryComponent);
 router.delete("/library-components/:id", deleteLibraryComponent);
-
-// TikTok auto-posting loop — pick a STEM topic, generate a 1-lesson
-// course, render it to MP4, post via Buffer (see automationService.js).
-router.get("/automation/config", getAutomationConfig);
-router.put("/automation/config", updateAutomationConfig);
-router.get("/automation/history", getAutomationHistory);
-router.post("/automation/run-now", runAutomationNow);
 
 module.exports = router;
 

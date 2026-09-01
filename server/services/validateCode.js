@@ -1,14 +1,12 @@
 // Standalone validator — no dependencies on other services, so it can be
-// safely imported by both claudeService and bundleService without creating
-// a circular dependency.
+// safely imported by claudeService without creating a circular dependency.
 //
 // Three entry points:
 //   - validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) — the
-//     FINAL, fully-stitched lesson/ad file: has the component export, a
+//     FINAL, fully-stitched lesson file: has the component export, a
 //     <Series> of <Series.Sequence>s, and (if expectedTotalFrames is given) a
 //     durationInFrames sum check with small-drift auto-correction. Signature
-//     and behavior are unchanged from before the header/scene split — this is
-//     still what bundleService.js and generateAdCode validate against.
+//     and behavior are unchanged from before the header/scene split.
 //   - validateHeaderFragment(code, opts) — the shared header fragment (
 //     imports, palette/motif consts, shared helper components) generated
 //     BEFORE any scene: no export, no <Series>/<Series.Sequence>/<Audio>.

@@ -1,14 +1,14 @@
 // scripts/generate-sitemap.mjs
 //
-// Bakes tutor profiles and published courses into public/sitemap.xml at
-// BUILD TIME, before `vite build` copies public/ into the deployed output.
-// Why build-time instead of a live server route: the frontend
-// (leveluppedu.app) and the API server are separate origins, and there's no
-// proxy from the frontend domain to the API for /sitemap.xml — a crawler
-// requesting https://leveluppedu.app/sitemap.xml only ever sees this static
-// file. Generating it here, once per deploy, gets real dynamic URLs (tutor
-// profiles, published courses) in front of crawlers without needing a
-// serverless function or reverse proxy.
+// Bakes published courses into public/sitemap.xml at BUILD TIME, before
+// `vite build` copies public/ into the deployed output. Why build-time
+// instead of a live server route: the frontend (leveluppedu.app) and the
+// API server are separate origins, and there's no proxy from the frontend
+// domain to the API for /sitemap.xml — a crawler requesting
+// https://leveluppedu.app/sitemap.xml only ever sees this static file.
+// Generating it here, once per deploy, gets real dynamic URLs (published
+// courses) in front of crawlers without needing a serverless function or
+// reverse proxy.
 //
 // MUST NEVER FAIL THE BUILD: if the API is unreachable or errors, this falls
 // back to the static marketing routes alone and exits 0 — a stale-but-valid
@@ -32,10 +32,8 @@ const TODAY = new Date().toISOString().slice(0, 10);
 const STATIC_ROUTES = [
   { url: "/", changefreq: "weekly", priority: 1.0 },
   { url: "/price", changefreq: "monthly", priority: 0.8 },
-  { url: "/tutors", changefreq: "daily", priority: 0.8 },
   { url: "/gallery", changefreq: "daily", priority: 0.8 },
   { url: "/ai_showcase", changefreq: "weekly", priority: 0.7 },
-  { url: "/apply", changefreq: "monthly", priority: 0.6 },
   { url: "/signup", changefreq: "monthly", priority: 0.7 },
   { url: "/login", changefreq: "monthly", priority: 0.4 },
   { url: "/terms.html", changefreq: "yearly", priority: 0.3 },
@@ -55,19 +53,6 @@ async function safeFetchJson(url, { timeoutMs = 10_000 } = {}) {
     return await res.json();
   } finally {
     clearTimeout(timer);
-  }
-}
-
-async function fetchTutorUrls() {
-  try {
-    const tutors = await safeFetchJson(`${API}/api/tutor/allTutors`);
-    if (!Array.isArray(tutors)) return [];
-    return tutors
-      .filter((t) => t && t._id)
-      .map((t) => ({ url: `/tutors/${t._id}`, changefreq: "weekly", priority: 0.6 }));
-  } catch (err) {
-    console.warn("[sitemap] Skipping tutor URLs — fetch failed:", err.message);
-    return [];
   }
 }
 
@@ -111,15 +96,11 @@ function buildXml(entries) {
 async function main() {
   let dynamicUrls = [];
   try {
-    const [tutorUrls, courseUrls] = await Promise.all([
-      fetchTutorUrls(),
-      fetchPublishedCourseUrls(),
-    ]);
-    dynamicUrls = [...tutorUrls, ...courseUrls];
+    dynamicUrls = await fetchPublishedCourseUrls();
   } catch (err) {
-    // Belt-and-suspenders: fetchTutorUrls/fetchPublishedCourseUrls already
-    // catch their own errors, but if something else goes wrong here, fall
-    // back to static-only rather than letting the build fail.
+    // Belt-and-suspenders: fetchPublishedCourseUrls already catches its own
+    // errors, but if something else goes wrong here, fall back to
+    // static-only rather than letting the build fail.
     console.warn("[sitemap] Falling back to static routes only:", err.message);
   }
 

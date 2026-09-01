@@ -173,7 +173,7 @@ async function generateChunkAudio(chunkText) {
 }
 
 // Generates audio for a single scene with manual retry + exponential backoff.
-// `context` ({ userId, courseId, adId }) feeds the AI cost ledger — Kokoro's
+// `context` ({ userId, courseId }) feeds the AI cost ledger — Kokoro's
 // audio.speech API returns no token-count usage at all, so cost here is
 // estimated from total characters SENT across this scene's chunks (see
 // config/modelPricing.js's estimateTokensFromChars for why that's an
@@ -211,7 +211,6 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
         model: "hexgrad/kokoro-82m",
         userId: context.userId ?? null,
         courseId: context.courseId ?? null,
-        adId: context.adId ?? null,
         lessonNumber: context.lessonNumber ?? null,
         characters: totalChars,
         estimatedTokens: estimateTokensFromChars(totalChars),

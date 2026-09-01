@@ -9,7 +9,6 @@ interface User {
   _id: string;
   name: string;
   email: string;
-  role: "learner" | "tutor";
   verified: boolean;
   courseCredits: number;
   signupBonusCredits?: number;
@@ -86,7 +85,6 @@ export default function Users() {
                 <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
                   <th className="px-5 py-3 font-medium">Name</th>
                   <th className="px-5 py-3 font-medium">Email</th>
-                  <th className="px-5 py-3 font-medium">Role</th>
                   <th className="px-5 py-3 font-medium">Verified</th>
                   <th className="px-5 py-3 font-medium">Credits</th>
                   <th className="px-5 py-3 font-medium w-20" />
@@ -97,9 +95,6 @@ export default function Users() {
                   <tr key={u._id} className="hover:bg-slate-50">
                     <td className="px-5 py-3 font-medium text-slate-800">{u.name}</td>
                     <td className="px-5 py-3 text-slate-500">{u.email}</td>
-                    <td className="px-5 py-3">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 capitalize">{u.role}</span>
-                    </td>
                     <td className="px-5 py-3">
                       {u.verified ? <span className="text-xs text-emerald-600">Yes</span> : <span className="text-xs text-slate-400">No</span>}
                     </td>
@@ -264,7 +259,6 @@ function UserProgressModal({ userId, userName, onClose }: { userId: string; user
 
 function EditUserModal({ user, onClose, onSaved }: { user: User; onClose: () => void; onSaved: (u: Partial<User> & { _id: string }) => void }) {
   const [name, setName] = useState(user.name);
-  const [role, setRole] = useState(user.role);
   const [verified, setVerified] = useState(user.verified);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -279,7 +273,7 @@ function EditUserModal({ user, onClose, onSaved }: { user: User; onClose: () => 
     setSaving(true);
     setError(null);
     try {
-      const updated = await adminApi.patch<any>(`/api/auth/${user._id}/admin`, { name, role, verified });
+      const updated = await adminApi.patch<any>(`/api/auth/${user._id}/admin`, { name, verified });
       onSaved(updated);
     } catch (err: any) {
       setError(err.message || "Failed to save.");
@@ -299,13 +293,6 @@ function EditUserModal({ user, onClose, onSaved }: { user: User; onClose: () => 
           <div>
             <label className="text-xs font-medium text-slate-500 mb-1 block">Name</label>
             <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
-          </div>
-          <div>
-            <label className="text-xs font-medium text-slate-500 mb-1 block">Role</label>
-            <select value={role} onChange={(e) => setRole(e.target.value as User["role"])} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm">
-              <option value="learner">learner</option>
-              <option value="tutor">tutor</option>
-            </select>
           </div>
           <label className="flex items-center gap-2 text-sm text-slate-600">
             <input type="checkbox" checked={verified} onChange={(e) => setVerified(e.target.checked)} />

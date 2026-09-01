@@ -17,23 +17,15 @@ const MODEL_PRICING = {
   // assessment. https://openrouter.ai/deepseek/deepseek-v4-flash
   "deepseek/deepseek-v4-flash": { inputPerM: 0.09, outputPerM: 0.18 },
 
-  // Fable 5 via OpenRouter — ad code (deliberately the pricier model; ad
-  // volume is low). https://openrouter.ai/anthropic/claude-fable-5
-  "anthropic/claude-fable-5": { inputPerM: 10, outputPerM: 50 },
-
   // Claude Sonnet 5, direct Anthropic API (the optional LESSON_CODE_MODEL=
-  // claude / AD_CODE_MODEL=claude override) — introductory rate through
-  // 2026-08-31. RISES to $3/$15 per M after that date — bump this then.
+  // claude override) — introductory rate through 2026-08-31. RISES to
+  // $3/$15 per M after that date — bump this then.
   // https://platform.claude.com/docs/en/about-claude/pricing
   "claude-sonnet-5": { inputPerM: 2, outputPerM: 10 },
 
   // Kokoro-82M TTS via OpenRouter — billed per INPUT TEXT TOKEN, $0 for
   // output audio. https://openrouter.ai/hexgrad/kokoro-82m
   "hexgrad/kokoro-82m": { inputPerM: 0.62, outputPerM: 0 },
-
-  // Claude Haiku 4.5, direct Anthropic API — ad script planning
-  // (services/adService.js). https://platform.claude.com/docs/en/about-claude/pricing
-  "claude-haiku-4-5-20251001": { inputPerM: 1.00, outputPerM: 5.00 },
 };
 
 // The TTS API (openai.audio.speech.create) returns no usage/token-count

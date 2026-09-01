@@ -6,15 +6,9 @@ const path = require("path");
 const { SitemapStream, streamToPromise } = require('sitemap');
 
 const authRoutes = require('./routes/auth');
-const tutorRoutes = require('./routes/tutor');
-const bookRoutes = require("./routes/book");
-const reviewRoutes = require("./routes/review");
 const courseRoutes = require('./routes/course');
 const paymentRoutes = require('./routes/payment');
 const feedbackRoutes = require('./routes/feedback')
-const checkoutRouter = require('./routes/checkout.js');
-
-const Tutor = require('./models/Tutor');
 
 const app = express();
 
@@ -26,7 +20,7 @@ app.use(cors({
 }));
 
 // gzip/brotli every JSON/text response — cheap CPU cost, meaningfully cuts
-// bandwidth and time-to-first-byte for course/booking/tutor list payloads.
+// bandwidth and time-to-first-byte for course list payloads.
 app.use(compression());
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -59,8 +53,8 @@ app.use(express.json());
 //                      currently logged in could lock themselves out.
 //   /api/maintenance — the status check itself (frontend polls this to know
 //                      whether to show the maintenance page at all).
-//   /audio, /uploads — static asset serving, not "activity"; blocking it would
-//                      just break already-loaded playback/previews for no
+//   /audio            — static asset serving, not "activity"; blocking it
+//                      would just break already-loaded playback for no
 //                      benefit (this is registered further down, but the
 //                      prefix is listed here for one central allowlist).
 //
@@ -69,7 +63,7 @@ app.use(express.json());
 // middleware chain, which is deliberate: an external payment provider's
 // webhook must always be processed, maintenance mode or not, or a customer
 // could pay and never get credited.
-const MAINTENANCE_EXEMPT_PREFIXES = ["/api/admin", "/api/auth", "/api/maintenance", "/audio", "/uploads"];
+const MAINTENANCE_EXEMPT_PREFIXES = ["/api/admin", "/api/auth", "/api/maintenance", "/audio"];
 app.use(async (req, res, next) => {
   if (MAINTENANCE_EXEMPT_PREFIXES.some((p) => req.path.startsWith(p))) return next();
   try {
@@ -89,15 +83,11 @@ app.use(async (req, res, next) => {
 app.use('/api/maintenance', require('./routes/maintenance'));
 
 app.use('/api/auth', authRoutes);
-app.use('/api/tutor', tutorRoutes);
-app.use('/api/book/', bookRoutes);
-app.use('/api/reviews', reviewRoutes);
 app.use('/api/course', courseRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/assessment', require('./routes/assessment'))
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/admin/email', require('./routes/adminEmail'));
-app.use('/api/ads', require('./routes/ads'));
 app.use('/api/email', require('./routes/email'));
 app.use('/api/showcase', require('./routes/showcase'));
 app.use('/api/payment', require('./routes/payment'));
@@ -106,7 +96,6 @@ app.use('/api/collab', require('./routes/collab'));
 app.use('/api/progress', require('./routes/progress'));
 app.use('/api/quiz', require('./routes/quiz'));
 app.use('/api/track', require('./routes/track'));
-// app.use('/api', checkoutRouter);
 
 // Serve audio files for browser playback at /audio/*
 // The browser fetches these directly during Remotion Player playback.
@@ -115,18 +104,6 @@ const audioDir = process.env.NODE_ENV === "production"
   : path.resolve(__dirname, "../remotion-render/public/audio");
 
 app.use("/audio", express.static(audioDir));
-
-// Uploaded brand assets for ads (logos, screenshots). Same disk pattern as audio.
-const uploadsDir = process.env.NODE_ENV === "production"
-  ? "/data/uploads"
-  : path.resolve(__dirname, "../remotion-render/public/uploads");
-app.use("/uploads", (req, res, next) => {
-  const origin = req.headers.origin;
-  res.setHeader("Access-Control-Allow-Origin", origin || "*");
-  if (origin) res.setHeader("Vary", "Origin");
-  next();
-});
-app.use("/uploads", express.static(uploadsDir));
 
 // ──────────────────────────────────────────────────────────────────────────
 // EXPLICIT 404 for missing audio files.
@@ -159,7 +136,7 @@ app.use("/audio", (req, res) => {
 // route only actually serves a sitemap if something requests THIS server's
 // own origin directly. Kept (and its hostname corrected) rather than removed,
 // since deleting a live route on request is a bigger call than fixing one —
-// but the dynamic tutor/course entries it lists are why scripts/generate-sitemap.mjs
+// but the dynamic course entries it lists are why scripts/generate-sitemap.mjs
 // exists: it bakes the same dynamic data into the static file at build time,
 // which crawlers actually reach.
 app.get('/sitemap.xml', async (req, res) => {
@@ -169,17 +146,6 @@ app.get('/sitemap.xml', async (req, res) => {
     });
 
     smStream.write({ url: '/', changefreq: 'daily', priority: 1.0 });
-    smStream.write({ url: '/tutors', changefreq: 'daily', priority: 0.9 });
-    smStream.write({ url: '/apply', changefreq: 'monthly', priority: 0.6 });
-
-    const tutors = await Tutor.find({}, '_id');
-    tutors.forEach(t => {
-      smStream.write({
-        url: `/tutors/${t._id}`,
-        changefreq: 'weekly',
-        priority: 0.7
-      });
-    });
 
     smStream.end();
     const data = await streamToPromise(smStream);

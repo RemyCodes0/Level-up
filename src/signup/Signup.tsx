@@ -40,7 +40,6 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
-  const [role] = useState<"learner" | "tutor">("learner");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -77,7 +76,6 @@ export default function SignupPage() {
         name: fullName,
         email,
         password,
-        role,
         ...(refCode ? { ref: refCode } : {}),
       });
 

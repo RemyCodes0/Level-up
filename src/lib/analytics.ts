@@ -172,7 +172,7 @@ export function initAnalytics(): void {
   }
 }
 
-type AppUser = { _id?: string; id?: string; name?: string; email?: string; role?: string };
+type AppUser = { _id?: string; id?: string; name?: string; email?: string };
 
 /** Link the current (previously anonymous) session to a real account. */
 export function identifyUser(user: AppUser): void {
@@ -182,7 +182,6 @@ export function identifyUser(user: AppUser): void {
   posthog.identify(String(id), {
     email: user.email,
     name: user.name,
-    role: user.role,
   });
 }
 

@@ -2,8 +2,8 @@
 
 import { NavLink, Outlet } from "react-router-dom";
 import {
-  LayoutDashboard, DollarSign, BookOpen, Users, GraduationCap,
-  MessageSquare, LineChart, Settings, Mail, Blocks, Video,
+  LayoutDashboard, DollarSign, BookOpen, Users,
+  MessageSquare, LineChart, Settings, Mail, Blocks,
 } from "lucide-react";
 import { PageMeta } from "@/components/PageMeta";
 import { RequireAdmin } from "./RequireAdmin";
@@ -14,12 +14,10 @@ const NAV = [
   { to: "/admin/courses", label: "Courses", icon: BookOpen },
   { to: "/admin/component-library", label: "Component Library", icon: Blocks },
   { to: "/admin/users", label: "Users", icon: Users },
-  { to: "/admin/tutors-bookings", label: "Tutors & Bookings", icon: GraduationCap },
-  { to: "/admin/feedback-reviews", label: "Feedback & Reviews", icon: MessageSquare },
+  { to: "/admin/feedback-reviews", label: "Feedback", icon: MessageSquare },
   { to: "/admin/traffic", label: "Traffic", icon: LineChart },
   { to: "/admin/pricing", label: "Pricing Config", icon: Settings },
   { to: "/admin/emails", label: "Emails", icon: Mail },
-  { to: "/admin/automation", label: "TikTok Automation", icon: Video },
 ];
 
 export default function AdminLayout() {

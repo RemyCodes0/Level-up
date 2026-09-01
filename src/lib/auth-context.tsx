@@ -7,7 +7,7 @@ interface AuthContextType {
   user: User | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<void>
-  signUp: (email: string, password: string, fullName: string, role: "learner" | "tutor") => Promise<void>
+  signUp: (email: string, password: string, fullName: string) => Promise<void>
   signOut: () => Promise<void>
 }
 
@@ -19,14 +19,6 @@ const MOCK_USERS: User[] = [
     id: "a7b8c9d0-e1f2-0a1b-4c5d-6e7f8a9b0c1d",
     email: "learner@aub.edu.lb",
     fullName: "Nour Mansour",
-    role: "learner",
-    avatarUrl: "/placeholder.svg?height=100&width=100",
-  },
-  {
-    id: "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d",
-    email: "tutor@aub.edu.lb",
-    fullName: "Sarah Hassan",
-    role: "tutor",
     avatarUrl: "/placeholder.svg?height=100&width=100",
   },
 ]
@@ -55,13 +47,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const signUp = async (email: string, password: string, fullName: string, role: "learner" | "tutor") => {
+  const signUp = async (email: string, password: string, fullName: string) => {
     // Mock signup - in production, this would call your auth API
     const newUser: User = {
       id: crypto.randomUUID(),
       email,
       fullName,
-      role,
       avatarUrl: "/placeholder.svg?height=100&width=100",
     }
     setUser(newUser)

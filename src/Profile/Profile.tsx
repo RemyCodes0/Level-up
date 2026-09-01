@@ -25,7 +25,6 @@ import axios from "axios";
 import {
   User,
   Mail,
-  Shield,
   Camera,
   Save,
   CheckCircle2,
@@ -269,13 +268,6 @@ export default function ProfilePage() {
                   <h2 className="text-2xl font-bold mb-1">{fullName}</h2>
                   <p className="text-sm text-muted-foreground mb-4">{email}</p>
 
-                  {/* Role Badge */}
-                  <Badge className="mb-6 px-4 py-1.5 bg-gradient-to-r from-blue-500 to-purple-500 text-white border-none">
-                    <Shield className="h-3 w-3 mr-1" />
-                    {user.role?.charAt(0).toUpperCase() + user.role?.slice(1) ||
-                      "Learner"}
-                  </Badge>
-
                   <Separator className="my-6" />
 
                   {/* Quick Stats */}
@@ -390,19 +382,6 @@ export default function ProfilePage() {
                         className="h-12 pl-4 border-2 focus:border-primary transition-colors"
                         required
                       />
-                    </div>
-                  </div>
-
-                  {/* Account Type (Read-only) */}
-                  <div className="space-y-2">
-                    <Label className="text-sm font-semibold flex items-center gap-2">
-                      <Shield className="h-4 w-4 text-muted-foreground" />
-                      Account Type
-                    </Label>
-                    <div className="h-12 px-4 border-2 border-muted rounded-lg flex items-center bg-muted/30">
-                      <span className="capitalize font-medium text-muted-foreground">
-                        {user.role || "Learner"}
-                      </span>
                     </div>
                   </div>
 

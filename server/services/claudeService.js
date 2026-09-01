@@ -435,9 +435,7 @@ function resolveProvider(envVar, defaultKey) {
 }
 
 // Lesson code (6+ per course, high volume) → GLM 5.2: fast, cheap, concurrent.
-// Ad code (one per user action, low volume) → Fable 5: stronger, pricier.
 const LESSON_CODE_PROVIDER = resolveProvider("LESSON_CODE_MODEL", "glm");
-const AD_CODE_PROVIDER = resolveProvider("AD_CODE_MODEL", "fable");
 
 // Derives a reasoning-off variant of whichever provider LESSON_CODE_MODEL
 // selects — the single whole-lesson code call runs with reasoning off
@@ -574,8 +572,6 @@ const ZAI_MAX_CONCURRENT = Number(process.env.ZAI_MAX_CONCURRENT) || 1;
 const limitZaiCall = createLimiter(ZAI_MAX_CONCURRENT);
 const LESSON_CODE_MAX_CONCURRENT = Number(process.env.LESSON_CODE_MAX_CONCURRENT) || 30;
 const limitLessonCodeCall = createLimiter(LESSON_CODE_MAX_CONCURRENT);
-const AD_CODE_MAX_CONCURRENT = Number(process.env.AD_CODE_MAX_CONCURRENT) || 3;
-const limitAdCodeCall = createLimiter(AD_CODE_MAX_CONCURRENT);
 // Originally "every OpenRouter-routed DeepSeek call"; course plan/quiz and
 // per-lesson scene plan (GEMINI_COURSE_PLAN_PROVIDER / GEMINI_SCENE_PLAN_
 // PROVIDER above) have since moved to Gemini 3.7 Flash and still share this
@@ -590,8 +586,7 @@ const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 1
 const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 
 console.log(
-  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini | geminilite | glmflash | oxalpha to switch) | ` +
-  `ad code → ${AD_CODE_PROVIDER.model} (set AD_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini | geminilite | glmflash | oxalpha to switch)`
+  `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini | geminilite | glmflash | oxalpha to switch)`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1265,61 +1260,6 @@ Rules:
   });
 
   return parsed.suggestions;
-}
-
-// ── TikTok automation: picks the topic + caption for one auto-posted lesson
-// (see automationService.js) — same lightweight-JSON GLM path as the two
-// functions above, not worth reasoning tokens. `recentTopics` is the last
-// N topics already posted (automationService.js pulls this from
-// AutomationPost history) so the model doesn't pick something just posted.
-async function generateAutomationTopic(recentTopics = [], { userId = null } = {}) {
-  const avoidContext = recentTopics.length
-    ? `Do NOT repeat or closely rehash any of these recently posted topics: ${recentTopics.map((t) => `"${t}"`).join(", ")}.`
-    : "";
-
-  const basePrompt = `
-You are picking the topic for a single short (1-lesson) AI-generated educational video that will be posted to TikTok for students.
-
-Pick ONE specific STEM topic (math, physics, chemistry, biology, computer science, or engineering) that students commonly find genuinely difficult or confusing — something with real "aha" potential when explained visually, not a broad subject name. "Why negative times negative is positive" is good; "Algebra" is not.
-${avoidContext}
-
-Then write a short, punchy TikTok caption for the finished video — hook the viewer in the first few words, plain conversational language (not textbook-formal), end with 3-5 relevant hashtags (mix of broad like #StudyTok and specific to the topic). Keep it under 150 characters before the hashtags.
-
-Return ONLY valid JSON, no markdown, exactly this structure:
-{
-  "topic": "string — the specific topic, phrased the way a learner would type it into a search/topic box",
-  "caption": "string — the full TikTok caption including hashtags"
-}
-
-Rules:
-- Pure JSON only, no backticks, no commentary
-`;
-
-  const parsed = await generateJson({
-    label: "automation-topic",
-    maxAttempts: 2,
-    maxTokens: 500,
-    buildMessages: (feedback) => [{ role: "user", content: basePrompt + feedbackSuffix(feedback) }],
-    validate: (p) => {
-      if (typeof p.topic !== "string" || !p.topic.trim() || typeof p.caption !== "string" || !p.caption.trim()) {
-        throw contentError("Automation topic/caption failed shape validation");
-      }
-      return p;
-    },
-    onUsage: (usage) => recordAiUsage({
-      kind: "automation-topic",
-      provider: SCENE_PLAN_PROVIDER.providerName,
-      model: SCENE_PLAN_PROVIDER.model,
-      userId,
-      courseId: null,
-      promptTokens: usage.prompt_tokens,
-      completionTokens: usage.completion_tokens,
-      cachedTokens: usage.prompt_cache_hit_tokens || 0,
-      costUsd: usage.cost ?? null,
-    }),
-  });
-
-  return parsed;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4239,137 +4179,6 @@ async function generateLessonCode(lesson, componentName, scenes, totalFrames, ma
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// AD GENERATION — same sandbox/autofix/validate machinery as lessons,
-// ad-tuned prompt. An ad is ONE component (a <Series> of short punchy
-// scenes). Crash-safety identical; aesthetic commercial, not educational.
-// ═══════════════════════════════════════════════════════════════════════════
-const AD_CODE_GEN_RULES = `
-⚠️ OUTPUT FORMAT: Respond with ONLY raw TSX code. No prose, no markdown. FIRST character "i" (from "import"). CODE ONLY.
-
-You are an elite motion-graphics director making a 30–60s PRODUCT AD — Apple-keynote caliber. Slick, fast, confident, and every scene sells. Build to each scene's EXACT frame duration.
-
-════════ BRAND IDENTITY FIRST (decide once, apply throughout) ════════
-Lock a cohesive 2-3 color scheme built around the BRAND COLOR given below (accents, gradients, glows, CTA), one display type treatment, and one motion signature. Everything after obeys it — no random colors, no clashing styles between scenes.
-
-════════ SANDBOX API (violate → build fails) ════════
-1. Named export exactly as given: export const ComponentName = () => { ... }
-2. Import ONLY from "remotion" (any named export EXCEPT staticFile: AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Audio, Img, Easing, interpolateColors, random, Loop) and "react" (ONLY useMemo, useCallback, useRef — NEVER useState, it crashes).
-3. NO props, NO external data. Every variable is locally declared, a listed remotion/react export, or your own param. Never shadow a JS built-in (Math, Array, Object, Date…).
-4. A single <Series> with one <Series.Sequence durationInFrames={EXACT}> per scene, IN ORDER. No bare <Sequence>. Copy durations exactly; they must sum to the total.
-5. Each sequence has its <Audio src={"EXACT_URL"} /> — copy character-for-character, no staticFile.
-6. If logo/screenshot URLs are given below, SHOW them with <Img src={"URL"} /> (animate in — scale/spring/parallax). If none, build a strong typographic/graphic stand-in — never blank space.
-7. Frame numbers are PER-SCENE (reset to 0 each Series.Sequence) — never offset by earlier scenes' durations.
-
-════════ CRASH-SAFETY (identical to the lesson sandbox — each is a real crash) ════════
-S1. interpolate(value, [literals], [literals], options?) — 3 args + optional options; input/output are literal number arrays only (never a variable/expression inside — shift the value arg: interpolate(frame - i*4, [0,20],[0,1], CLAMP)); inputRange strictly increasing, no dupes. const CLAMP = { extrapolateLeft:"clamp", extrapolateRight:"clamp" }.
-S2. spring({ frame, fps, config }) with fps from useVideoConfig().
-S3. Guard division (v/(d||1)) and array access; never emit NaN into any SVG/style number.
-S4. Never read a property off a possibly-undefined value; guard arr[i+1]/find()/lookups.
-S5. Clamp every final position to SAFE: const SAFE = { xMin:160, xMax:1760, yMin:140, yMax:940 }; const clampPos=(v,lo,hi)=>Math.min(hi,Math.max(lo,v)); 1920x1080 is a hard boundary (except deliberate whip-pans that resolve on-screen).
-
-════════ SYNTAX TRAPS ════════
-camelCase style keys & SVG attrs (backgroundColor, strokeWidth…); className/htmlFor not class/for; prefer string concat over template literals (even backtick count); no bare commas or literal { } in JSX text; any content-wrapper must render {children}.
-
-════════ AD CRAFT — this is the product ════════
-K1. KINETIC TYPOGRAPHY is the backbone: words snap, scale, and stagger in per-word/per-letter (map over split text, stagger via interpolate(frame - i*3, [0,12],[0,1], CLAMP)). Big, bold, confident — headlines 80–160px.
-K2. TRANSITIONS ARE THE CRAFT. Scenes are hard cuts, so a clean transition = a coordinated EXIT at the end of one scene + ENTER at the start of the next. Define ONE shared const T (12–16 frames) and reuse it for consistent rhythm; every scene both ENTERS (first T) and EXITS (last T). VARY the technique between beats:
-    (a) COVER-WIPE: a brand-color panel sweeps across at the boundary — cover half at the outgoing scene's end (interpolate(frame, [DUR-T, DUR], [-1920, 0], CLAMP)), reveal half at the next scene's start (interpolate(frame, [0, T], [0, 1920], CLAMP)), same direction so it reads continuous.
-    (b) DIRECTIONAL SLIDE: outgoing content slides off one edge as incoming slides in from the opposite edge — pair the directions so the eye tracks straight across.
-    (c) SCALE/PUNCH: outgoing scales up + fades; incoming springs from 0 — great for the product/logo hero reveal.
-   Make reusable <Wipe/> and <SlideIn/> helpers.
-K3. CONTINUOUS, MOTIVATED MOTION on every frame — backgrounds drift, elements breathe (Math.sin(frame/k)) — but tied to the brand feel, not random jitter.
-K4. STRUCTURE THE ENERGY: hook (biggest type) → tension → PRODUCT/LOGO HERO REVEAL (make it BIG — spring pop + glow burst) → rapid-fire benefits (one punchy beat every ~2-3s) → CTA END CARD (brand color, the exact CTA text below, logo, clean and confident).
-K5. DEPTH: layered background (gradient + a few drifting shapes), glow (boxShadow) on hero elements, at least one parallax/orbiting motion. A dense premium frame — never a lone centered word on flat color.
-
-Begin with imports, CLAMP/SAFE/clampPos, shared helpers (AnimatedWord, Wipe, SlideIn, an ambient layer), then the main component. Entire response is the code file, first characters "import", no fences. Make it feel like money.
-`;
-
-function buildAdUserContent(ad, componentName, scenes, totalFrames) {
-  const assets = [];
-  if (ad.logoUrl) assets.push(`LOGO URL (show with <Img>): ${ad.logoUrl}`);
-  if (Array.isArray(ad.screenshots) && ad.screenshots.length) {
-    ad.screenshots.forEach((s, i) => assets.push(`SCREENSHOT ${i + 1} URL (show with <Img>): ${s}`));
-  }
-  const sceneTable = scenes
-    .map(
-      (s, i) =>
-        `Scene ${i + 1} [${s.role || "beat"}]: durationInFrames=${s.durationInFrames}, audioUrl="${s.audioUrl}"
-   onScreenText: ${s.onScreenText || ""}
-   visual: ${s.visualDescription || ""}`
-    )
-    .join("\n\n");
-
-  return `
-PRODUCT: ${ad.productName}
-WHAT IT IS: ${ad.description}
-BRAND COLOR: ${ad.brandColor || "#6366f1"}
-CALL TO ACTION (use verbatim on the end card): ${ad.cta || "Get started today"}
-COMPONENT NAME: ${componentName}
-TOTAL FRAMES: ${totalFrames}
-${assets.length ? "\nBRAND ASSETS:\n" + assets.join("\n") : "\n(No brand assets uploaded — build strong typographic/graphic visuals instead.)"}
-
-SCENES (in order — one <Series.Sequence> each, EXACT durations):
-
-${sceneTable}
-`;
-}
-
-async function generateAdCode(ad, componentName, scenes, totalFrames, maxAttempts = 3, { userId = null, adId = null } = {}) {
-  return withRetries("ad-code", maxAttempts, async ({ attempt, feedback }) => {
-    logVerbose(`  [ad-code] Attempt ${attempt}/${maxAttempts} for ${componentName}...`);
-
-    // Now shares streamCodeCompletion — the ad path gets the idle watchdog
-    // and usage logging for free (it previously carried its own inline copy
-    // of the streaming loop with neither).
-    const { text, stopReason, usage } = await streamCodeCompletion({
-      limiter: limitAdCodeCall,
-      provider: AD_CODE_PROVIDER,
-      systemPrompt: AD_CODE_GEN_RULES,
-      userContent: buildAdUserContent(ad, componentName, scenes, totalFrames) + feedbackSuffix(feedback),
-      maxOutputTokens: AD_CODE_PROVIDER.maxTokens,
-    });
-    logUsage("ad-code", usage);
-    if (usage) {
-      recordAiUsage({
-        kind: "ad-code",
-        provider: AD_CODE_PROVIDER.providerName,
-        model: AD_CODE_PROVIDER.model,
-        userId,
-        adId,
-        promptTokens: usage.prompt_tokens,
-        completionTokens: usage.completion_tokens,
-        cachedTokens: usage.prompt_cache_hit_tokens || 0,
-        // undefined (not present) whenever AD_CODE_MODEL=claude routes this
-        // through streamAnthropicNative instead — recordAiUsage falls back
-        // to the static (but Anthropic-published, still not a guess) rate.
-        costUsd: usage.cost ?? null,
-      });
-    }
-
-    try {
-      if (stopReason === "length") {
-        throw new Error("Hit max_tokens — ad code truncated. Generate more compact code.");
-      }
-
-      const code = stripCodeFences(text);
-      if (!/^(import|const|\/\/|\/\*|export)/.test(code)) {
-        throw new Error("Model output plain text instead of TSX — output only TSX starting with `import`.");
-      }
-
-      const fixedCode = autoFixCode(code, { totalFrames });
-      const audioFixedCode = enforceCorrectAudioUrls(fixedCode, scenes);
-      const validatedCode = validateGeneratedCode(audioFixedCode, componentName, totalFrames);
-
-      logVerbose(`  [ad-code] Valid ad code generated (${validatedCode.length} chars) for ${componentName}`);
-      return validatedCode;
-    } catch (err) {
-      err.isContentError = true;
-      throw err;
-    }
-  }, { keyEnv: AD_CODE_PROVIDER.keyEnv });
-}
-
 module.exports = {
   generateCoursePlan,
   generateCourseQuiz,
@@ -4386,10 +4195,8 @@ module.exports = {
   // generation concurrently with scene audio synthesis instead of after it —
   // see the headerPromise param on generateLessonCode above.
   generateLessonHeader,
-  generateAdCode,
   generateRemedialLessonPlan,
   generateNextCourseSuggestions,
-  generateAutomationTopic,
   // Exposed so other lesson-pipeline services (sceneService, codeCriticService)
   // can run their own calls on whichever model is actually configured for
   // lesson code (LESSON_CODE_MODEL=glm|fable|claude) — one provider choice,

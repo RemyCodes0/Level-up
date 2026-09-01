@@ -7,7 +7,7 @@
 // boilerplate and cost-math.
 //
 // Never throws and never blocks generation: a logging failure here must
-// never take down a real course/ad build, same non-fatal philosophy already
+// never take down a real course build, same non-fatal philosophy already
 // used for GenerationLog writes and progress-notification callbacks
 // elsewhere in this codebase.
 const AiUsageLog = require("../models/AiUsageLog");
@@ -19,7 +19,6 @@ async function recordAiUsage({
   model,
   userId = null,
   courseId = null,
-  adId = null,
   lessonNumber = null,
   promptTokens = 0,
   completionTokens = 0,
@@ -44,7 +43,6 @@ async function recordAiUsage({
       model,
       userId,
       courseId,
-      adId,
       lessonNumber,
       promptTokens,
       completionTokens,

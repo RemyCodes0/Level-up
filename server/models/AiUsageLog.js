@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 
 // One document per AI generation call (course plan, scene plan, lesson code,
-// remedial plan, next-course suggestions, level assessment, ad code, TTS).
+// remedial plan, next-course suggestions, level assessment, TTS).
 // This is the real, queryable $ cost ledger this app never had before —
 // GenerationLog tracks success/failure, this tracks what each call actually
 // cost. costUsd is computed and stored at WRITE time (via
@@ -29,8 +29,6 @@ const aiUsageLogSchema = new mongoose.Schema(
         "remedial-plan",
         "next-course",
         "level-assessment",
-        "ad-plan",
-        "ad-code",
         "tts",
       ],
       required: true,
@@ -39,15 +37,13 @@ const aiUsageLogSchema = new mongoose.Schema(
     provider: { type: String, required: true }, // "glm" | "deepseek" | "fable" | "claude" | "kokoro-tts"
     model: { type: String, required: true }, // exact model id, e.g. "z-ai/glm-5.2"
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
-    // Exactly one of courseId/adId is set for course-path/ad-path calls;
-    // both null for level-assessment, which runs BEFORE a course exists.
+    // Null for level-assessment, which runs BEFORE a course exists.
     courseId: { type: mongoose.Schema.Types.ObjectId, ref: "Course", default: null, index: true },
-    adId: { type: mongoose.Schema.Types.ObjectId, ref: "Ad", default: null },
     // Set only for calls scoped to ONE lesson (header, chunk, scene-plan,
     // TTS) — null for course-wide calls (course-plan, course-quiz, course
-    // components) and ad calls. What lets courseController.js sum "the
-    // total cost of THIS lesson" instead of only "this course" — see the
-    // summary logged at the end of buildLesson.
+    // components). What lets courseController.js sum "the total cost of
+    // THIS lesson" instead of only "this course" — see the summary logged
+    // at the end of buildLesson.
     lessonNumber: { type: Number, default: null, index: true },
     // Text-generation calls (everything except "tts"):
     promptTokens: { type: Number, default: 0 },

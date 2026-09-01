@@ -11,25 +11,21 @@ const { startBroadcast, getJob } = require("../services/emailBroadcast");
 
 router.use(protect, requireAdmin);
 
-// Build the Mongo filter for a broadcast audience.
-function audienceFilter(audience) {
-  const base = { emailUnsubscribed: { $ne: true }, email: { $exists: true, $ne: "" } };
-  if (audience === "learners") base.role = "learner";
-  else if (audience === "tutors") base.role = "tutor";
-  // audience === "all" → no role filter
-  return base;
+// Build the Mongo filter for a broadcast audience. Every account is a
+// learner now (the peer-tutoring role distinction is gone — see User.js),
+// so there's nothing left to segment by beyond the unsubscribe flag.
+function audienceFilter() {
+  return { emailUnsubscribed: { $ne: true }, email: { $exists: true, $ne: "" } };
 }
 
 // GET /api/admin/email/recipients — counts for the UI ("send to N people").
 router.get("/recipients", async (req, res) => {
   try {
-    const [all, learners, tutors, unsubscribed] = await Promise.all([
-      User.countDocuments(audienceFilter("all")),
-      User.countDocuments(audienceFilter("learners")),
-      User.countDocuments(audienceFilter("tutors")),
+    const [all, unsubscribed] = await Promise.all([
+      User.countDocuments(audienceFilter()),
       User.countDocuments({ emailUnsubscribed: true }),
     ]);
-    res.json({ all, learners, tutors, unsubscribed });
+    res.json({ all, unsubscribed });
   } catch (err) {
     console.error("email/recipients error:", err);
     res.status(500).json({ error: "Failed to count recipients" });
@@ -40,10 +36,10 @@ router.get("/recipients", async (req, res) => {
 // Body:
 //   { mode: "individual", to, subject, html, text }
 //   { mode: "test", subject, html, text }                        → sends only to the admin
-//   { mode: "broadcast", audience: "all"|"learners"|"tutors", subject, html, text }
+//   { mode: "broadcast", subject, html, text }                    → sends to every subscribed user
 // Returns { jobId } for broadcasts (poll /job/:id), or { ok: true } for single sends.
 router.post("/send", async (req, res) => {
-  const { mode, to, audience, subject, html, text } = req.body || {};
+  const { mode, to, subject, html, text } = req.body || {};
 
   if (!subject || !String(subject).trim()) {
     return res.status(400).json({ error: "Subject is required" });
@@ -63,13 +59,10 @@ router.post("/send", async (req, res) => {
       return res.json({ ok: true, sentTo: recipient });
     }
 
-    // Broadcast to a segment.
+    // Broadcast to every subscribed user.
     if (mode === "broadcast") {
-      if (!["all", "learners", "tutors"].includes(audience)) {
-        return res.status(400).json({ error: "audience must be all, learners, or tutors" });
-      }
       // Pull only what we need to send (id, email, name), lean for memory.
-      const recipients = await User.find(audienceFilter(audience))
+      const recipients = await User.find(audienceFilter())
         .select("_id email name")
         .lean();
 

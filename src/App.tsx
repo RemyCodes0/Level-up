@@ -11,30 +11,16 @@ import ForgotPasswordPage from './login/ForgotPassword'
 import ResetPasswordPage from './login/ResetPassword'
 import ProfilePage from './Profile/Profile'
 import SignupPage from './signup/Signup'
-import TutorsPage from './tutors/Tutors'
-import BookingsPage from './bookings/Bookings'
-import TutorDashboardPage from './tutors/Tutor-Dashboards'
-import TutorEarningsPage from './tutors/earnings'
-import TutorAvailabilityPage from './tutors/availability'
-import TutorProfileEditPage from './tutors/Profile'
-import TutorSessionsPage from './tutors/Session'
 import AdminLayout from './admin/AdminLayout'
 import AdminOverviewPage from './admin/pages/Overview'
 import AdminAiSpendPage from './admin/pages/AiSpend'
 import AdminCoursesPage from './admin/pages/Courses'
 import AdminComponentLibraryPage from './admin/pages/ComponentLibrary'
 import AdminUsersPage from './admin/pages/Users'
-import AdminTutorsAndBookingsPage from './admin/pages/TutorsAndBookings'
 import AdminFeedbackAndReviewsPage from './admin/pages/FeedbackAndReviews'
 import AdminTrafficPage from './admin/pages/Traffic'
 import AdminPricingConfigPage from './admin/pages/PricingConfigPage'
 import AdminEmailPage from './admin/pages/EmailComposerPage'
-import AdminAutomationPage from './admin/pages/Automation'
-import AdStudio from './ads/AdStudio'
-import TutorProfilePage from './tutors/tutors-detail/tutors-detail'
-import MessagesPage from './messages/Messages'
-import BookSessionPage from './book/Book'
-import ApplyTutorPage from './Tutor-Application/TutorApplication'
 import Analytics from "./Analytics";
 import AILearningPage from './ai/AiTutor'
 import ShowcasePage from './showcase/ShowCase'
@@ -105,22 +91,11 @@ function App() {
       <Route path="/collab/new" element={<CreateCollabRoom/>}/>
       <Route path="/collab/invite/:shareToken" element={<JoinCollabRoom/>}/>
       <Route path="/collab/:roomId" element={<CollabRoomPage/>}/>
-      <Route path="/tutors/:id" element={<TutorProfilePage/>}/>
-      <Route path="/tutors" element={<TutorsPage/>}/>
       <Route path="/ai_tutor" element={<AILearningPage/>}/>
       <Route path="/ai_tutor/:courseId" element={<AILearningPage/>}/>
       <Route path="/ai_showcase" element={<ShowcasePage/>}/>
-      <Route path="/bookings" element={<BookingsPage/>}/>
-      <Route path="/tutor/dashboard" element={<TutorDashboardPage/>}/>
-      <Route path="/tutor/earnings" element={<TutorEarningsPage/>}/>
-      <Route path="/tutor/availability" element={<TutorAvailabilityPage/>}/>
       <Route path="/price" element={<PricingPage/>}/>
       <Route path="/credits" element={<CreditsDashboardPage/>}/>
-      <Route path="/tutor/profile" element={<TutorProfileEditPage/>}/>
-      <Route path="/tutor/sessions" element={<TutorSessionsPage/>}/>
-      {/* Unified admin dashboard — replaces the old /ai_admin and /admin/*
-          trees. One auth-gated layout (AdminLayout -> RequireAdmin) with
-          nested pages below. */}
       <Route path="/admin" element={<AdminLayout/>}>
         <Route index element={<AdminOverviewPage/>}/>
         <Route path="ai-spend" element={<AdminAiSpendPage/>}/>
@@ -128,18 +103,11 @@ function App() {
         <Route path="courses/:courseId" element={<AdminCoursesPage/>}/>
         <Route path="component-library" element={<AdminComponentLibraryPage/>}/>
         <Route path="users" element={<AdminUsersPage/>}/>
-        <Route path="tutors-bookings" element={<AdminTutorsAndBookingsPage/>}/>
         <Route path="feedback-reviews" element={<AdminFeedbackAndReviewsPage/>}/>
         <Route path="traffic" element={<AdminTrafficPage/>}/>
         <Route path="pricing" element={<AdminPricingConfigPage/>}/>
         <Route path="emails" element={<AdminEmailPage/>}/>
-        <Route path="automation" element={<AdminAutomationPage/>}/>
       </Route>
-      <Route path="/ad-studio" element={<AdStudio/>}/>
-      <Route path="/messages" element={<MessagesPage/>}/>
-      <Route path="/book/:id" element={<BookSessionPage/>}/>
-      <Route path="/apply" element={<ApplyTutorPage/>}/>
-      
     </Routes>
     </MaintenanceGate>
   </AuthProvider>

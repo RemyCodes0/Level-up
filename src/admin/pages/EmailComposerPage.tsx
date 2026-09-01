@@ -3,8 +3,7 @@ import axios from "axios";
 import { PageMeta } from "@/components/PageMeta";
 
 type Mode = "individual" | "broadcast";
-type Audience = "all" | "learners" | "tutors";
-type Counts = { all: number; learners: number; tutors: number; unsubscribed: number };
+type Counts = { all: number; unsubscribed: number };
 type Job = {
   id: string; total: number; sent: number; failed: number;
   status: "running" | "done" | "error"; errors: { email: string; error: string }[];
@@ -40,7 +39,6 @@ export default function EmailComposerPage() {
 
   const [mode, setMode] = useState<Mode>("individual");
   const [to, setTo] = useState("");
-  const [audience, setAudience] = useState<Audience>("all");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [counts, setCounts] = useState<Counts | null>(null);
@@ -58,7 +56,7 @@ export default function EmailComposerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const audienceCount = counts ? counts[audience] : null;
+  const audienceCount = counts ? counts.all : null;
 
   // Build the exact document the recipient will see: {{name}} filled in, and —
   // for broadcasts only — the same unsubscribe footer the backend appends. It's
@@ -107,7 +105,7 @@ export default function EmailComposerPage() {
 
     if (sendMode === "broadcast") {
       const n = audienceCount ?? 0;
-      if (!window.confirm(`Send this to ${n.toLocaleString()} ${audience === "all" ? "users" : audience}? This can't be undone.`))
+      if (!window.confirm(`Send this to ${n.toLocaleString()} users? This can't be undone.`))
         return;
     }
 
@@ -117,7 +115,6 @@ export default function EmailComposerPage() {
         mode: sendMode, subject, html: toEmailHtml(body), text: body.replace(/<[^>]+>/g, ""),
       };
       if (sendMode === "individual") payload.to = to;
-      if (sendMode === "broadcast") payload.audience = audience;
 
       const { data } = await axios.post(`${API}/api/admin/email/send`, payload, auth);
 
@@ -179,20 +176,11 @@ export default function EmailComposerPage() {
             ) : (
               <div>
                 <label className="text-xs font-medium text-slate-400 mb-1.5 block">Audience</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(["all", "learners", "tutors"] as Audience[]).map((a) => {
-                    const active = audience === a;
-                    return (
-                      <button key={a} onClick={() => setAudience(a)}
-                        className={`rounded-xl border px-3 py-3 text-left transition-all ${
-                          active ? "border-amber-500/50 bg-amber-500/10" : "border-slate-800 bg-slate-900 hover:border-slate-700"}`}>
-                        <div className={`text-lg font-bold tabular-nums ${active ? "text-amber-200" : "text-slate-200"}`}>
-                          {counts ? counts[a].toLocaleString() : "—"}
-                        </div>
-                        <div className="text-[11px] capitalize text-slate-500">{a === "all" ? "all users" : a}</div>
-                      </button>
-                    );
-                  })}
+                <div className="rounded-xl border border-amber-500/50 bg-amber-500/10 px-3 py-3">
+                  <div className="text-lg font-bold tabular-nums text-amber-200">
+                    {counts ? counts.all.toLocaleString() : "—"}
+                  </div>
+                  <div className="text-[11px] text-slate-500">all users</div>
                 </div>
                 {counts && counts.unsubscribed > 0 && (
                   <p className="text-[11px] text-slate-500 mt-2">

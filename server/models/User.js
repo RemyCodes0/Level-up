@@ -1,12 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 
-const AvailabilitySchema = new mongoose.Schema({
-  day: { type: String, required: true },
-  from: { type: String, required: true },
-  to: { type: String, required: true },
-});
-
 const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
@@ -26,13 +20,6 @@ const UserSchema = new mongoose.Schema({
   // password.
   authProvider: { type: String, enum: ['local', 'google'], default: 'local' },
   googleId: { type: String, unique: true, sparse: true, default: null },
-  role: { type: String, enum: ['learner', 'tutor'], required: true },
-  major: { type: String },
-  year: { type: Number },
-  subjects: [{ code: String, name: String }],
-  hourlyRate: { type: Number, default: 0 },
-  availability: [AvailabilitySchema],
-  rating: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Review' }],
   verified: { type: Boolean, default: false },
   verificationToken: { type: String, default: null },
   verificationTokenExpires: { type: Date, default: null },
