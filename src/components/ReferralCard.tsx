@@ -1,7 +1,8 @@
 // components/ReferralCard.tsx
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { analytics } from "../lib/analytics";
-import { Copy, Check, Users, Gift, X, Sparkles } from "lucide-react";
+import { Copy, Check, Users, Gift, X, ChevronRight, MessageCircle, Share2 } from "lucide-react";
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
@@ -13,8 +14,29 @@ interface ReferralData {
   creditsPerReferral: number;
 }
 
+const FONT = "'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif";
+
+const MODAL_CSS = `
+@keyframes rc-in { from { opacity: 0; transform: translateY(16px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes rc-fade { from { opacity: 0; } to { opacity: 1; } }
+.rc-in { animation: rc-in .4s cubic-bezier(.2,.7,.2,1) both; }
+.rc-fade { animation: rc-fade .25s ease both; }
+.rc-serif { font-family: 'Instrument Serif', ui-serif, Georgia, serif; font-weight: 400; letter-spacing: -0.012em; }
+`;
+
 function ReferralModal({ link, creditsPerReferral, onClose }: { link: string; creditsPerReferral: number; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
+  const canNativeShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const shareText = `I've been learning with Level Up — it turns any topic into an animated video course. Sign up with my link: ${link}`;
+
+  // Escape closes; lock background scroll while open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prevOverflow; };
+  }, [onClose]);
 
   const handleCopy = async () => {
     try { await navigator.clipboard.writeText(link); }
@@ -29,89 +51,124 @@ function ReferralModal({ link, creditsPerReferral, onClose }: { link: string; cr
     setTimeout(() => setCopied(false), 2500);
   };
 
+  const handleNativeShare = async () => {
+    try { await navigator.share({ title: "Join me on Level Up", text: shareText, url: link }); } catch { /* dismissed */ }
+  };
+
   const steps = [
-    { number: "01", title: "Share your link", description: "Send your invite link to a friend via WhatsApp, text, or email." },
-    { number: "02", title: "Friend signs up", description: "They create a free Level Up account using your link." },
-    { number: "03", title: "Friend verifies their email", description: "They click the confirmation link in their inbox — the same step everyone does to log in." },
-    { number: "04", title: "You earn credits", description: `You get ${creditsPerReferral} credits the moment they verify — no limit, no waiting for a cycle to complete.` },
+    { title: "Share your link", description: "Send it to a friend over WhatsApp, text, or email." },
+    { title: "They sign up", description: "They create a free Level Up account using your link." },
+    { title: "They verify their email", description: "One click on the confirmation link in their inbox — the same step everyone does." },
+    { title: `You earn ${creditsPerReferral} credits`, description: "Credited the moment they verify. No limit, no waiting." },
   ];
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4"
-      style={{ backgroundColor: "rgba(0,0,0,0.5)", backdropFilter: "blur(6px)" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      {/*
-        Bottom sheet on mobile, centered card on desktop.
-        - max-h-[92dvh] + flex-col keeps the whole modal inside the viewport,
-          so the header and the copy button are never clipped off-screen.
-          (dvh — dynamic viewport height — accounts for mobile browser chrome
-          appearing/disappearing, unlike vh which the URL bar can cover.)
-        - The middle section scrolls; the header and the link+copy footer stay
-          pinned, so the primary action is always reachable without scrolling.
-        - pb-[env(safe-area-inset-bottom)] clears the iOS home indicator.
-      */}
-      <div className="flex w-full max-h-[92dvh] flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-h-[90vh] sm:max-w-md sm:rounded-2xl">
-        {/* Gradient header — pinned */}
-        <div className="relative shrink-0 p-5 pb-4 sm:p-6 sm:pb-5" style={{ background: "linear-gradient(135deg, #2563eb, #3b82f6, #60a5fa)" }}>
-          {/* Drag-handle affordance — mobile only, signals the sheet is dismissible */}
-          <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-white/40 sm:hidden" />
-          <button onClick={onClose} className="absolute top-4 right-4 w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-white hover:bg-white/30 transition-colors">
-            <X className="h-3.5 w-3.5" />
+  // Portaled to <body>: the sidebar drawer is CSS-transformed on mobile,
+  // which would otherwise trap a position:fixed modal inside the drawer.
+  return createPortal(
+    <div
+      className="rc-fade fixed inset-0 z-[70] flex items-end justify-center bg-black/70 backdrop-blur-md sm:items-center sm:p-4"
+      style={{ fontFamily: FONT }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="referral-title"
+    >
+      <style>{MODAL_CSS}</style>
+      {/* Bottom sheet on mobile, centered card on desktop. Header + footer
+          pinned; only the middle scrolls (dvh accounts for mobile browser chrome). */}
+      <div className="rc-in relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl bg-[#12141B] text-[#ECEDF2] shadow-2xl ring-1 ring-white/10 sm:max-h-[90vh] sm:max-w-md sm:rounded-3xl">
+        <div className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-[#FFB547]/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-24 -top-10 h-56 w-56 rounded-full bg-[#8B7CFF]/20 blur-3xl" />
+
+        {/* Header */}
+        <div className="relative shrink-0 px-6 pb-5 pt-5 sm:pt-7">
+          <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/15 sm:hidden" />
+          <button onClick={onClose} className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-lg text-[#6E7389] transition-colors hover:bg-white/5 hover:text-white" aria-label="Close">
+            <X className="h-4 w-4" />
           </button>
-          <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-white/20 flex items-center justify-center mb-3">
-            <Gift className="h-6 w-6 text-white" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FFB547]/10 ring-1 ring-[#FFB547]/30">
+            <Gift className="h-5 w-5 text-[#FFB547]" />
           </div>
-          <h2 className="text-lg sm:text-xl font-bold text-white mb-1 pr-9">Invite friends, earn credits</h2>
-          <p className="text-blue-200 text-sm">Every verified friend who signs up = {creditsPerReferral} credits for you. No limit.</p>
+          <h2 id="referral-title" className="rc-serif mt-4 pr-8 text-[32px] leading-[1.05] text-white">Invite friends, earn credits</h2>
+          <p className="mt-2 text-sm text-[#8A8FA3]">
+            Every friend who signs up and verifies = <span className="font-semibold text-[#FFB547]">+{creditsPerReferral} credits</span> for you. No limit.
+          </p>
         </div>
 
-        {/* Scrollable middle: steps + warning */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {/* Steps */}
-          <div className="p-5 space-y-3">
-            {steps.map((step, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <div className="shrink-0 flex flex-col items-center">
-                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
-                    style={{ background: i === 3 ? "linear-gradient(135deg, #22c55e, #16a34a)" : "linear-gradient(135deg, #2563eb, #3b82f6)" }}>
-                    {step.number}
+        {/* Scrollable middle */}
+        <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-6">
+          <ol className="relative space-y-4 pb-5">
+            <span className="absolute bottom-4 left-[15px] top-4 w-px bg-white/[0.08]" aria-hidden="true" />
+            {steps.map((step, i) => {
+              const last = i === steps.length - 1;
+              return (
+                <li key={i} className="relative flex items-start gap-3.5">
+                  <span
+                    className="relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-semibold ring-1"
+                    style={last
+                      ? { background: "#3DDC97", color: "#06130D", boxShadow: "0 0 20px -4px rgba(61,220,151,0.8)" }
+                      : { background: "#12141B", color: "#B9BCCB", borderColor: "transparent", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.12)" }}
+                  >
+                    {last ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : String(i + 1).padStart(2, "0")}
+                  </span>
+                  <div className="min-w-0 pt-1">
+                    <p className={`text-sm font-semibold ${last ? "text-[#7BE8B8]" : "text-white"}`}>{step.title}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-[#8A8FA3]">{step.description}</p>
                   </div>
-                  {i < steps.length - 1 && <div className="w-px h-3 mt-1 bg-slate-200" />}
-                </div>
-                <div className="min-w-0 pt-1">
-                  <p className="text-sm font-semibold text-slate-800">{step.title}</p>
-                  <p className="text-xs text-slate-500 leading-relaxed mt-0.5">{step.description}</p>
-                </div>
-              </div>
-            ))}
-          </div>
+                </li>
+              );
+            })}
+          </ol>
 
-          {/* Warning */}
-          <div className="mx-5 mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-2">
-            <span className="text-amber-500 shrink-0 mt-0.5">⚠️</span>
-            <p className="text-xs text-amber-700 leading-relaxed">
-              <span className="font-semibold">Remember:</span> your friend needs to verify their email (the confirmation link we send them) for your credits to land. Just entering their details without confirming won't trigger it.
+          <div className="mb-5 rounded-xl bg-[#FFB547]/[0.07] p-3.5 ring-1 ring-[#FFB547]/20">
+            <p className="text-xs leading-relaxed text-[#E8C890]">
+              <span className="font-semibold text-[#FFB547]">Heads up:</span> credits only land once your friend clicks the confirmation link we email them. Signing up without verifying won't trigger it.
             </p>
           </div>
         </div>
 
-        {/* Link + copy — pinned footer, always reachable */}
-        <div className="shrink-0 border-t border-slate-100 px-5 pt-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] space-y-2">
-          <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-100 border border-slate-200">
-            <span className="text-xs flex-1 truncate font-mono text-slate-500">{link}</span>
-          </div>
-          <button onClick={handleCopy}
-            className="w-full py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all"
-            style={{
-              background: copied ? "linear-gradient(135deg, #22c55e, #16a34a)" : "linear-gradient(135deg, #2563eb, #3b82f6)",
-              color: "white",
-              boxShadow: copied ? "0 4px 14px rgba(34,197,94,0.4)" : "0 4px 14px rgba(37,99,235,0.4)",
-            }}>
-            {copied ? <><Check className="h-4 w-4" /> Copied! Send it to your friends</> : <><Copy className="h-4 w-4" /> Copy my invite link</>}
+        {/* Pinned footer: link + actions */}
+        <div className="relative shrink-0 space-y-2.5 border-t border-white/[0.06] px-6 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-4">
+          <button
+            onClick={handleCopy}
+            className="flex w-full items-center gap-2 rounded-xl bg-white/[0.03] px-3.5 py-2.5 text-left ring-1 ring-white/[0.08] transition-colors hover:bg-white/[0.06]"
+            title="Copy link"
+          >
+            <span className="flex-1 truncate font-mono text-xs text-[#B9BCCB]">{link}</span>
+            {copied ? <Check className="h-3.5 w-3.5 shrink-0 text-[#3DDC97]" /> : <Copy className="h-3.5 w-3.5 shrink-0 text-[#6E7389]" />}
           </button>
+          <button
+            onClick={handleCopy}
+            className={`flex h-12 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-all ${
+              copied
+                ? "bg-[#3DDC97] text-[#06130D] shadow-[0_10px_30px_-10px_rgba(61,220,151,0.8)]"
+                : "bg-[#8B7CFF] text-[#0A0B10] shadow-[0_10px_30px_-10px_rgba(139,124,255,0.8)] hover:bg-[#A093FF]"
+            }`}
+          >
+            {copied ? <><Check className="h-4 w-4" /> Copied — now send it to a friend</> : <><Copy className="h-4 w-4" /> Copy my invite link</>}
+          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <a
+              href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`flex h-10 items-center justify-center gap-1.5 rounded-xl bg-white/[0.04] text-xs font-medium text-[#D6D8E2] ring-1 ring-white/[0.08] transition-colors hover:bg-white/[0.08] hover:text-white ${canNativeShare ? "" : "col-span-2"}`}
+            >
+              <MessageCircle className="h-3.5 w-3.5 text-[#3DDC97]" /> WhatsApp
+            </a>
+            {canNativeShare && (
+              <button
+                onClick={handleNativeShare}
+                className="flex h-10 items-center justify-center gap-1.5 rounded-xl bg-white/[0.04] text-xs font-medium text-[#D6D8E2] ring-1 ring-white/[0.08] transition-colors hover:bg-white/[0.08] hover:text-white"
+              >
+                <Share2 className="h-3.5 w-3.5" /> More options
+              </button>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -129,54 +186,37 @@ export function ReferralCard() {
 
   if (loading || !data) return null;
 
+  const hasReferrals = data.totalReferrals > 0;
+
   return (
     <>
       {showModal && <ReferralModal link={data.link} creditsPerReferral={data.creditsPerReferral} onClose={() => setShowModal(false)} />}
 
-      <div className="mx-3 mb-3 rounded-2xl overflow-hidden border border-blue-200 shadow-sm"
-        style={{ background: "linear-gradient(135deg, #eff6ff, #dbeafe)" }}>
-
-        {/* Top accent bar */}
-        <div className="h-1 w-full" style={{ background: "linear-gradient(90deg, #2563eb, #3b82f6, #60a5fa)" }} />
-
-        <div className="p-3.5">
-          {/* Header */}
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
-              style={{ background: "linear-gradient(135deg, #2563eb, #3b82f6)" }}>
-              <Gift className="h-4 w-4 text-white" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs font-bold text-slate-800">Invite friends, earn credits</p>
-              <p className="text-xs text-blue-600 font-medium">{data.creditsPerReferral} credits per friend</p>
-            </div>
-          </div>
-
-          {data.totalReferrals === 0 && (
-            <p className="text-xs text-slate-500 mb-3">Invite a friend — you both win once they verify their email.</p>
+      <button
+        onClick={() => setShowModal(true)}
+        className="group relative flex w-full items-center gap-3 overflow-hidden rounded-xl bg-gradient-to-r from-[#FFB547]/[0.1] to-[#8B7CFF]/[0.06] p-3 text-left ring-1 ring-[#FFB547]/20 transition-all hover:ring-[#FFB547]/40"
+        style={{ fontFamily: FONT }}
+      >
+        <span className="pointer-events-none absolute -right-6 -top-6 h-16 w-16 rounded-full bg-[#FFB547]/20 blur-2xl transition-opacity group-hover:opacity-100 opacity-60" />
+        <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#FFB547]/15 ring-1 ring-[#FFB547]/30">
+          <Gift className="h-4 w-4 text-[#FFB547]" />
+        </span>
+        <span className="relative min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-semibold text-white">Invite friends</span>
+          {hasReferrals ? (
+            <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[#8A8FA3]">
+              <Users className="h-3 w-3" />{data.totalReferrals} verified
+              <span className="text-[#3E4253]">·</span>
+              <span className="font-semibold text-[#FFB547]">+{data.creditsEarned} earned</span>
+            </span>
+          ) : (
+            <span className="mt-0.5 block truncate text-[11px] text-[#8A8FA3]">
+              <span className="font-semibold text-[#FFB547]">+{data.creditsPerReferral} credits</span> per friend
+            </span>
           )}
-
-          {/* CTA */}
-          <button onClick={() => setShowModal(true)}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold text-white transition-all hover:opacity-90"
-            style={{ background: "linear-gradient(135deg, #2563eb, #3b82f6)", boxShadow: "0 2px 8px rgba(37,99,235,0.4)" }}>
-            <Sparkles className="h-3.5 w-3.5" />
-            Invite a friend & earn {data.creditsPerReferral} credits
-          </button>
-
-          {/* Stats */}
-          {data.totalReferrals > 0 && (
-            <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-blue-200">
-              <span className="text-xs flex items-center gap-1 text-slate-500">
-                <Users className="h-3 w-3" />{data.totalReferrals} verified
-              </span>
-              <span className="text-xs font-bold text-blue-700">
-                {data.creditsEarned} credit{data.creditsEarned !== 1 ? "s" : ""} earned
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
+        </span>
+        <ChevronRight className="relative h-4 w-4 shrink-0 text-[#6E7389] transition-transform group-hover:translate-x-0.5 group-hover:text-white" />
+      </button>
     </>
   );
 }

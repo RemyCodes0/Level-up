@@ -44,16 +44,64 @@ const MAX_AUTOFIX_FRAME_DRIFT = 10;
 
 // ── Shared low-level checks ──────────────────────────────────────────────────
 
+// Babel's parser gives an EXACT line/column when it needed a semicolon it
+// didn't find — observed as a real, recurring systematic habit on some
+// code-gen models (confirmed live: the identical "Missing semicolon" error
+// recurring across many otherwise-unrelated lessons/chunks, each occurrence
+// forcing a FULL regeneration of the whole chunk — tens of thousands of
+// characters re-generated over what's really a one-character slip). This
+// inserts the exact semicolon Babel itself asked for and re-parses, up to
+// MAX_SEMICOLON_AUTOFIXES times per file, entirely locally — no LLM call,
+// no retry round-trip. A file that still can't parse after that many
+// insertions is treated as a real problem, not this fix's job: falls
+// through to the normal error below unchanged. Every OTHER syntax error
+// (anything not literally "Missing semicolon") is untouched and still
+// throws immediately, exactly as before this existed.
+const MAX_SEMICOLON_AUTOFIXES = 8;
+
+function insertSemicolonAt(source, line, column) {
+  const lines = source.split("\n");
+  const idx = line - 1;
+  if (idx < 0 || idx >= lines.length) return null;
+  const target = lines[idx];
+  if (column < 0 || column > target.length) return null;
+  lines[idx] = target.slice(0, column) + ";" + target.slice(column);
+  return lines.join("\n");
+}
+
+// Returns { ast, code } — `code` is the ORIGINAL text unless a missing-
+// semicolon autofix above actually fired, in which case it's the patched
+// text. Every caller must use THIS returned `code` from here on (for
+// anything it later slices, returns, or hands to a scene's prompt) —
+// continuing to reference its original parameter would silently ship the
+// still-broken text downstream while the AST it validated against was the
+// fixed one.
 function parseTsx(code, label = "Generated code") {
-  try {
-    return parse(code, {
-      sourceType: "module",
-      plugins: ["jsx", "typescript"],
-      errorRecovery: false,
-    });
-  } catch (err) {
-    const loc = err.loc ? ` at line ${err.loc.line}, column ${err.loc.column}` : "";
-    throw new Error(`${label} has a syntax error${loc}: ${err.message}`);
+  let current = code;
+  let fixCount = 0;
+  for (;;) {
+    try {
+      const ast = parse(current, {
+        sourceType: "module",
+        plugins: ["jsx", "typescript"],
+        errorRecovery: false,
+      });
+      if (fixCount > 0) {
+        console.warn(`[validateCode] ${label}: auto-inserted ${fixCount} missing semicolon(s) Babel's parser asked for.`);
+      }
+      return { ast, code: current };
+    } catch (err) {
+      if (/missing semicolon/i.test(err.message || "") && err.loc && fixCount < MAX_SEMICOLON_AUTOFIXES) {
+        const patched = insertSemicolonAt(current, err.loc.line, err.loc.column);
+        if (patched && patched !== current) {
+          current = patched;
+          fixCount++;
+          continue;
+        }
+      }
+      const loc = err.loc ? ` at line ${err.loc.line}, column ${err.loc.column}` : "";
+      throw new Error(`${label} has a syntax error${loc}: ${err.message}`);
+    }
   }
 }
 
@@ -801,7 +849,9 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
   checkBalancedParens(tsxCode);
   checkHasReturn(tsxCode);
 
-  const ast = parseTsx(tsxCode);
+  const parsed = parseTsx(tsxCode);
+  const ast = parsed.ast;
+  tsxCode = parsed.code;
 
   const interpolateErrors = checkInterpolateCalls(ast);
   if (interpolateErrors.length > 0) {
@@ -873,7 +923,9 @@ const CANONICAL_REACT_EXPORTS = ["useMemo", "useCallback", "useRef"];
 // place); the returned string is what should flow into every scene's prompt
 // and into the final stitched file, not the model's original header text.
 function canonicalizeHeaderImports(headerCode) {
-  const ast = parseTsx(headerCode, "Header code");
+  const parsed = parseTsx(headerCode, "Header code");
+  const ast = parsed.ast;
+  headerCode = parsed.code;
 
   // Remove each ImportDeclaration's exact text span, working from the END of
   // the file backwards so earlier removals don't shift not-yet-processed
@@ -1060,7 +1112,9 @@ function validateHeaderFragment(code, { reservedNames = [] } = {}) {
   checkBalancedBraces(code);
   checkBalancedParens(code);
 
-  const ast = parseTsx(code, "Header code");
+  const parsed = parseTsx(code, "Header code");
+  const ast = parsed.ast;
+  code = parsed.code;
 
   checkNoExport(ast);
   checkNoSeriesOrAudioUsage(ast);
@@ -1147,7 +1201,9 @@ function validateHeaderFragment(code, { reservedNames = [] } = {}) {
 // undefined-reference check below distinguish "a real header identifier"
 // from "a hallucinated one."
 function getHeaderExposedNames(headerCode) {
-  const ast = parseTsx(headerCode, "Header code");
+  const parsed = parseTsx(headerCode, "Header code");
+  const ast = parsed.ast;
+  headerCode = parsed.code;
   const declared = checkTopLevelDeclarationNames(ast).map((d) => d.name);
   return new Set([...collectImportedNames(ast), ...declared]);
 }
@@ -1171,7 +1227,9 @@ function getHeaderExposedNames(headerCode) {
 // stitched into the final video and what getHeaderExposedNames validates
 // against — this function must never be used for either of those.
 function compactHeaderForPrompt(headerCode) {
-  const ast = parseTsx(headerCode, "Header code");
+  const parsed = parseTsx(headerCode, "Header code");
+  const ast = parsed.ast;
+  headerCode = parsed.code;
   const PLACEHOLDER = "{ /* implementation already declared above in this header — do not redeclare, just call it */ }";
 
   // (start, end) of the body to blank out, collected then applied
@@ -1226,7 +1284,9 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
     );
   }
 
-  const ast = parseTsx(code, `Scene ${sceneName} code`);
+  const parsed = parseTsx(code, `Scene ${sceneName} code`);
+  const ast = parsed.ast;
+  code = parsed.code;
 
   checkNoExport(ast);
   checkNoSeriesOrAudioUsage(ast);
@@ -1321,7 +1381,9 @@ function validateChunkFragment(code, expectedSceneNames, { availableNames = [] }
     }
   }
 
-  const ast = parseTsx(code, `Chunk (${expectedSceneNames.join(", ")}) code`);
+  const parsed = parseTsx(code, `Chunk (${expectedSceneNames.join(", ")}) code`);
+  const ast = parsed.ast;
+  code = parsed.code;
 
   checkNoExport(ast);
   checkNoSeriesOrAudioUsage(ast);

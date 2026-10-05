@@ -20,6 +20,7 @@ import {
 } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { useEffect, useRef, useState } from "react"
+import { Link } from "react-router-dom"
 
 export function Navbar() {
   const [scrolled, setScrolled] = useState(false)
@@ -68,27 +69,27 @@ export function Navbar() {
 
   const NavLinks = () => (
     <>
-      <a
-        href="/dashboard"
+      <Link
+        to="/dashboard"
         className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors relative group"
       >
         Dashboard
         <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-gradient-to-r from-blue-600 to-purple-600 group-hover:w-full transition-all duration-300" />
-      </a>
-      <a
-        href="/collab"
+      </Link>
+      <Link
+        to="/collab"
         className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors relative group"
       >
         Study Groups
         <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-gradient-to-r from-blue-600 to-purple-600 group-hover:w-full transition-all duration-300" />
-      </a>
-      <a
-        href="/gallery"
+      </Link>
+      <Link
+        to="/gallery"
         className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors relative group"
       >
         Course Gallery
         <span className="absolute -bottom-1 left-0 w-0 h-0.5 bg-gradient-to-r from-blue-600 to-purple-600 group-hover:w-full transition-all duration-300" />
-      </a>
+      </Link>
     </>
   )
 
@@ -102,7 +103,7 @@ export function Navbar() {
     >
       <div className="container mx-auto px-4 h-16 flex items-center justify-between">
         {/* Logo */}
-        <a href="/" className="flex items-center gap-3 group">
+        <Link to="/" className="flex items-center gap-3 group">
           <div className="relative">
             <div className="bg-gradient-to-br from-blue-600 to-purple-600 p-2 rounded-xl shadow-lg group-hover:shadow-xl transition-all duration-300 group-hover:scale-105">
               <img
@@ -117,7 +118,7 @@ export function Navbar() {
           <span className="font-bold text-xl bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
             Level Up
           </span>
-        </a>
+        </Link>
 
         {/* Desktop Navigation */}
         <div className="hidden md:flex items-center gap-8">
@@ -180,16 +181,16 @@ export function Navbar() {
                 <DropdownMenuSeparator className="my-2" />
 
                 <DropdownMenuItem asChild className="cursor-pointer rounded-md hover:bg-blue-50">
-                  <a href="/dashboard" className="flex items-center gap-2 px-2 py-2">
+                  <Link to="/dashboard" className="flex items-center gap-2 px-2 py-2">
                     <LayoutDashboard className="h-4 w-4 text-blue-600" />
                     <span className="font-medium">Dashboard</span>
-                  </a>
+                  </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild className="cursor-pointer rounded-md hover:bg-blue-50">
-                  <a href="/profile" className="flex items-center gap-2 px-2 py-2">
+                  <Link to="/profile" className="flex items-center gap-2 px-2 py-2">
                     <UserIcon className="h-4 w-4 text-purple-600" />
                     <span className="font-medium">Profile</span>
-                  </a>
+                  </Link>
                 </DropdownMenuItem>
 
                 <DropdownMenuSeparator className="my-2" />
@@ -206,19 +207,19 @@ export function Navbar() {
             </DropdownMenu>
           ) : (
             <>
-              <a href="/login" className="hidden md:block">
+              <Link to="/login" className="hidden md:block">
                 <Button
                   variant="ghost"
                   className="font-semibold hover:bg-gray-100"
                 >
                   Sign in
                 </Button>
-              </a>
-              <a href="/signup">
+              </Link>
+              <Link to="/signup">
                 <Button className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 font-semibold shadow-md hover:shadow-lg transition-all">
                   Get Started
                 </Button>
-              </a>
+              </Link>
             </>
           )}
 
@@ -257,12 +258,12 @@ export function Navbar() {
                 <div className="flex flex-col gap-2">
                   <NavLinks />
                   {!user && (
-                    <a
-                      href="/login"
+                    <Link
+                      to="/login"
                       className="text-sm font-medium text-gray-700 hover:text-blue-600 transition-colors"
                     >
                       Sign in
-                    </a>
+                    </Link>
                   )}
                 </div>
               </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/lib/auth-context";
 import { Navbar } from "@/components/navbar/Navbar";
 import { PageMeta } from "@/components/PageMeta";
@@ -189,18 +189,18 @@ export default function DashboardPage() {
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row md:flex-col lg:flex-row">
-              <a href="/tutors">
+              <Link to="/tutors">
                 <Button size="lg" className="w-full gap-2 sm:w-auto">
                   <BookOpen className="h-4 w-4" />
                   Find a Tutor
                 </Button>
-              </a>
-              <a href="/ai_tutor">
+              </Link>
+              <Link to="/ai_tutor">
                 <Button size="lg" variant="outline" className="w-full gap-2 sm:w-auto ">
                   <Sparkles className="h-4 w-4 text-primary" />
                   AI Tutor
                 </Button>
-              </a>
+              </Link>
             </div>
           </div>
         </section>
@@ -445,8 +445,8 @@ function ActionTile({
   primary?: boolean;
 }) {
   return (
-    <a
-      href={href}
+    <Link
+      to={href}
       className={`group flex items-center gap-3 rounded-xl border p-4 transition-all hover:shadow-sm ${
         primary
           ? "border-primary/20 bg-primary/5 hover:border-primary/40"
@@ -467,6 +467,6 @@ function ActionTile({
         <div className="truncate text-xs text-muted-foreground">{subtitle}</div>
       </div>
       <ArrowUpRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-    </a>
+    </Link>
   );
 }

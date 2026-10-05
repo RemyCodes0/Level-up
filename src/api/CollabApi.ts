@@ -21,7 +21,7 @@ export interface CollabRoomSummary {
 export async function createCollabRoom(
   topic: string,
   file: File | null | undefined,
-  opts: { name?: string; visibility: "public" | "invite-only"; completionThreshold: number; level?: string | null }
+  opts: { name?: string; visibility: "public" | "invite-only"; completionThreshold: number; level?: string | null; tier: string }
 ): Promise<{ roomId: string; courseId: string; inviteCode: string; joinUrl: string }> {
   const formData = new FormData();
   if (topic) formData.append("topic", topic);
@@ -30,6 +30,11 @@ export async function createCollabRoom(
   formData.append("visibility", opts.visibility);
   formData.append("completionThreshold", String(opts.completionThreshold));
   if (opts.level) formData.append("level", opts.level);
+  // checkCredits (routes/collab.js) reads this exactly like the solo
+  // /generate route does — see its own comment for the tier vs. legacy
+  // split. Required now: collabController.createRoom reads
+  // req.courseTierSnapshot unconditionally.
+  formData.append("tier", opts.tier);
 
   const res = await fetch(`${BASE_URL}/api/collab/rooms`, {
     method: "POST",

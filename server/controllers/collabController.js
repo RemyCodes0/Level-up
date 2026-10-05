@@ -33,18 +33,40 @@ exports.createRoom = async (req, res) => {
       return res.status(400).json({ error: "Topic or file required" });
     }
 
+    // Set by checkCredits (routes/collab.js runs it the same as the solo
+    // /generate route) — either the selected tier's real shape (already
+    // atomically paid for by checkCredits via spendCredits) or, for a
+    // request that sent no `tier`, the flat LEGACY_COURSE_SHAPE. Mirrors
+    // generateCourseHandler's own handling of this in courseController.js —
+    // see that function's comment for the full tier/legacy split. Fixes a
+    // real bug: this used to ignore the snapshot entirely, always deducting
+    // a flat 1 credit via $inc below while still generating a 6-lesson/
+    // 20-question course regardless of what (if anything) was actually
+    // paid for.
+    const tierSnapshot = req.courseTierSnapshot;
+
     const course = await Course.create({
       userId: req.user._id,
       topic: topic || req.file?.originalname,
       status: "generating",
       isFreeTrialCourse: !!req.usingFreeTrial,
+      tier: tierSnapshot.tier,
+      tierName: tierSnapshot.tierName,
+      lessonCount: tierSnapshot.lessonCount,
+      mcqCount: tierSnapshot.mcqCount,
+      timeAllocationMinutes: tierSnapshot.timeAllocationMinutes,
+      creditCost: tierSnapshot.creditCost,
       lessons: [],
       questions: [],
     });
 
     if (req.usingFreeTrial) {
       await User.findByIdAndUpdate(req.user._id, { freeTrialUsed: true });
-    } else {
+    } else if (!tierSnapshot.tier) {
+      // Legacy no-tier request — checkCredits didn't spend anything for
+      // this path, so deduct the flat 1 credit here exactly as this always
+      // did. Tier path: checkCredits already atomically spent
+      // tierSnapshot.creditCost, so nothing more to deduct here.
       await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
     }
 
@@ -67,8 +89,14 @@ exports.createRoom = async (req, res) => {
     });
 
     // Fire-and-forget, identical to how generateCourseHandler kicks off a
-    // solo course — the response above doesn't wait for generation.
-    processCourse(course._id.toString(), topic, pdfBuffer, !!req.usingFreeTrial, level, sourceFileName);
+    // solo course — the response above doesn't wait for generation. Now
+    // actually passes the tier's lessonCount/mcqCount through (previously
+    // omitted, silently falling back to processCourse's own defaults of
+    // 6 lessons / 20 questions regardless of what was paid for above).
+    processCourse(
+      course._id.toString(), topic, pdfBuffer, !!req.usingFreeTrial, level, sourceFileName,
+      tierSnapshot.lessonCount, tierSnapshot.mcqCount, req.user._id
+    );
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to create collaborative room" });

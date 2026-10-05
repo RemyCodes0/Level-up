@@ -1,19 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import type { ReactNode, CSSProperties } from "react";
 import { Helmet } from "react-helmet-async";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
+import { useNavigate, useParams, Link } from "react-router-dom";
+import { Thumbnail } from "@remotion/player";
+import { PDFDocument } from "pdf-lib";
 import {
   startCourseGeneration,
   pollCourse,
@@ -34,50 +26,57 @@ import type { QuizResult } from "../api/QuizApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer, PlayerErrorBoundary } from "../remotion/DynamicPlayer";
 import type { LessonCrashInfo } from "../remotion/DynamicPlayer";
-import { Thumbnail } from "@remotion/player";
 import { useCompilation } from "../remotion/useCompilation";
 import { ReferralCard } from "../components/ReferralCard";
 import { DownloadLessonButton } from "../components/DownloadLessonButton";
+import { FeedbackModal } from "../feedback/FeedBackModel";
+import { ShareModal } from "../components/ShareModal";
+import { PublishModal } from "../components/PublishModal";
 import { analytics, resetUser } from "../lib/analytics";
-
-// Client-side (WebCodecs) landscape export — the only download format now
-// (vertical/square, which needed a server-side headless-Chrome render, were
-// removed entirely). No server render, no OOM risk. Add
-// VITE_ENABLE_WEB_DOWNLOAD=true to your local .env to enable.
-const WEB_DOWNLOAD_ENABLED = import.meta.env.VITE_ENABLE_WEB_DOWNLOAD === "true";
 import {
-  FileText, Play, CheckCircle, Circle, Lock, Brain, Sparkles,
-  ChevronRight, ChevronLeft, Clock, BarChart2, BookOpen, AlertCircle,
-  Award, TrendingUp, TrendingDown, ClipboardList, Trophy,
-  X, Check, PanelLeft, PenSquare, GraduationCap, Loader2, Trash2, XCircle,
-  CreditCard, Zap, Minus, Plus, MessageSquare, Share2, Globe2,
-  User as UserIcon, LogOut, ChevronsUpDown, Search, Gift,
+  FileText, Play, CheckCircle2, Lock, Sparkles, ChevronRight, ChevronLeft, Clock, AlertCircle,
+  TrendingUp, TrendingDown, ClipboardList, Trophy, X, Check, PanelLeft, PanelRight, Plus,
+  GraduationCap, Loader2, Trash2, XCircle, Zap, MessageSquare, Share2, Globe2,
+  User as UserIcon, LogOut, ChevronsUpDown, Search, Gift, Paperclip, ArrowUp, ArrowRight,
+  Menu, Film, Mic, Wand2, Target, Keyboard, RotateCcw, Users,
 } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config (unchanged semantics)
+// ─────────────────────────────────────────────────────────────────────────────
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
-// The export/download feature now works in production — the backend was
-// migrated to a Docker-based Render service with the system libraries
-// headless Chrome needs (see Dockerfile). No longer gated behind an env var.
+// Client-side (WebCodecs) landscape export — the only download format now.
+// Add VITE_ENABLE_WEB_DOWNLOAD=true to your local .env to enable.
+const WEB_DOWNLOAD_ENABLED = import.meta.env.VITE_ENABLE_WEB_DOWNLOAD === "true";
 
-function useIsMobile(breakpoint = 768) {
-  const [isMobile, setIsMobile] = useState(
-    typeof window !== "undefined" ? window.innerWidth < breakpoint : false
-  );
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    setIsMobile(mq.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, [breakpoint]);
-  return isMobile;
-}
+// No payment processor is live yet — the paywall points to the WhatsApp community.
+const WHATSAPP_COMMUNITY_URL = "https://chat.whatsapp.com/CyuV45KQ9Au3awigE39jBC";
+
+const HISTORY_PAGE_SIZE = 8;
+const MAX_PAGES = 100;
+
+const PROGRESS_DURATION_MS = 6 * 60 * 1000;
+const PROGRESS_TICK_MS = 300;
+const PROGRESS_MAX = 99;
+
+const UP_NEXT_THRESHOLD_SEC = 5;
+const AUTO_ADVANCE_SECONDS = 10;
+const FPS = 30;
+const POSITION_REPORT_INTERVAL_MS = 5000;
+
+const GENERATION_PHASES = ["Planning the scenes…", "Writing narration…", "Recording the voiceover…", "Animating the lesson…"];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
 
 type AppPhase = "upload" | "assessment" | "course";
 type CourseSection = "video" | "quiz" | "results";
 type LessonStatus = "ready" | "generating" | "failed" | "locked";
+type Level = "beginner" | "intermediate" | "advanced" | null;
+type SessionUser = { name: string; email: string; role?: string } | null;
 
 interface HistoryEntry {
   id: string;
@@ -91,13 +90,9 @@ interface HistoryEntry {
   quizDone: boolean;
   questions: MCQQuestion[];
   isFreeTrialCourse?: boolean;
-  // Server-computed, enriched quiz result (score is re-derived server-side,
-  // never trusted from the client) — set once a submission round-trips or a
-  // prior attempt is restored on load. ResultsSection prefers this over
-  // recomputing from quizAnswers when present.
+  // Server-graded quiz result (score never trusted from the client).
   serverQuizResult?: QuizResult | null;
-  // Tier snapshot's quiz time allocation (minutes) — drives QuizSection's
-  // countdown timer. Defaults to 30 (the pre-tiers behavior) if absent.
+  // Tier snapshot's quiz time allocation (minutes). Defaults to 30.
   timeAllocationMinutes?: number;
 }
 
@@ -112,13 +107,7 @@ interface Lesson {
   code?: string | null;
   totalFrames?: number | null;
   error?: string | null;
-  // Per-scene progress while the lesson is still generating — powers a
-  // passive thumbnail filmstrip (no playback). Only ever consulted when
-  // `code` is still null; once `code` exists, that's always used instead.
   sceneProgress?: SceneProgressItem[];
-  // Final scene frame ranges, once the lesson has actually finished
-  // building — lets DynamicPlayer find "the next scene" to auto-skip to
-  // after a render-time crash. See SceneMetaItem's own comment.
   scenes?: SceneMetaItem[];
 }
 
@@ -138,21 +127,42 @@ interface QuizAnswer {
 interface Credits {
   courseCredits: number;
   canGenerate: boolean;
-  // Combined spendable balance (unexpired signup bonus + non-expiring
-  // courseCredits) — what actually determines whether a given course tier
-  // is affordable. courseCredits alone understates this for anyone still
-  // holding signup-bonus credits.
   spendableBalance?: number;
   signupBonusCredits?: number;
   signupBonusExpiresAt?: string | null;
-  // Whether this user has already claimed the one-time feedback credit
-  // bonus — drives the sidebar "Send feedback" button's reward callout.
   feedbackCreditGranted?: boolean;
 }
 
-// Loading-skeleton lessons shown while a course generates, before real data
-// arrives. Length varies by tier (1/3/6 lessons) — the free trial and any
-// legacy no-tier generation still get the original fixed 6.
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
+const cleanName = (n: string) => n.replace(/\.(pdf|pptx)$/i, "");
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const isPlaceholderPoint = (p: string) => !p || p === "Loading…";
+
+const mapStatus = (s?: string): LessonStatus =>
+  s === "ready" ? "ready" : s === "failed" ? "failed" : s === "locked" ? "locked" : "generating";
+
+type ApiLesson = CourseFromAPI["lessons"][number];
+
+// Same merge every poll callback used to inline.
+function mergeLesson(l: Lesson, a: ApiLesson | undefined): Lesson {
+  if (!a) return l;
+  return {
+    ...l,
+    title: a.title ?? l.title,
+    description: a.description ?? l.description,
+    keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints,
+    videoUrl: a.videoUrl,
+    code: a.code ?? l.code,
+    totalFrames: a.totalFrames ?? l.totalFrames,
+    sceneProgress: a.sceneProgress ?? l.sceneProgress,
+    error: a.error ?? null,
+  };
+}
+
 function buildMockLessons(count: number = 6): Lesson[] {
   return Array.from({ length: count }, (_, i) => ({
     id: i + 1,
@@ -167,27 +177,10 @@ function buildMockLessons(count: number = 6): Lesson[] {
   }));
 }
 const MOCK_LESSONS: Lesson[] = buildMockLessons(6);
-
 const MOCK_QUESTIONS: MCQQuestion[] = [];
 
-const HISTORY_PAGE_SIZE = 8;
-
-const PROGRESS_DURATION_MS = 6 * 60 * 1000;
-const PROGRESS_TICK_MS = 300;
-const PROGRESS_MAX = 99;
-
-// The real thing, not a guess: a lesson's generation is exactly two stages
-// — every scene's audio synthesized, then its code generated (in chunks —
-// see onChunkReady in courseController.js) — and sceneProgress already
-// tracks both per-scene, live, via audioReady/codeReady flags written to the
-// DB the instant each one actually lands. Splitting the bar into two equal
-// halves and crediting each scene's slice of ITS half the moment that flag
-// flips gives an accurate percentage for free, no timer or curve involved.
-// Returns null (not 0) when there's nothing to compute yet — the brief
-// window between a lesson entering "generating" and its scene plan actually
-// resolving (see buildLesson's initialProgress write in courseController.js)
-// — so the caller knows to fall back to something else for just that window,
-// not report a real-looking 0% when there simply isn't data yet.
+// Real progress: half audio, half code, credited per scene as each flag flips.
+// null = no scene plan yet (caller falls back to the simulated timer).
 function computeRealLessonProgress(sceneProgress: SceneProgressItem[] | undefined): number | null {
   if (!sceneProgress || sceneProgress.length === 0) return null;
   const total = sceneProgress.length;
@@ -196,16 +189,30 @@ function computeRealLessonProgress(sceneProgress: SceneProgressItem[] | undefine
   return (audioReadyCount / total) * 50 + (codeReadyCount / total) * 50;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Hooks
+// ─────────────────────────────────────────────────────────────────────────────
+
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth < breakpoint : false
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    setIsMobile(mq.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 function useLessonProgress(statuses: LessonStatus[], sceneProgresses: (SceneProgressItem[] | undefined)[]): number[] {
   const [progresses, setProgresses] = useState<number[]>(statuses.map(() => 0));
   const startTimesRef = useRef<(number | null)[]>(statuses.map(() => null));
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusKey = statuses.join(",");
-  // Recomputing only needs to happen when the actual READY COUNTS change —
-  // keying on the raw sceneProgress arrays instead would re-run this effect
-  // (and restart the fallback timer's interval) on every poll tick regardless
-  // of whether anything in them actually changed, since pollCourse always
-  // hands back fresh array references.
+  // Keyed on ready COUNTS, not array identity — pollCourse returns fresh arrays every tick.
   const sceneProgressKey = sceneProgresses
     .map((sp) => (sp ? `${sp.filter((s) => s.audioReady).length}:${sp.filter((s) => s.codeReady).length}` : "-"))
     .join(",");
@@ -225,11 +232,7 @@ function useLessonProgress(statuses: LessonStatus[], sceneProgresses: (SceneProg
       return next;
     });
 
-    // The simulated timer below exists ONLY for the brief pre-scene-plan
-    // window on whichever lesson is first in line — real sceneProgress data
-    // (now applied to EVERY concurrently-generating lesson above, not just
-    // one) covers everything past that. If real data already exists for the
-    // first generating lesson, there's nothing left for the timer to do.
+    // Simulated timer only covers the pre-scene-plan window of the first generating lesson.
     const activeIdx = statuses.findIndex((s) => s === "generating");
     if (activeIdx === -1) return;
     if (computeRealLessonProgress(sceneProgresses[activeIdx]) !== null) return;
@@ -256,54 +259,174 @@ function useLessonProgress(statuses: LessonStatus[], sceneProgresses: (SceneProg
   return progresses;
 }
 
-// No payment processor is live right now (no registered business yet — see
-// notchpayController.js/stripeController.js, both unconfigured). Rather than
-// show a checkout flow that would just fail, this points people straight at
-// the WhatsApp community so they can ask for more credits directly. Revisit
-// once a real processor (Stripe, or Whop as a Merchant-of-Record path that
-// doesn't need a registered business) is actually wired up and working.
-const WHATSAPP_COMMUNITY_URL = "https://chat.whatsapp.com/CyuV45KQ9Au3awigE39jBC";
+// ─────────────────────────────────────────────────────────────────────────────
+// Design system — "Studio": ink surfaces, iris accent, ember for live/recording
+// ─────────────────────────────────────────────────────────────────────────────
+
+const C = {
+  iris: "#8B7CFF",
+  ember: "#FF7A45",
+  mint: "#3DDC97",
+  amber: "#FFB547",
+  rose: "#FF5C6C",
+};
+
+const FONT_HREF =
+  "https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap";
+
+const STUDIO_CSS = `
+@keyframes lu-sweep { 0% { background-position: 150% 0; } 100% { background-position: -50% 0; } }
+@keyframes lu-aurora { 0%,100% { transform: translate3d(-6%,-4%,0) scale(1); } 50% { transform: translate3d(6%,6%,0) scale(1.15); } }
+@keyframes lu-wave { 0%,100% { transform: scaleY(.22); } 50% { transform: scaleY(1); } }
+@keyframes lu-frame { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
+@keyframes lu-rec { 0%,100% { opacity: 1; } 50% { opacity: .2; } }
+@keyframes lu-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes lu-scan { 0% { transform: translateX(-120%); } 100% { transform: translateX(220%); } }
+.lu-rise { animation: lu-rise .55s cubic-bezier(.2,.7,.2,1) both; }
+.lu-serif { font-family: 'Instrument Serif', ui-serif, Georgia, serif; font-weight: 400; letter-spacing: -0.012em; }
+.lu-grain { background-image: radial-gradient(rgba(255,255,255,.04) 1px, transparent 1px); background-size: 3px 3px; }
+.lu-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.1) transparent; }
+.lu-scroll::-webkit-scrollbar { width: 8px; }
+.lu-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 8px; }
+`;
+
+function StudioStyles() {
+  return (
+    <>
+      <Helmet>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link rel="stylesheet" href={FONT_HREF} />
+      </Helmet>
+      <style>{STUDIO_CSS}</style>
+    </>
+  );
+}
+
+const BTN_BASE =
+  "inline-flex items-center justify-center gap-1.5 rounded-xl h-10 px-4 text-[13px] font-medium transition-all duration-200 disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B7CFF]/60";
+const BTN_GHOST = `${BTN_BASE} text-[#B9BCCB] hover:text-white hover:bg-white/[0.06]`;
+const BTN_SOFT = `${BTN_BASE} text-[#E3E5EE] bg-white/[0.05] ring-1 ring-inset ring-white/[0.08] hover:bg-white/[0.09] hover:ring-white/[0.14]`;
+const BTN_PRIMARY = `${BTN_BASE} font-semibold text-[#0A0B10] bg-[#8B7CFF] hover:bg-[#A093FF] shadow-[0_10px_30px_-10px_rgba(139,124,255,0.8)]`;
+const EYEBROW = "text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6E7389]";
+const SURFACE = "rounded-2xl bg-[#11131A] ring-1 ring-white/[0.07]";
+
+function Ring({
+  value, size = 44, stroke = 4, color = C.iris, track = "rgba(255,255,255,0.08)", children,
+}: { value: number; size?: number; stroke?: number; color?: string; track?: string; children?: ReactNode }) {
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const off = circ * (1 - Math.min(Math.max(value, 0), 100) / 100);
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} stroke={track} strokeWidth={stroke} fill="none" />
+        <circle
+          cx={size / 2} cy={size / 2} r={r} stroke={color} strokeWidth={stroke} fill="none"
+          strokeDasharray={circ} strokeDashoffset={off} strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset .8s cubic-bezier(.2,.7,.2,1), stroke .3s" }}
+        />
+      </svg>
+      {children != null && <div className="absolute inset-0 flex items-center justify-center">{children}</div>}
+    </div>
+  );
+}
+
+function Shimmer({ className, style, delay = 0 }: { className?: string; style?: CSSProperties; delay?: number }) {
+  return (
+    <div
+      className={cx("rounded-md bg-white/[0.05]", className)}
+      style={{
+        ...style,
+        backgroundImage: "linear-gradient(110deg, transparent 35%, rgba(255,255,255,0.09) 50%, transparent 65%)",
+        backgroundSize: "250% 100%",
+        animation: "lu-sweep 1.7s ease-in-out infinite",
+        animationDelay: `${delay}s`,
+      }}
+    />
+  );
+}
+
+function RecDot({ color = C.ember }: { color?: string }) {
+  return (
+    <span className="relative inline-flex h-2 w-2">
+      <span className="absolute inset-0 rounded-full" style={{ background: color, animation: "lu-rec 1.4s ease-in-out infinite" }} />
+      <span className="absolute -inset-1 rounded-full opacity-30 blur-[3px]" style={{ background: color }} />
+    </span>
+  );
+}
+
+function Logo({ size = 32 }: { size?: number }) {
+  return (
+    <div
+      className="relative shrink-0 overflow-hidden rounded-[10px] ring-1 ring-white/10 bg-gradient-to-br from-[#8B7CFF] to-[#FF7A45]"
+      style={{ width: size, height: size }}
+    >
+      <img src="/logo.png" alt="Level Up" className="h-full w-full object-cover mix-blend-luminosity opacity-90" />
+    </div>
+  );
+}
+
+function Aurora() {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+      <div
+        className="absolute -top-40 left-1/2 h-[560px] w-[760px] -translate-x-1/2 rounded-full opacity-[0.35] blur-[110px]"
+        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "lu-aurora 18s ease-in-out infinite" }}
+      />
+      <div
+        className="absolute top-1/3 -right-40 h-[420px] w-[520px] rounded-full opacity-[0.18] blur-[110px]"
+        style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)`, animation: "lu-aurora 22s ease-in-out infinite reverse" }}
+      />
+      <div className="absolute inset-0 lu-grain opacity-60" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_40%,#0A0B10_85%)]" />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Paywall
+// ─────────────────────────────────────────────────────────────────────────────
 
 function PaywallModal({ onClose }: { onClose: () => void; courseId?: string | null; courseName?: string }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-8 relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors">
-          <X className="h-5 w-5" />
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-md" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="lu-rise relative w-full max-w-md overflow-hidden rounded-3xl bg-[#12141B] p-7 text-[#ECEDF2] shadow-2xl ring-1 ring-white/10"
+      >
+        <div className="pointer-events-none absolute -right-16 -top-24 h-56 w-56 rounded-full bg-[#3DDC97]/20 blur-3xl" />
+        <button onClick={onClose} className="absolute right-4 top-4 rounded-lg p-1.5 text-[#6E7389] transition-colors hover:bg-white/5 hover:text-white" aria-label="Close">
+          <X className="h-4 w-4" />
         </button>
-
-        <div className="w-14 h-14 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-5">
-          <MessageSquare className="h-7 w-7 text-emerald-600" />
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#3DDC97]/10 ring-1 ring-[#3DDC97]/30">
+          <MessageSquare className="h-5 w-5 text-[#3DDC97]" />
         </div>
-
-        <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center mb-2">Out of credits?</h2>
-        <p className="text-slate-500 text-center text-sm mb-6">
-          We're not set up to sell credit packs directly just yet — reach out and we'll sort you out. Join the Level Up WhatsApp community and send us a message.
+        <h2 className="lu-serif mt-5 text-[32px] leading-tight">Running low on credits?</h2>
+        <p className="mt-2 text-sm leading-relaxed text-[#8A8FA3]">
+          We're not selling credit packs directly just yet. Join the Level Up WhatsApp community, send us a message, and we'll top you up.
         </p>
-
         <a
           href={WHATSAPP_COMMUNITY_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold py-3.5 rounded-xl transition-all shadow-md"
+          className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#3DDC97] text-sm font-semibold text-[#06130D] transition-all hover:brightness-110"
         >
-          <MessageSquare className="h-4 w-4" /> Join the WhatsApp community
+          Join the WhatsApp community <ArrowRight className="h-4 w-4" />
         </a>
-
-        <p className="text-xs text-slate-400 text-center mt-5">You'll still have your 100 free signup credits and anything earned from referrals in the meantime.</p>
+        <p className="mt-4 text-center text-xs text-[#6E7389]">Your 100 signup credits and referral earnings stay yours in the meantime.</p>
       </div>
     </div>
   );
 }
 
-const storedUser = localStorage.getItem("user");
-  const user = storedUser ? JSON.parse(storedUser) : null;
-import { FeedbackModal } from "../feedback/FeedBackModel";
-import { ShareModal } from "../components/ShareModal";
-import { PublishModal } from "../components/PublishModal";
-import { PDFDocument } from "pdf-lib";
+// ─────────────────────────────────────────────────────────────────────────────
+// Composer (new course) + format picker
+// ─────────────────────────────────────────────────────────────────────────────
 
-function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
+const SUGGESTIONS = ["Cell Biology lecture slides", "Calculus II integration techniques", "Data structures & algorithms", "Electromagnetic waves"];
+
+function Composer({ onGenerate, credits, courseTiers, onRequestTopUp }: {
   onGenerate: (fileName: string, file?: File | null, tier?: string | null) => void;
   credits: Credits | null;
   courseTiers: CourseTier[] | null;
@@ -314,20 +437,13 @@ function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [checkingPages, setCheckingPages] = useState(false);
   const [pageCountError, setPageCountError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const MAX_PAGES = 100;
+  const locked = !!(credits && !credits.canGenerate);
 
-  const locked = (credits && !credits.canGenerate);
-
-  // No more free trial (2026-08-21) — EVERY course generation requires
-  // picking one of the 3 tiers first, including a brand-new user's very
-  // first course (spent from their 100-credit signup bonus, same as any
-  // other credits). pendingSubmission holds the validated topic/file while
-  // the picker is shown; onGenerate isn't called until a tier is chosen and
-  // confirmed.
-  const tiersApply = true;
+  // Every generation requires picking a tier first (no free trial since 2026-08-21).
   const [pendingSubmission, setPendingSubmission] = useState<{ name: string; file: File | null } | null>(null);
   const [selectedTierKey, setSelectedTierKey] = useState<string | null>(null);
   const spendableBalance = credits?.spendableBalance ?? credits?.courseCredits ?? 0;
@@ -358,19 +474,14 @@ function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
   };
   const exceedsPageLimit = pageCount !== null && pageCount > MAX_PAGES;
 
+  const clearFile = () => { setUploadedFile(null); setPageCount(null); setPageCountError(null); };
+
   const handleSubmit = () => {
-    if (locked) return;
-    if (exceedsPageLimit) return;
+    if (locked || exceedsPageLimit) return;
     if (!uploadedFile && !inputValue.trim()) return;
     const name = uploadedFile ? uploadedFile.name : inputValue.trim();
-    if (tiersApply) {
-      // Show the tier picker instead of generating immediately — onGenerate
-      // fires from handleConfirmTier once a tier is chosen.
-      setSelectedTierKey(null);
-      setPendingSubmission({ name, file: uploadedFile });
-      return;
-    }
-    onGenerate(name, uploadedFile, null);
+    setSelectedTierKey(null);
+    setPendingSubmission({ name, file: uploadedFile });
   };
   const handleConfirmTier = () => {
     if (!pendingSubmission || !selectedTier) return;
@@ -378,24 +489,21 @@ function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
     setPendingSubmission(null);
     setSelectedTierKey(null);
   };
+  const cancelTier = () => { setPendingSubmission(null); setSelectedTierKey(null); };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (locked) return;
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); }
   };
+
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
     ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
   }, [inputValue]);
 
-  // Picks up a topic typed into the landing page's hero input (see
-  // Landing.tsx's handleHeroSubmit) — it stashes the text in localStorage
-  // and sends the visitor here (straight here if already logged in, via
-  // /signup otherwise, which itself lands back on /ai_tutor after auth).
-  // Pre-filling and focusing means the ONLY thing left to do is press
-  // Enter — no retyping the topic they already committed to on the landing
-  // page. Removed immediately so it doesn't reappear on a later visit.
+  // Picks up a topic typed into the landing page hero (see Landing.tsx).
   useEffect(() => {
     const pending = localStorage.getItem("levelup_pending_prompt");
     if (!pending) return;
@@ -405,289 +513,319 @@ function UploadPhase({ onGenerate, credits, courseTiers, onRequestTopUp }: {
   }, []);
 
   const canSubmit = !locked && !exceedsPageLimit && !checkingPages && (!!uploadedFile || inputValue.trim().length > 0);
-  const suggestions = ["Cell Biology lecture slides", "Calculus II integration techniques", "Data structures & algorithms", "Electromagnetic waves"];
 
   return (
-    <>
-      <div className="min-h-full bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
-        <div className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)] px-4 pb-8">
-          <div className="text-center mb-10">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center mx-auto mb-5 shadow-lg">
-              <div className="bg-gradient-to-br from-blue-600 to-purple-600 p-2 rounded-xl">
-                <img src="/logo.png" alt="Level Up Logo" className="h-8 w-8 object-cover rounded-lg" />
-              </div>
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-2 px-2">What would you like to learn?</h1>
-            <p className="text-muted-foreground text-sm sm:text-base px-2">Describe your topic or upload your course materials — AI generates your full course.</p>
-          </div>
-          <div className="w-full max-w-2xl">
-          {pendingSubmission ? (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-lg p-5 sm:p-6">
-              <div className="flex items-center justify-between mb-1">
-                <h2 className="text-base sm:text-lg font-bold text-slate-900">Choose a course size</h2>
-                <span className="text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-3 py-1 flex items-center gap-1 shrink-0">
-                  <Zap className="h-3 w-3" />{spendableBalance} credit{spendableBalance !== 1 ? "s" : ""} available
-                </span>
-              </div>
-              <p className="text-sm text-muted-foreground mb-4 truncate">For "{pendingSubmission.name}"</p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {(courseTiers ?? []).map((t, i) => {
-                  const affordable = spendableBalance >= t.creditCost;
-                  const selected = selectedTierKey === t.key;
-                  const recommended = i === 1;
-                  const TierIcon = i === 0 ? Zap : i === 2 ? GraduationCap : BookOpen;
-                  const perLesson = t.lessonCount > 0 ? Math.round(t.creditCost / t.lessonCount) : t.creditCost;
-                  return (
-                    <button
-                      key={t.key}
-                      type="button"
-                      disabled={!affordable}
-                      onClick={() => setSelectedTierKey(t.key)}
-                      className={`relative text-left rounded-xl border-2 p-4 pt-5 transition-all ${
-                        !affordable
-                          ? "border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed"
-                          : selected
-                          ? "border-blue-500 bg-blue-50/70 shadow-md shadow-blue-100 sm:scale-[1.02]"
-                          : recommended
-                          ? "border-blue-200 bg-blue-50/30 hover:border-blue-400 hover:shadow-sm"
-                          : "border-slate-200 hover:border-blue-300 hover:bg-blue-50/40"
-                      }`}
-                    >
-                      {recommended && !selected && (
-                        <span className="absolute -top-2.5 left-3 text-[10px] font-bold uppercase tracking-wide text-white bg-gradient-to-r from-blue-600 to-indigo-600 rounded-full px-2 py-0.5 shadow-sm">
-                          Recommended
-                        </span>
-                      )}
-                      {selected && (
-                        <span className="absolute top-3 right-3 h-5 w-5 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
-                          <Check className="h-3 w-3 text-white" />
-                        </span>
-                      )}
-                      <div className={`h-9 w-9 rounded-lg flex items-center justify-center mb-2.5 ${
-                        !affordable ? "bg-slate-200" : selected || recommended ? "bg-gradient-to-br from-blue-500 to-indigo-600" : "bg-slate-100"
-                      }`}>
-                        <TierIcon className={`h-4 w-4 ${!affordable ? "text-slate-400" : selected || recommended ? "text-white" : "text-slate-500"}`} />
-                      </div>
-                      <p className="font-bold text-slate-900 text-sm pr-6">{t.name}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5 mb-3 leading-relaxed">{t.description}</p>
-                      <div className="space-y-1 mb-3">
-                        <p className="text-xs text-slate-600 flex items-center gap-1.5">
-                          <BookOpen className="h-3 w-3 text-slate-400 shrink-0" />{t.lessonCount} lesson{t.lessonCount !== 1 ? "s" : ""}
-                        </p>
-                        <p className="text-xs text-slate-600 flex items-center gap-1.5">
-                          <ClipboardList className="h-3 w-3 text-slate-400 shrink-0" />{t.mcqCount} MCQ · {t.timeAllocationMinutes} min
-                        </p>
-                      </div>
-                      <div className="pt-2.5 border-t border-slate-200/70 flex items-baseline justify-between">
-                        <p className={`text-lg font-extrabold ${selected ? "text-blue-700" : "text-slate-900"}`}>{t.creditCost}<span className="text-xs font-semibold text-muted-foreground ml-1">credits</span></p>
-                        <p className="text-[10px] text-slate-400">~{perLesson}/lesson</p>
-                      </div>
-                      {!affordable && (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); onRequestTopUp(); }}
-                          className="mt-2.5 text-xs font-semibold text-blue-600 hover:text-blue-800 underline underline-offset-2"
-                        >
-                          Need credits? Contact us
-                        </button>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              {selectedTier && (
-                <div className="mt-4 flex flex-col sm:flex-row sm:items-center gap-3 bg-blue-50 border border-blue-100 rounded-xl p-3">
-                  <p className="text-sm text-slate-700 flex-1">
-                    <span className="font-semibold text-blue-900">{selectedTier.name}</span>: {selectedTier.lessonCount} lesson{selectedTier.lessonCount !== 1 ? "s" : ""} + {selectedTier.mcqCount} MCQ ({selectedTier.timeAllocationMinutes} min) — {selectedTier.creditCost} credits
-                  </p>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button onClick={() => { setPendingSubmission(null); setSelectedTierKey(null); }} className="text-xs font-semibold text-slate-500 hover:text-slate-700 px-3 py-2">Cancel</button>
-                    <button onClick={handleConfirmTier} className="text-xs font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-lg px-4 py-2 transition-all shadow-sm flex items-center gap-1.5">
-                      <Sparkles className="h-3.5 w-3.5" />Confirm & Generate
-                    </button>
-                  </div>
-                </div>
-              )}
-              {!selectedTier && (
-                <button onClick={() => { setPendingSubmission(null); setSelectedTierKey(null); }} className="mt-4 text-xs font-semibold text-slate-500 hover:text-slate-700">
-                  ← Back
-                </button>
-              )}
-            </div>
-          ) : (
+    <div className="relative min-h-full">
+      <Aurora />
+      <div className="relative mx-auto flex min-h-full max-w-3xl flex-col justify-center px-4 py-14 sm:px-6 sm:py-20">
+        {pendingSubmission ? (
+          <FormatPicker
+            topic={pendingSubmission.name}
+            tiers={courseTiers}
+            balance={spendableBalance}
+            selectedKey={selectedTierKey}
+            onSelect={setSelectedTierKey}
+            onConfirm={handleConfirmTier}
+            onBack={cancelTier}
+            onRequestTopUp={onRequestTopUp}
+          />
+        ) : (
           <>
-            <div className={`bg-white rounded-2xl border shadow-lg overflow-hidden relative ${locked ? "border-slate-300 opacity-60" : "border-slate-200"}`}>
-              {locked && (
-                <div className="absolute inset-0 z-10 bg-slate-100/50 backdrop-blur-[1px] rounded-2xl flex items-center justify-center cursor-not-allowed">
-                  <div className="text-center px-6">
-                    <Lock className="h-6 w-6 text-slate-400 mx-auto mb-2" />
-                    <p className="text-sm font-semibold text-slate-600">Free trial used</p>
+            <div className="lu-rise mb-9 text-center sm:mb-11">
+              <span className="inline-flex items-center gap-2 rounded-full bg-white/[0.04] px-3 py-1.5 text-[12px] font-medium text-[#B9BCCB] ring-1 ring-white/[0.08]">
+                <RecDot /> AI course studio
+              </span>
+              <h1 className="lu-serif mt-6 text-[42px] leading-[1.02] text-white sm:text-[68px]">
+                What do you want to{" "}
+                <span className="italic bg-gradient-to-r from-[#C3BAFF] via-[#8B7CFF] to-[#FF7A45] bg-clip-text text-transparent">master</span>{" "}
+                next?
+              </h1>
+              <p className="mx-auto mt-5 max-w-lg text-[15px] leading-relaxed text-[#8A8FA3]">
+                Describe a topic or drop in your lecture notes. We script, narrate and animate a full video course — then quiz you on it.
+              </p>
+            </div>
+
+            <div
+              className="lu-rise"
+              style={{ animationDelay: "80ms" }}
+              onDragOver={(e) => { e.preventDefault(); if (!locked) setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); }}
+            >
+              <div
+                className={cx(
+                  "relative rounded-[28px] p-px transition-all duration-300",
+                  dragging
+                    ? "bg-gradient-to-b from-[#8B7CFF] to-[#FF7A45]/60"
+                    : "bg-gradient-to-b from-white/[0.16] to-white/[0.03] focus-within:from-[#8B7CFF]/70 focus-within:to-[#FF7A45]/25"
+                )}
+              >
+                <div className="relative overflow-hidden rounded-[27px] bg-[#101218]/95 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.9)] backdrop-blur-xl">
+                  {locked && (
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#0A0B10]/80 backdrop-blur-sm">
+                      <div className="px-6 text-center">
+                        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[#FFB547]/10 ring-1 ring-[#FFB547]/30">
+                          <Lock className="h-4 w-4 text-[#FFB547]" />
+                        </div>
+                        <p className="text-sm font-semibold text-white">You're out of credits</p>
+                        <button onClick={onRequestTopUp} className="mt-2 text-xs font-medium text-[#B4A9FF] underline-offset-4 hover:underline">
+                          Get more credits →
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {dragging && (
+                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-[#8B7CFF]/10">
+                      <p className="lu-serif text-2xl text-white">Drop to attach</p>
+                    </div>
+                  )}
+
+                  {uploadedFile && (
+                    <div className="px-5 pt-4">
+                      <div
+                        className={cx(
+                          "inline-flex max-w-full flex-wrap items-center gap-2.5 rounded-xl px-3 py-2 text-sm ring-1",
+                          exceedsPageLimit ? "bg-[#FFB547]/[0.08] ring-[#FFB547]/30" : "bg-[#8B7CFF]/[0.08] ring-[#8B7CFF]/25"
+                        )}
+                      >
+                        <div className={cx("flex h-7 w-7 items-center justify-center rounded-lg", exceedsPageLimit ? "bg-[#FFB547]/15" : "bg-[#8B7CFF]/15")}>
+                          <FileText className={cx("h-3.5 w-3.5", exceedsPageLimit ? "text-[#FFB547]" : "text-[#B4A9FF]")} />
+                        </div>
+                        <span className="max-w-[160px] truncate font-medium text-white sm:max-w-[280px]">{uploadedFile.name}</span>
+                        <span className="text-xs text-[#8A8FA3]">{(uploadedFile.size / 1024 / 1024).toFixed(1)} MB</span>
+                        {checkingPages && (
+                          <span className="flex items-center gap-1 text-xs text-[#8A8FA3]">
+                            <Loader2 className="h-3 w-3 animate-spin" /> Checking pages…
+                          </span>
+                        )}
+                        {pageCount !== null && (
+                          <span className={cx("text-xs font-semibold", exceedsPageLimit ? "text-[#FFB547]" : "text-[#B4A9FF]")}>
+                            {pageCount} page{pageCount !== 1 ? "s" : ""}
+                          </span>
+                        )}
+                        <button onClick={clearFile} className="rounded-md p-0.5 text-[#8A8FA3] transition-colors hover:bg-white/10 hover:text-white" aria-label="Remove file">
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      {exceedsPageLimit && (
+                        <p className="mt-2 flex items-center gap-1.5 text-xs text-[#FFB547]">
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                          This PDF has {pageCount} pages — the limit is {MAX_PAGES}. Please trim it before uploading.
+                        </p>
+                      )}
+                      {pageCountError && (
+                        <p className="mt-2 flex items-center gap-1.5 text-xs text-[#FFB547]">
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                          {pageCountError}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="px-5 pb-2 pt-4">
+                    <textarea
+                      ref={textareaRef}
+                      value={inputValue}
+                      onChange={(e) => { if (!locked) setInputValue(e.target.value); }}
+                      onKeyDown={handleKeyDown}
+                      placeholder={locked ? "Out of credits — contact us for more" : "Explain DNA replication and cell division…"}
+                      rows={1}
+                      disabled={locked}
+                      className="w-full resize-none bg-transparent text-[17px] leading-relaxed text-white placeholder:text-[#555A6E] focus:outline-none disabled:cursor-not-allowed"
+                      style={{ minHeight: "52px", maxHeight: "200px" }}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-1">
+                    <div className="flex min-w-0 items-center gap-1">
+                      <input ref={fileRef} type="file" accept=".pdf,.pptx" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); e.target.value = ""; }} />
+                      <button
+                        onClick={() => !locked && fileRef.current?.click()}
+                        disabled={locked}
+                        className="flex h-9 items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-[#B9BCCB] transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
+                        title="Attach PDF or PPTX"
+                      >
+                        <Paperclip className="h-4 w-4" />
+                        <span className="hidden sm:inline">Attach notes</span>
+                      </button>
+                      <span className="hidden truncate text-[11px] text-[#555A6E] sm:inline">PDF ≤ {MAX_PAGES} pages · PPTX · 25MB</span>
+                    </div>
+                    <button
+                      onClick={handleSubmit}
+                      disabled={!canSubmit}
+                      className={cx(
+                        "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all",
+                        canSubmit
+                          ? "bg-[#8B7CFF] text-[#0A0B10] shadow-[0_10px_30px_-8px_rgba(139,124,255,0.9)] hover:scale-105 hover:bg-[#A093FF]"
+                          : "bg-white/[0.05] text-[#555A6E]"
+                      )}
+                      aria-label="Continue"
+                    >
+                      <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+                    </button>
                   </div>
                 </div>
-              )}
-              {uploadedFile && (
-                <div className="px-4 pt-3">
-                  <div className={`inline-flex items-center gap-2 border rounded-lg px-3 py-1.5 text-sm flex-wrap ${exceedsPageLimit ? "bg-amber-50 border-amber-200" : "bg-blue-50 border-blue-200"}`}>
-                    <FileText className={`h-4 w-4 shrink-0 ${exceedsPageLimit ? "text-amber-600" : "text-blue-600"}`} />
-                    <span className={`font-medium max-w-[160px] sm:max-w-[260px] truncate ${exceedsPageLimit ? "text-amber-800" : "text-blue-800"}`}>{uploadedFile.name}</span>
-                    <span className={`text-xs ${exceedsPageLimit ? "text-amber-500" : "text-blue-400"}`}>{(uploadedFile.size / 1024 / 1024).toFixed(1)} MB</span>
-                    {checkingPages && (
-                      <span className="text-xs text-blue-400 flex items-center gap-1">
-                        <Loader2 className="h-3 w-3 animate-spin" /> Checking pages…
-                      </span>
-                    )}
-                    {pageCount !== null && (
-                      <span className={`text-xs font-semibold ${exceedsPageLimit ? "text-amber-700" : "text-blue-500"}`}>
-                        {pageCount} page{pageCount !== 1 ? "s" : ""}
-                      </span>
-                    )}
-                    <button onClick={() => { setUploadedFile(null); setPageCount(null); setPageCountError(null); }} className={`ml-1 ${exceedsPageLimit ? "text-amber-500 hover:text-amber-800" : "text-blue-400 hover:text-blue-700"}`}><X className="h-3.5 w-3.5" /></button>
-                  </div>
-                  {exceedsPageLimit && (
-                    <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
-                      <AlertCircle className="h-3 w-3 shrink-0" />
-                      This PDF has {pageCount} pages — our limit is {MAX_PAGES}. Please trim it before uploading.
-                    </p>
-                  )}
-                  {pageCountError && (
-                    <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
-                      <AlertCircle className="h-3 w-3 shrink-0" />
-                      {pageCountError}
-                    </p>
-                  )}
-                </div>
-              )}
-              <div className="px-4 pt-3 pb-2">
-                <textarea ref={textareaRef} value={inputValue} onChange={(e) => { if (!locked) setInputValue(e.target.value); }} onKeyDown={handleKeyDown}
-                  placeholder={locked ? "Out of credits — contact us for more" : "Explain DNA replication and cell division…"} rows={1}
-                  disabled={locked}
-                  className={`w-full resize-none bg-transparent placeholder:text-slate-400 text-base focus:outline-none leading-relaxed ${locked ? "text-slate-400 cursor-not-allowed" : "text-slate-800"}`}
-                  style={{ minHeight: "40px", maxHeight: "160px" }} />
-              </div>
-              <div className="flex items-center justify-between px-3 pb-3 pt-1 gap-2">
-                <div className="flex items-center gap-1 min-w-0">
-                  <input ref={fileRef} type="file" accept=".pdf,.pptx" className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }} />
-                  <button onClick={() => !locked && fileRef.current?.click()} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all shrink-0 ${locked ? "text-slate-300 cursor-not-allowed" : "text-slate-400 hover:text-slate-600 hover:bg-slate-100"}`} title="Attach PDF or PPTX">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" />
-                    </svg>
-                  </button>
-                  <span className="text-xs text-slate-400 ml-1 hidden sm:inline truncate">PDF ({MAX_PAGES} pages max) · PPTX — up to 25MB</span>
-                  <span className="text-xs text-slate-400 ml-1 sm:hidden">PDF/PPTX</span>
-                </div>
-                <button onClick={handleSubmit} disabled={!canSubmit} className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all shrink-0 ${canSubmit ? "bg-slate-900 text-white hover:bg-slate-700" : "bg-slate-100 text-slate-300 cursor-not-allowed"}`}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" />
-                  </svg>
-                </button>
               </div>
             </div>
-            <div className="mt-4 flex flex-wrap gap-2 justify-center px-2">
-              {suggestions.map((s) => (
-                <button key={s} onClick={() => setInputValue(s)} className="text-xs text-slate-500 bg-white border border-slate-200 rounded-full px-3 py-1.5 hover:border-slate-400 hover:text-slate-700 transition-all shadow-sm">{s}</button>
+
+            <div className="lu-rise mt-5 flex flex-wrap justify-center gap-2" style={{ animationDelay: "160ms" }}>
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => !locked && setInputValue(s)}
+                  className="rounded-full bg-white/[0.03] px-3.5 py-1.5 text-xs text-[#8A8FA3] ring-1 ring-white/[0.07] transition-all hover:bg-white/[0.07] hover:text-white"
+                >
+                  {s}
+                </button>
               ))}
             </div>
-            <p className="text-center text-xs text-slate-400 mt-5 px-2">Full course generated in about 10 minutes</p>
+
+            <div className="lu-rise mt-14 grid grid-cols-3 gap-3 sm:gap-6" style={{ animationDelay: "240ms" }}>
+              {[
+                { icon: Wand2, t: "Describe", d: "A topic or your notes" },
+                { icon: Film, t: "Watch", d: "Narrated, animated lessons" },
+                { icon: Target, t: "Prove it", d: "A graded readiness quiz" },
+              ].map(({ icon: I, t, d }, i) => (
+                <div key={t} className="text-center">
+                  <div className="mx-auto mb-2.5 flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.04] ring-1 ring-white/[0.07]">
+                    <I className="h-4 w-4 text-[#B4A9FF]" />
+                  </div>
+                  <p className="text-[13px] font-semibold text-white"><span className="mr-1 text-[#555A6E]">{pad2(i + 1)}</span>{t}</p>
+                  <p className="mt-0.5 text-[11px] text-[#6E7389] sm:text-xs">{d}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-8 text-center text-xs text-[#555A6E]">A full course is ready in about 10 minutes.</p>
           </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FormatPicker({ topic, tiers, balance, selectedKey, onSelect, onConfirm, onBack, onRequestTopUp }: {
+  topic: string; tiers: CourseTier[] | null; balance: number; selectedKey: string | null;
+  onSelect: (k: string) => void; onConfirm: () => void; onBack: () => void; onRequestTopUp: () => void;
+}) {
+  const selected = tiers?.find((t) => t.key === selectedKey) ?? null;
+  return (
+    <div className="lu-rise">
+      <button onClick={onBack} className={cx(BTN_GHOST, "-ml-3 mb-6 h-8 px-3")}>
+        <ChevronLeft className="h-4 w-4" /> Back
+      </button>
+      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <p className={EYEBROW}>Choose a format</p>
+          <h2 className="lu-serif mt-2 text-4xl leading-tight text-white sm:text-5xl">How deep should we go?</h2>
+          <p className="mt-2 truncate text-sm text-[#8A8FA3]">For “{cleanName(topic)}”</p>
+        </div>
+        <span className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-full bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-[#E3E5EE] ring-1 ring-white/[0.08] sm:self-auto">
+          <Zap className="h-3.5 w-3.5 text-[#FFB547]" /> {balance} credit{balance !== 1 ? "s" : ""} available
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="radiogroup">
+        {!tiers
+          ? [0, 1, 2].map((i) => <Shimmer key={i} className="h-[260px] rounded-2xl" delay={i * 0.15} />)
+          : tiers.map((t, i) => {
+              const affordable = balance >= t.creditCost;
+              const isSel = selectedKey === t.key;
+              const recommended = i === 1;
+              const perLesson = t.lessonCount > 0 ? Math.round(t.creditCost / t.lessonCount) : t.creditCost;
+              return (
+                <div
+                  key={t.key}
+                  role="radio"
+                  aria-checked={isSel}
+                  aria-disabled={!affordable}
+                  tabIndex={affordable ? 0 : -1}
+                  onClick={() => affordable && onSelect(t.key)}
+                  onKeyDown={(e) => { if (affordable && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onSelect(t.key); } }}
+                  className={cx(
+                    "group relative flex flex-col rounded-2xl p-5 text-left outline-none transition-all duration-300",
+                    !affordable
+                      ? "cursor-not-allowed bg-white/[0.02] opacity-50 ring-1 ring-white/[0.05]"
+                      : isSel
+                      ? "cursor-pointer bg-[#8B7CFF]/[0.1] ring-2 ring-[#8B7CFF] shadow-[0_20px_60px_-25px_rgba(139,124,255,0.9)] sm:-translate-y-1"
+                      : "cursor-pointer bg-[#11131A] ring-1 ring-white/[0.08] hover:-translate-y-0.5 hover:ring-white/[0.2] focus-visible:ring-[#8B7CFF]/60"
+                  )}
+                >
+                  {recommended && (
+                    <span className="absolute -top-2.5 left-5 rounded-full bg-gradient-to-r from-[#8B7CFF] to-[#FF7A45] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#0A0B10]">
+                      Most picked
+                    </span>
+                  )}
+                  <span
+                    className={cx(
+                      "absolute right-4 top-4 flex h-5 w-5 items-center justify-center rounded-full ring-1 transition-all",
+                      isSel ? "bg-[#8B7CFF] ring-[#8B7CFF]" : "ring-white/20"
+                    )}
+                  >
+                    {isSel && <Check className="h-3 w-3 text-[#0A0B10]" strokeWidth={3} />}
+                  </span>
+
+                  <p className="pr-6 text-[15px] font-semibold text-white">{t.name}</p>
+                  <p className="mt-1 min-h-[36px] text-xs leading-relaxed text-[#8A8FA3]">{t.description}</p>
+
+                  {/* Lesson count as a strip of frames */}
+                  <div className="mt-4 flex gap-1" aria-hidden="true">
+                    {Array.from({ length: Math.min(t.lessonCount, 12) }).map((_, k) => (
+                      <span key={k} className={cx("h-6 flex-1 rounded-[4px] transition-colors", isSel ? "bg-[#8B7CFF]/70" : "bg-white/[0.1] group-hover:bg-white/[0.16]")} style={{ maxWidth: 22 }} />
+                    ))}
+                  </div>
+                  <div className="mt-3 space-y-1 text-xs text-[#B9BCCB]">
+                    <p className="flex items-center gap-1.5"><Film className="h-3 w-3 text-[#6E7389]" />{t.lessonCount} lesson{t.lessonCount !== 1 ? "s" : ""}</p>
+                    <p className="flex items-center gap-1.5"><ClipboardList className="h-3 w-3 text-[#6E7389]" />{t.mcqCount} questions · {t.timeAllocationMinutes} min</p>
+                  </div>
+
+                  <div className="mt-auto flex items-baseline justify-between border-t border-white/[0.07] pt-4" style={{ marginTop: 20 }}>
+                    <p className="text-2xl font-bold tracking-tight text-white">
+                      {t.creditCost}<span className="ml-1 text-xs font-medium text-[#6E7389]">credits</span>
+                    </p>
+                    <p className="text-[10px] text-[#6E7389]">~{perLesson}/lesson</p>
+                  </div>
+                  {!affordable && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onRequestTopUp(); }}
+                      className="pointer-events-auto mt-3 self-start text-xs font-semibold text-[#B4A9FF] underline-offset-4 hover:underline"
+                      style={{ opacity: 1 }}
+                    >
+                      Need credits? Contact us
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+      </div>
+
+      <div
+        className={cx(
+          "mt-6 flex flex-col gap-3 rounded-2xl p-4 transition-all duration-300 sm:flex-row sm:items-center",
+          selected ? "bg-white/[0.04] ring-1 ring-white/[0.08]" : "pointer-events-none opacity-0"
+        )}
+      >
+        <p className="flex-1 text-sm text-[#B9BCCB]">
+          {selected && (
+            <>
+              <span className="font-semibold text-white">{selected.name}</span> · {selected.lessonCount} lesson{selected.lessonCount !== 1 ? "s" : ""} + {selected.mcqCount}-question quiz · <span className="text-white">{selected.creditCost} credits</span>
+            </>
           )}
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-// A generation-in-progress preview, in the spirit of v0.dev's build
-// animation: instead of a bare spinner, it shows the thing actually being
-// assembled — a filmstrip of scene blocks lighting up in sequence (the
-// lesson's scenes being storyboarded), a narration waveform pulsing (the
-// voiceover being recorded), and a caption that cycles through the real
-// pipeline stages (scene plan -> audio -> animation code) rather than one
-// static "loading" message the whole time.
-const GENERATION_PHASES = ["Planning the scenes…", "Writing narration…", "Recording the voiceover…", "Animating the lesson…"];
-const SCENE_BLOCK_COUNT = 8;
-
-// Shown while a course's full details (lesson code, quiz questions) are
-// being fetched from the server — see restoreEntry's lazy code-backfill
-// fetch and the URL-reading effect in AILearningPage, both of which only
-// run once per course per session (the sidebar's list endpoint deliberately
-// excludes this heavy data — see courseController.js's listCoursesHandler —
-// so opening a course pays one network round trip the first time). This is
-// DELIBERATELY distinct from GeneratingLessonPreview below: that one means
-// "the server is still generating this lesson," this one means "the lesson
-// is already done, we're just fetching it to this browser" — conflating the
-// two was exactly the reported bug (a finished lesson looking stuck
-// "generating" with no way to tell it apart from a genuinely mid-generation
-// one). Plain content-shape placeholders (YouTube/most modern apps' loading
-// pattern) rather than the richer generation-specific animation, since
-// there's no real per-scene progress to show here — just "still loading."
-// A more visible alternative to plain shadcn <Skeleton> (which only pulses
-// opacity) — a diagonal light sweep crossing each box right-to-left, same
-// "angled gradient animated via background-position" technique used by most
-// modern skeleton screens (YouTube, LinkedIn, etc.). Built on top of
-// <Skeleton> (keeps its base color/rounding), the sweep itself is a second,
-// angled gradient layered on top via backgroundImage, animated by sliding
-// backgroundPosition from off-screen-right to off-screen-left. `count` lets
-// each box start its sweep at a different point in the cycle (a shared
-// negative animationDelay) so a grid of them doesn't all sweep in unison,
-// which reads as more alive — same staggering idea GeneratingLessonPreview
-// below already uses for its own filmstrip blocks.
-const SKELETON_SHIMMER_KEYFRAMES = `
-  @keyframes course-skeleton-sweep {
-    0% { background-position: 150% 0; }
-    100% { background-position: -50% 0; }
-  }
-`;
-
-function ShimmerBox({ className, style, delay = 0 }: { className?: string; style?: React.CSSProperties; delay?: number }) {
-  return (
-    <Skeleton
-      className={className}
-      style={{
-        ...style,
-        backgroundImage: "linear-gradient(110deg, transparent 35%, rgba(255,255,255,0.85) 50%, transparent 65%)",
-        backgroundSize: "250% 100%",
-        animation: `course-skeleton-sweep 1.7s ease-in-out infinite`,
-        animationDelay: `${delay}s`,
-      }}
-    />
-  );
-}
-
-function LessonListSkeleton({ count = 6 }: { count?: number }) {
-  return (
-    <div className="px-4 space-y-1" aria-hidden="true">
-      <style>{SKELETON_SHIMMER_KEYFRAMES}</style>
-      {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="flex items-start gap-3 py-3">
-          <ShimmerBox className="h-4 w-4 rounded-full mt-0.5 shrink-0" delay={i * 0.12} />
-          <div className="min-w-0 flex-1 space-y-2">
-            <ShimmerBox className="h-3 w-3/4" delay={i * 0.12} />
-            <ShimmerBox className="h-2.5 w-1/2" delay={i * 0.12} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Mirrors the real main-content pane's shape (a 16:9 video area + a row of
-// action buttons below it) so the swap-in of real content doesn't visually
-// jump once it arrives.
-function CourseContentSkeleton() {
-  return (
-    <div className="space-y-6" aria-hidden="true">
-      <style>{SKELETON_SHIMMER_KEYFRAMES}</style>
-      <ShimmerBox className="w-full rounded-xl" style={{ aspectRatio: "16/9" }} />
-      <div className="flex items-center justify-between gap-2 pt-2">
-        <ShimmerBox className="h-9 w-24 rounded-lg" delay={0.15} />
-        <ShimmerBox className="h-9 w-36 rounded-lg" delay={0.3} />
+        </p>
+        <button onClick={onConfirm} disabled={!selected} className={cx(BTN_PRIMARY, "h-11 px-5")}>
+          <Sparkles className="h-4 w-4" /> Generate course
+        </button>
       </div>
     </div>
   );
 }
 
-function GeneratingLessonPreview() {
+// ─────────────────────────────────────────────────────────────────────────────
+// Generation stages
+// ─────────────────────────────────────────────────────────────────────────────
+
+function GeneratingStage() {
   const [phase, setPhase] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setPhase((p) => (p + 1) % GENERATION_PHASES.length), 3000);
@@ -695,79 +833,55 @@ function GeneratingLessonPreview() {
   }, []);
 
   return (
-    <div className="relative rounded-xl overflow-hidden shadow-xl border border-slate-800 bg-slate-950 aspect-video flex flex-col items-center justify-center text-center px-4 sm:px-6">
-      <style>{`
-        @keyframes lgp-shimmer { 0% { transform: translateX(-120%); } 100% { transform: translateX(220%); } }
-        @keyframes lgp-block { 0%, 100% { opacity: 0.35; transform: scaleY(0.85); } 50% { opacity: 1; transform: scaleY(1); } }
-        @keyframes lgp-wave { 0%, 100% { height: 18%; } 50% { height: 100%; } }
-        @keyframes lgp-drift { 0% { transform: translate(-10%, -10%); } 100% { transform: translate(10%, 10%); } }
-      `}</style>
+    <div className="relative flex aspect-video flex-col items-center justify-center overflow-hidden rounded-2xl bg-[#07080C] px-4 text-center ring-1 ring-white/[0.08]">
+      <div
+        className="pointer-events-none absolute left-1/2 top-1/2 h-[120%] w-[80%] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-25 blur-3xl"
+        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "lu-aurora 10s ease-in-out infinite" }}
+      />
+      <div className="absolute inset-0 lu-grain opacity-50" />
 
-      {/* Ambient drifting glow, consistent with the app's dark-surface accents elsewhere */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div
-          className="absolute -top-1/2 left-1/2 h-[160%] w-[160%] rounded-full bg-blue-600/10 blur-3xl"
-          style={{ animation: "lgp-drift 6s ease-in-out infinite alternate" }}
-        />
-      </div>
+      <span className="relative mb-6 inline-flex items-center gap-2 rounded-full bg-white/[0.05] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#E3E5EE] ring-1 ring-white/10">
+        <RecDot /> In production
+      </span>
 
-      {/* Filmstrip — scene blocks building in, staggered */}
-      <div className="relative z-10 flex items-center gap-1.5 sm:gap-2 mb-6">
-        {Array.from({ length: SCENE_BLOCK_COUNT }).map((_, i) => (
+      <div className="relative mb-6 flex gap-1.5 rounded-lg bg-white/[0.03] p-2 ring-1 ring-white/[0.06]">
+        {Array.from({ length: 8 }).map((_, i) => (
           <div
             key={i}
-            className="relative w-6 h-9 sm:w-8 sm:h-12 rounded-[3px] bg-gradient-to-b from-slate-700 to-slate-800 overflow-hidden"
-            style={{ animation: "lgp-block 2.4s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
-          >
-            <div
-              className="absolute inset-0 w-1/3 bg-gradient-to-r from-transparent via-white/40 to-transparent"
-              style={{ animation: "lgp-shimmer 2.4s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
-            />
-          </div>
-        ))}
-      </div>
-
-      {/* Narration waveform */}
-      <div className="relative z-10 flex items-end justify-center gap-[3px] h-7 sm:h-8 mb-5 w-40 sm:w-48">
-        {Array.from({ length: 20 }).map((_, i) => (
-          <div
-            key={i}
-            className="w-[3px] rounded-full bg-blue-400/80"
-            style={{ animation: "lgp-wave 1s ease-in-out infinite", animationDelay: `${(i % 7) * 0.09}s` }}
+            className="h-9 w-6 rounded-[3px] bg-gradient-to-b from-[#8B7CFF]/60 to-[#FF7A45]/30 sm:h-12 sm:w-8"
+            style={{ animation: "lu-frame 2.4s ease-in-out infinite", animationDelay: `${i * 0.18}s` }}
           />
         ))}
       </div>
 
-      <p className="relative z-10 text-white font-semibold text-base sm:text-lg flex items-center gap-2">
-        <Sparkles className="h-4 w-4 sm:h-5 sm:w-5 text-blue-400" />
-        {GENERATION_PHASES[phase]}
-      </p>
-      <p className="relative z-10 text-white/50 text-xs sm:text-sm mt-1">This usually takes about 6 minutes.</p>
+      <div className="relative mb-6 flex h-7 items-center gap-[3px] sm:h-8">
+        {Array.from({ length: 28 }).map((_, i) => (
+          <span
+            key={i}
+            className="h-full w-[3px] rounded-full bg-[#B4A9FF]/80"
+            style={{ animation: "lu-wave 1.1s ease-in-out infinite", animationDelay: `${(i % 9) * 0.08}s` }}
+          />
+        ))}
+      </div>
+
+      <p key={phase} className="lu-rise lu-serif relative text-2xl text-white sm:text-3xl">{GENERATION_PHASES[phase]}</p>
+      <p className="relative mt-1.5 text-xs text-[#6E7389] sm:text-sm">This usually takes about 6 minutes.</p>
     </div>
   );
 }
 
-// One box per scene in the real progress filmstrip below. Only calls
-// useCompilation (a real Babel transform, not cheap — see useCompilation.ts)
-// once this scene's own previewCode is set, and stays keyed by scene index
-// so React never re-invokes it for a sibling scene's update.
-function SceneThumbnailBox({ scene }: { scene: SceneProgressItem }) {
-  // previewCode is never actually populated by the current chunked codegen
-  // pipeline (chunks generate several scenes' code together, not one scene
-  // at a time, so there's no single-scene source to extract a real preview
-  // from) — codeReady alone is the real, live "this scene's chunk landed"
-  // signal now. hasThumbnail stays as a graceful upgrade path: if previewCode
-  // is ever populated again, a real Thumbnail renders instead of the plain
-  // checkmark, with no other change needed here.
+// Only compiles once this scene's own previewCode exists; keyed by scene index.
+function SceneCell({ scene }: { scene: SceneProgressItem }) {
   const { Component } = useCompilation(scene.previewCode ?? "");
   const ready = scene.codeReady;
   const hasThumbnail = ready && !!scene.previewCode && !!Component;
 
   return (
     <div
-      className={`relative h-12 sm:h-16 rounded-md overflow-hidden border transition-colors duration-500 ${
-        ready ? "border-emerald-500/50 bg-emerald-950/30" : "border-slate-700/60 bg-slate-800"
-      }`}
+      className={cx(
+        "relative h-14 overflow-hidden rounded-lg ring-1 transition-all duration-700 sm:h-20",
+        ready ? "bg-[#3DDC97]/[0.07] ring-[#3DDC97]/40" : "bg-white/[0.03] ring-white/[0.06]"
+      )}
       style={{ flexGrow: scene.durationInFrames ?? 1, flexBasis: 0, flexShrink: 0 }}
       title={scene.label}
     >
@@ -782,98 +896,108 @@ function SceneThumbnailBox({ scene }: { scene: SceneProgressItem }) {
             fps={30}
             style={{ width: "100%", height: "100%", objectFit: "cover" }}
           />
-          <div className="absolute top-1 right-1 bg-emerald-500 rounded-full p-0.5 shadow-md animate-in zoom-in fade-in duration-300">
-            <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />
+          <div className="absolute right-1 top-1 rounded-full bg-[#3DDC97] p-0.5 animate-in zoom-in fade-in duration-300">
+            <Check className="h-2.5 w-2.5 text-[#06130D]" strokeWidth={3} />
           </div>
         </>
       ) : ready ? (
         <div className="absolute inset-0 flex items-center justify-center animate-in zoom-in fade-in duration-300">
-          <Check className="h-4 w-4 sm:h-5 sm:w-5 text-emerald-400" strokeWidth={3} />
+          <Check className="h-4 w-4 text-[#3DDC97] sm:h-5 sm:w-5" strokeWidth={3} />
         </div>
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="h-1.5 w-1.5 rounded-full bg-slate-500 animate-pulse" />
-        </div>
+        <div
+          className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-white/[0.07] to-transparent"
+          style={{ animation: "lu-scan 2.2s ease-in-out infinite" }}
+        />
       )}
     </div>
   );
 }
 
-// Passive progress indicator shown while a lesson is generating: real
-// thumbnails of each scene appearing in place as its code finishes, a
-// checkmark animating in on completion, and a thin companion bar for audio
-// progress (audio finishes ahead of code in the real pipeline). Nothing
-// here is clickable or playable — see the "SceneGenerationFilmstrip" plan.
-function SceneGenerationFilmstrip({ sceneProgress }: { sceneProgress: SceneProgressItem[] }) {
+// NLE-style timeline: a voice track and a picture track filling in live.
+function SceneTimeline({ sceneProgress }: { sceneProgress: SceneProgressItem[] }) {
   const readyCount = sceneProgress.filter((s) => s.codeReady).length;
+  const audioCount = sceneProgress.filter((s) => s.audioReady).length;
+  const pct = Math.round(computeRealLessonProgress(sceneProgress) ?? 0);
 
   return (
-    <div className="relative rounded-xl overflow-hidden shadow-xl border border-slate-800 bg-slate-950 aspect-video flex flex-col items-center justify-center px-4 sm:px-6 gap-4">
-      <div className="w-full max-w-2xl">
-        <p className="text-white/50 text-[11px] sm:text-xs mb-1.5 flex items-center gap-1.5">
-          <Loader2 className="h-3 w-3 animate-spin shrink-0" /> Narration
-        </p>
-        <div className="flex gap-0.5 h-1.5 mb-4 rounded-full overflow-hidden bg-slate-800">
-          {sceneProgress.map((s) => (
-            <div
-              key={s.index}
-              className={`transition-colors duration-500 ${s.audioReady ? "bg-blue-400" : "bg-slate-700"}`}
-              style={{ flexGrow: s.durationInFrames ?? 1, flexBasis: 0, flexShrink: 0 }}
-            />
-          ))}
-        </div>
+    <div className="relative flex aspect-video flex-col overflow-hidden rounded-2xl bg-[#07080C] ring-1 ring-white/[0.08]">
+      <div className="absolute inset-0 lu-grain opacity-40" />
+      <div className="relative flex items-center justify-between px-4 pt-4 sm:px-6 sm:pt-5">
+        <span className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#E3E5EE]">
+          <RecDot /> Building lesson
+        </span>
+        <span className="font-mono text-sm font-semibold tabular-nums text-white">{pct}%</span>
+      </div>
 
-        <p className="text-white/50 text-[11px] sm:text-xs mb-1.5 flex items-center gap-1.5">
-          <Sparkles className="h-3 w-3 shrink-0" /> Scenes
-        </p>
-        <div className="flex gap-1 sm:gap-1.5">
-          {sceneProgress.map((s) => (
-            <SceneThumbnailBox key={s.index} scene={s} />
-          ))}
+      <div className="relative flex flex-1 flex-col justify-center gap-5 px-4 sm:px-8">
+        <div>
+          <div className="mb-2 flex items-center justify-between text-[11px] text-[#8A8FA3]">
+            <span className="flex items-center gap-1.5"><Mic className="h-3 w-3" /> Voice</span>
+            <span className="tabular-nums">{audioCount}/{sceneProgress.length}</span>
+          </div>
+          <div className="flex h-5 gap-1 sm:h-6">
+            {sceneProgress.map((s) => (
+              <div
+                key={s.index}
+                className={cx("relative overflow-hidden rounded-[5px] transition-colors duration-500", s.audioReady ? "bg-[#8B7CFF]/25" : "bg-white/[0.04]")}
+                style={{ flexGrow: s.durationInFrames ?? 1, flexBasis: 0, flexShrink: 0 }}
+              >
+                {s.audioReady && (
+                  <div className="absolute inset-0 flex items-center justify-center gap-[2px] px-1">
+                    {Array.from({ length: 6 }).map((_, k) => (
+                      <span key={k} className="w-[2px] rounded-full bg-[#B4A9FF]" style={{ height: `${30 + ((k * 37 + s.index * 13) % 60)}%` }} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 flex items-center justify-between text-[11px] text-[#8A8FA3]">
+            <span className="flex items-center gap-1.5"><Film className="h-3 w-3" /> Picture</span>
+            <span className="tabular-nums">{readyCount}/{sceneProgress.length}</span>
+          </div>
+          <div className="flex gap-1 sm:gap-1.5">
+            {sceneProgress.map((s) => <SceneCell key={s.index} scene={s} />)}
+          </div>
         </div>
       </div>
 
-      <p className="relative z-10 text-white font-semibold text-sm sm:text-base flex items-center gap-2 mt-1">
-        <Sparkles className="h-4 w-4 text-blue-400 shrink-0" />
-        {readyCount} of {sceneProgress.length} scenes ready
-      </p>
+      <div className="relative px-4 pb-4 sm:px-6 sm:pb-5">
+        <p className="lu-serif text-lg text-white sm:text-xl">{readyCount} of {sceneProgress.length} scenes animated</p>
+        <p className="mt-0.5 text-[11px] text-[#6E7389] sm:text-xs">Lessons build in parallel — feel free to browse the others.</p>
+      </div>
     </div>
   );
 }
 
-// 5 seconds before a lesson ends, if the next one is already generated, show
-// a Coursera-style "Up next" prompt the user can click to jump ahead early
-// instead of waiting for playback to finish naturally.
-const UP_NEXT_THRESHOLD_SEC = 5;
-const FPS = 30;
-// Reporting a position ping on every frameupdate tick would hammer the API
-// (frameupdate fires far more often than this) — 5s is frequent enough to
-// know "where did they leave off" without being chatty.
-const POSITION_REPORT_INTERVAL_MS = 5000;
+// ─────────────────────────────────────────────────────────────────────────────
+// Lesson stage (player + up-next + key points)
+// ─────────────────────────────────────────────────────────────────────────────
 
-function VideoPlayer({
-  lesson, onComplete, onRetry, retrying, retryingLabel, courseId, lessonNumber,
-  nextLessonTitle, nextLessonReady, onPlayNext,
+function LessonStage({
+  lesson, onComplete, onRetry, retrying, retryingLabel, courseId, lessonNumber, totalLessons,
+  nextLessonTitle, nextLessonReady, onPlayNext, controls,
 }: {
-  lesson: Lesson; onComplete: () => void; onRetry?: (info?: LessonCrashInfo) => void; retrying?: boolean; retryingLabel?: string; courseId: string | null; lessonNumber: number;
-  nextLessonTitle?: string | null; nextLessonReady?: boolean; onPlayNext?: () => void;
+  lesson: Lesson; onComplete: () => void; onRetry?: (info?: LessonCrashInfo) => void; retrying?: boolean; retryingLabel?: string;
+  courseId: string | null; lessonNumber: number; totalLessons: number;
+  nextLessonTitle?: string | null; nextLessonReady?: boolean; onPlayNext?: () => void; controls?: ReactNode;
 }) {
   const [showUpNext, setShowUpNext] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [autoAdvanceSeconds, setAutoAdvanceSeconds] = useState<number | null>(null);
+  // Armed right before a Play next / auto-advance — read once by DynamicPlayer
+  // to resume playback on the next lesson without leaving fullscreen.
+  const autoContinueRef = useRef(false);
 
-  // New lesson (including moving to the next one) — reset both so the
-  // prompt can appear again on THIS lesson's own final seconds, not stay
-  // dismissed forever from a previous lesson.
-  useEffect(() => { setShowUpNext(false); setDismissed(false); }, [lessonNumber]);
+  useEffect(() => { setShowUpNext(false); setDismissed(false); setAutoAdvanceSeconds(null); }, [lessonNumber]);
 
-  // lastFrameRef updates on every frameupdate tick (cheap, no network) so a
-  // flush always has an up-to-date value to send; lastSentAtRef gates the
-  // actual POST to once per POSITION_REPORT_INTERVAL_MS.
   const lastFrameRef = useRef(0);
   const lastSentAtRef = useRef(0);
 
-  // Best-effort flush on lesson switch/unmount — otherwise a user who leaves
-  // mid-lesson could lose up to POSITION_REPORT_INTERVAL_MS of granularity.
+  // Best-effort position flush on lesson switch/unmount.
   useEffect(() => {
     return () => {
       if (courseId) logPosition(courseId, lessonNumber, lastFrameRef.current, { keepalive: true }).catch(() => {});
@@ -881,8 +1005,7 @@ function VideoPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, lessonNumber]);
 
-  // Same flush on tab hide/close — pagehide (not beforeunload) survives
-  // bfcache and reliably fires on mobile Safari's tab-switch-as-close too.
+  // Same flush on tab hide/close (pagehide survives bfcache + mobile Safari).
   useEffect(() => {
     if (!courseId) return;
     const flush = () => { logPosition(courseId, lessonNumber, lastFrameRef.current, { keepalive: true }).catch(() => {}); };
@@ -896,7 +1019,6 @@ function VideoPlayer({
       lastSentAtRef.current = Date.now();
       logPosition(courseId, lessonNumber, frame).catch(() => {});
     }
-
     if (!lesson.totalFrames || !nextLessonTitle || !nextLessonReady || dismissed) return;
     const secondsRemaining = (lesson.totalFrames - frame) / FPS;
     setShowUpNext(secondsRemaining > 0 && secondsRemaining <= UP_NEXT_THRESHOLD_SEC);
@@ -905,105 +1027,170 @@ function VideoPlayer({
   const playNext = () => {
     setDismissed(true);
     setShowUpNext(false);
+    setAutoAdvanceSeconds(null);
+    autoContinueRef.current = true;
     onPlayNext?.();
   };
 
-  if (!lesson.code) {
-    return (
-      <div className="space-y-4">
-        {lesson.sceneProgress && lesson.sceneProgress.length > 0 ? (
-          <SceneGenerationFilmstrip sceneProgress={lesson.sceneProgress} />
-        ) : (
-          <GeneratingLessonPreview />
-        )}
-        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
-          <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
-          <ul className="space-y-2">
-            {lesson.keyPoints.map((pt, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
-                <CheckCircle className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />{pt}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      </div>
-    );
-  }
+  const cancelAutoAdvance = () => {
+    setDismissed(true);
+    setShowUpNext(false);
+    setAutoAdvanceSeconds(null);
+  };
+
+  // Countdown kept in a local variable and playNext() called from the interval
+  // callback — never from inside a state updater (StrictMode double-invokes
+  // those, which previously skipped a whole lesson).
+  useEffect(() => {
+    if (!showUpNext) return;
+    let remaining = AUTO_ADVANCE_SECONDS;
+    setAutoAdvanceSeconds(remaining);
+    const interval = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(interval);
+        setAutoAdvanceSeconds(null);
+        playNext();
+      } else {
+        setAutoAdvanceSeconds(remaining);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showUpNext]);
+
   const handleEnded = () => {
     onComplete();
-    // Persists watched state server-side — before this, "completed" was
-    // pure client state (see the old markComplete) and reset to false on
-    // every refresh. courseId is null only for the pre-generation MOCK
-    // preview state, so this never fires for a course that doesn't exist yet.
     if (courseId) markLessonWatched(courseId, lessonNumber).catch((err) => console.error("Failed to persist watched state:", err));
   };
+
+  const points = lesson.keyPoints.filter((p) => p !== "");
+  const pointsLoading = lesson.keyPoints.length > 0 && lesson.keyPoints.every(isPlaceholderPoint);
+  const isBuilding = !lesson.code;
+
   return (
-    <div className="space-y-4">
-      <div className="relative">
-        {/* PlayerErrorBoundary is keyed by the lesson's OWN code — a crash
-            here (e.g. bad generated code calling a hook outside its
-            component, before DynamicPlayer ever reaches Remotion's <Player>)
-            would otherwise take down the whole app, not just this player.
-            A successful "Regenerate this lesson" replaces `code`, changing
-            this key so the boundary mounts fresh instead of staying stuck
-            on the previous crash. */}
-        <PlayerErrorBoundary key={lesson.code ?? "no-code"} onRetry={onRetry} retrying={retrying} retryingLabel={retryingLabel}>
-          <DynamicPlayer
-            key={`lesson-${lessonNumber}-full`}
-            code={lesson.code}
-            durationInFrames={lesson.totalFrames ?? 3600}
-            onEnded={handleEnded}
-            onRetry={onRetry}
-            retrying={retrying}
-            retryingLabel={retryingLabel}
-            onFrameUpdate={handleFrameUpdate}
-            scenes={lesson.scenes}
-            // Passed through as DynamicPlayer's `overlay` prop (rendered
-            // INSIDE its fullscreened container) instead of a sibling div
-            // here — a sibling only shows up in the non-fullscreen view,
-            // since the browser's Fullscreen API renders just the
-            // fullscreened element and its descendants.
-            overlay={showUpNext && (
-              <div className="absolute bottom-4 right-4 z-10 bg-slate-900/95 backdrop-blur rounded-xl shadow-xl border border-white/10 p-3 flex items-center gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="min-w-0">
-                  <p className="text-[11px] text-slate-400 font-medium">Up next</p>
-                  <p className="text-sm text-white font-semibold truncate max-w-[180px]">{nextLessonTitle}</p>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    onClick={() => { setDismissed(true); setShowUpNext(false); }}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
-                    aria-label="Dismiss"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={playNext}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors"
-                  >
-                    <Play className="h-3 w-3 fill-white" /> Play next
-                  </button>
-                </div>
-              </div>
-            )}
-          />
-        </PlayerErrorBoundary>
+    <div className="space-y-6">
+      <div key={lessonNumber} className="lu-rise flex items-end justify-between gap-4">
+        <div className="min-w-0">
+          <p className={EYEBROW}>
+            Lesson {pad2(lessonNumber)} <span className="text-[#3E4253]">/ {pad2(totalLessons)}</span>
+            {lesson.completed && <span className="ml-2 inline-flex items-center gap-1 normal-case tracking-normal text-[#3DDC97]"><CheckCircle2 className="h-3 w-3" /> Watched</span>}
+          </p>
+          <h2 className="lu-serif mt-2 text-3xl leading-[1.08] text-white sm:text-[44px]">{lesson.title}</h2>
+        </div>
+        {!isBuilding && (
+          <span className="hidden shrink-0 items-center gap-1.5 text-xs text-[#6E7389] sm:inline-flex">
+            <Clock className="h-3.5 w-3.5" /> {lesson.duration}
+          </span>
+        )}
       </div>
-      <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
-        <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2 text-sm sm:text-base"><BookOpen className="h-4 w-4 text-blue-600 shrink-0" />Key points in this lesson</h3>
-        <ul className="space-y-2">
-          {lesson.keyPoints.map((pt, i) => (
-            <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
-              <CheckCircle className="h-4 w-4 text-emerald-500 mt-0.5 shrink-0" />{pt}
-            </li>
-          ))}
-        </ul>
-      </Card>
+
+      <div className="relative">
+        <div className="pointer-events-none absolute -inset-6 -z-0 rounded-[32px] opacity-40 blur-3xl" style={{ background: `radial-gradient(60% 60% at 50% 40%, ${C.iris}33, transparent)` }} />
+        <div className="relative overflow-hidden rounded-2xl ring-1 ring-white/[0.08] shadow-[0_40px_100px_-40px_rgba(0,0,0,1)]">
+          {isBuilding ? (
+            lesson.sceneProgress && lesson.sceneProgress.length > 0
+              ? <SceneTimeline sceneProgress={lesson.sceneProgress} />
+              : <GeneratingStage />
+          ) : (
+            // No lesson-scoped `key` on these two — remounting would drop the
+            // fullscreen container on every lesson switch.
+            <PlayerErrorBoundary resetKey={lesson.code ?? "no-code"} onRetry={onRetry} retrying={retrying} retryingLabel={retryingLabel}>
+              <DynamicPlayer
+                code={lesson.code!}
+                durationInFrames={lesson.totalFrames ?? 3600}
+                onEnded={handleEnded}
+                onRetry={onRetry}
+                retrying={retrying}
+                retryingLabel={retryingLabel}
+                onFrameUpdate={handleFrameUpdate}
+                scenes={lesson.scenes}
+                continuePlaybackRef={autoContinueRef}
+                // Rendered INSIDE the fullscreened container so it shows in fullscreen too.
+                overlay={showUpNext && (
+                  <div className="lu-rise absolute bottom-5 right-5 z-10 w-[min(320px,calc(100%-2.5rem))] overflow-hidden rounded-2xl bg-[#0A0B10]/90 text-[#ECEDF2] shadow-2xl ring-1 ring-white/10 backdrop-blur-xl">
+                    <div className="p-4">
+                      <p className="text-[11px] font-medium text-[#8A8FA3]">
+                        Up next{autoAdvanceSeconds != null && <> · plays in <span className="font-semibold tabular-nums text-white">{autoAdvanceSeconds}s</span></>}
+                      </p>
+                      <p className="lu-serif mt-0.5 truncate text-lg text-white">{nextLessonTitle}</p>
+                      <div className="mt-3 flex items-center gap-2">
+                        <button onClick={cancelAutoAdvance} className="flex h-8 flex-1 items-center justify-center gap-1 rounded-lg text-xs font-medium text-[#B9BCCB] ring-1 ring-white/10 transition-colors hover:bg-white/10 hover:text-white">
+                          <X className="h-3.5 w-3.5" /> Cancel
+                        </button>
+                        <button onClick={playNext} className="flex h-8 flex-1 items-center justify-center gap-1 rounded-lg bg-[#8B7CFF] text-xs font-semibold text-[#0A0B10] transition-colors hover:bg-[#A093FF]">
+                          <Play className="h-3 w-3 fill-current" /> Play next
+                        </button>
+                      </div>
+                    </div>
+                    <div className="h-0.5 bg-white/10">
+                      <div
+                        className="h-full bg-[#8B7CFF] transition-[width] duration-1000 ease-linear"
+                        style={{ width: `${((autoAdvanceSeconds ?? 0) / AUTO_ADVANCE_SECONDS) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              />
+            </PlayerErrorBoundary>
+          )}
+        </div>
+      </div>
+
+      {controls}
+
+      <section className="grid gap-6 pt-2 lg:grid-cols-[1fr_1.4fr]">
+        <div>
+          <p className={EYEBROW}>About this lesson</p>
+          {lesson.description && !isPlaceholderPoint(lesson.description) && lesson.description !== "Generating…" && lesson.description !== "Generating your first lesson…" ? (
+            <p className="mt-3 text-[15px] leading-relaxed text-[#B9BCCB]">{lesson.description}</p>
+          ) : (
+            <div className="mt-3 space-y-2">
+              <Shimmer className="h-3 w-full" />
+              <Shimmer className="h-3 w-4/5" delay={0.1} />
+              <Shimmer className="h-3 w-2/3" delay={0.2} />
+            </div>
+          )}
+        </div>
+        <div>
+          <p className={EYEBROW}>Key points</p>
+          <ol className="mt-3 grid gap-2 sm:grid-cols-2">
+            {(pointsLoading ? lesson.keyPoints : points).map((pt, i) => (
+              <li key={i} className={cx(SURFACE, "flex gap-3 p-3.5")}>
+                <span className="font-mono text-[11px] font-semibold text-[#8B7CFF]">{pad2(i + 1)}</span>
+                {isPlaceholderPoint(pt)
+                  ? <span className="flex-1 space-y-1.5 pt-0.5"><Shimmer className="h-2.5 w-full" delay={i * 0.1} /><Shimmer className="h-2.5 w-3/5" delay={i * 0.1} /></span>
+                  : <span className="text-[13px] leading-relaxed text-[#E3E5EE]">{pt}</span>}
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
     </div>
   );
 }
 
-function QuizSection({ questions, onSubmit, timeAllocationMinutes = 30 }: { questions: MCQQuestion[]; onSubmit: (answers: QuizAnswer[]) => void; timeAllocationMinutes?: number }) {
+function CourseContentSkeleton() {
+  return (
+    <div className="space-y-6" aria-hidden="true">
+      <div className="space-y-3">
+        <Shimmer className="h-3 w-28" />
+        <Shimmer className="h-10 w-2/3" delay={0.1} />
+      </div>
+      <Shimmer className="w-full rounded-2xl" style={{ aspectRatio: "16/9" }} delay={0.15} />
+      <div className="flex items-center justify-between gap-2">
+        <Shimmer className="h-10 w-28 rounded-xl" delay={0.2} />
+        <Shimmer className="h-10 w-36 rounded-xl" delay={0.3} />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Quiz
+// ─────────────────────────────────────────────────────────────────────────────
+
+function QuizStage({ questions, onSubmit, timeAllocationMinutes = 30 }: { questions: MCQQuestion[]; onSubmit: (answers: QuizAnswer[]) => void; timeAllocationMinutes?: number }) {
   const [answers, setAnswers] = useState<QuizAnswer[]>([]);
   const [currentQ, setCurrentQ] = useState(0);
   const [timeLeft, setTimeLeft] = useState(timeAllocationMinutes * 60);
@@ -1015,16 +1202,6 @@ function QuizSection({ questions, onSubmit, timeAllocationMinutes = 30 }: { ques
     return () => clearInterval(t);
   }, [submitted, timeLeft]);
 
-  if (!questions || questions.length === 0) {
-    return (
-      <div className="text-center py-16">
-        <Loader2 className="h-8 w-8 text-blue-500 animate-spin mx-auto mb-3" />
-        <p className="text-slate-600">Your assessment is still being prepared…</p>
-      </div>
-    );
-  }
-
-  const answered = (id: number) => answers.find((a) => a.questionId === id);
   const select = (qId: number, opt: number) => {
     setAnswers((prev) => {
       const existing = prev.findIndex((a) => a.questionId === qId);
@@ -1032,68 +1209,147 @@ function QuizSection({ questions, onSubmit, timeAllocationMinutes = 30 }: { ques
       return [...prev, { questionId: qId, selected: opt }];
     });
   };
-  const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+  // Keyboard: A–H / 1–8 answer, ←/→ move.
+  useEffect(() => {
+    if (!questions?.length || submitted) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const q = questions[currentQ];
+      if (!q) return;
+      if (e.key === "ArrowRight") { setCurrentQ((i) => Math.min(questions.length - 1, i + 1)); return; }
+      if (e.key === "ArrowLeft") { setCurrentQ((i) => Math.max(0, i - 1)); return; }
+      if (e.key.length !== 1) return;
+      const k = e.key.toLowerCase();
+      const idx = /[1-8]/.test(k) ? Number(k) - 1 : "abcdefgh".indexOf(k);
+      if (idx >= 0 && idx < q.options.length) { e.preventDefault(); select(q.id, idx); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [questions, currentQ, submitted]);
+
+  if (!questions || questions.length === 0) {
+    return (
+      <div className={cx(SURFACE, "flex flex-col items-center py-20 text-center")}>
+        <Loader2 className="mb-3 h-7 w-7 animate-spin text-[#8B7CFF]" />
+        <p className="lu-serif text-2xl text-white">Your assessment is being prepared…</p>
+      </div>
+    );
+  }
+
+  const answered = (id: number) => answers.find((a) => a.questionId === id);
+  const fmt = (s: number) => { const v = Math.max(s, 0); return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`; };
   const q = questions[currentQ];
+  const totalSeconds = timeAllocationMinutes * 60;
+  const lowTime = timeLeft < 300;
+  const remaining = questions.length - answers.length;
   const handleSubmit = () => { setSubmitted(true); onSubmit(answers); };
 
   return (
-    <div className="space-y-5 sm:space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    <div className="space-y-6">
+      <div className="flex items-end justify-between gap-4">
         <div>
-          <h2 className="text-lg sm:text-xl font-bold text-slate-900 flex items-center gap-2"><ClipboardList className="h-5 w-5 text-purple-600 shrink-0" />Learning Assessment</h2>
-          <p className="text-sm text-muted-foreground">{answers.length} of {questions.length} answered</p>
+          <p className={EYEBROW}>Final assessment</p>
+          <h2 className="lu-serif mt-2 text-3xl text-white sm:text-[44px]">Show what you know</h2>
+          <p className="mt-1 text-sm text-[#8A8FA3]">{answers.length} of {questions.length} answered</p>
         </div>
-        <div className={`self-start sm:self-auto flex items-center gap-2 px-4 py-2 rounded-full font-mono font-bold text-sm ${timeLeft < 300 ? "bg-red-50 text-red-600 border border-red-200" : "bg-slate-100 text-slate-700"}`}>
-          <Clock className="h-4 w-4" />{fmt(timeLeft)}
-        </div>
+        <Ring value={(timeLeft / totalSeconds) * 100} size={68} stroke={4} color={lowTime ? C.rose : C.iris}>
+          <span className={cx("font-mono text-[13px] font-semibold tabular-nums", lowTime ? "text-[#FF5C6C]" : "text-white")}>{fmt(timeLeft)}</span>
+        </Ring>
       </div>
-      <div className="flex flex-wrap gap-1.5">
+
+      <div className="flex gap-1" role="tablist" aria-label="Questions">
         {questions.map((qq, i) => (
-          <button key={qq.id} onClick={() => setCurrentQ(i)} className={`w-7 h-7 rounded-md text-xs font-semibold transition-all ${i === currentQ ? "bg-blue-600 text-white shadow-sm" : answered(qq.id) ? "bg-emerald-100 text-emerald-700 border border-emerald-300" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>{i + 1}</button>
+          <button
+            key={qq.id}
+            onClick={() => setCurrentQ(i)}
+            title={`Question ${i + 1}`}
+            className={cx(
+              "h-1.5 flex-1 rounded-full transition-all hover:h-2.5",
+              i === currentQ ? "bg-[#8B7CFF]" : answered(qq.id) ? "bg-[#3DDC97]/70" : "bg-white/[0.1]"
+            )}
+          />
         ))}
       </div>
-      <Card className="border-0 shadow-lg bg-white/90 backdrop-blur p-4 sm:p-6">
-        <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-          <Badge variant="secondary" className="bg-purple-50 text-purple-700 border-purple-200">{q.topic}</Badge>
-          <span className="text-sm text-muted-foreground font-medium">Q{currentQ + 1} / {questions.length}</span>
+
+      <div key={q.id} className={cx(SURFACE, "lu-rise p-5 sm:p-8")}>
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-2">
+          <span className="rounded-full bg-[#8B7CFF]/10 px-2.5 py-1 text-[11px] font-medium text-[#C3BAFF] ring-1 ring-[#8B7CFF]/25">{q.topic}</span>
+          <span className="font-mono text-xs text-[#6E7389]">Q{pad2(currentQ + 1)} / {pad2(questions.length)}</span>
         </div>
-        <p className="text-base font-medium text-slate-900 mb-5 leading-relaxed">{q.question}</p>
-        <div className="space-y-3">
+        <p className="lu-serif text-2xl leading-snug text-white sm:text-[30px]">{q.question}</p>
+        <div className="mt-6 space-y-2.5">
           {q.options.map((opt, i) => {
             const sel = answered(q.id)?.selected === i;
             return (
-              <button key={i} onClick={() => select(q.id, i)} className={`w-full text-left p-3 sm:p-4 rounded-xl border text-sm transition-all ${sel ? "border-blue-500 bg-blue-50 text-blue-900 font-medium" : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50/50"}`}>
-                <span className={`inline-flex w-6 h-6 rounded-full border text-xs items-center justify-center mr-3 font-semibold shrink-0 ${sel ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 text-slate-500"}`}>{String.fromCharCode(65 + i)}</span>
-                {opt}
+              <button
+                key={i}
+                onClick={() => select(q.id, i)}
+                className={cx(
+                  "group flex w-full items-center gap-3.5 rounded-xl p-3.5 text-left text-[14px] ring-1 transition-all sm:p-4",
+                  sel
+                    ? "bg-[#8B7CFF]/[0.12] text-white ring-[#8B7CFF]"
+                    : "bg-white/[0.02] text-[#D6D8E2] ring-white/[0.08] hover:bg-white/[0.05] hover:ring-white/[0.18]"
+                )}
+              >
+                <span
+                  className={cx(
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-xs font-semibold transition-colors",
+                    sel ? "bg-[#8B7CFF] text-[#0A0B10]" : "bg-white/[0.06] text-[#8A8FA3] group-hover:text-white"
+                  )}
+                >
+                  {String.fromCharCode(65 + i)}
+                </span>
+                <span className="leading-relaxed">{opt}</span>
               </button>
             );
           })}
         </div>
-      </Card>
+      </div>
+
       <div className="flex items-center justify-between gap-2">
-        <Button variant="outline" onClick={() => setCurrentQ((qi) => Math.max(0, qi - 1))} disabled={currentQ === 0} className="text-xs sm:text-sm px-3 sm:px-4"><ChevronLeft className="h-4 w-4 mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
+        <button onClick={() => setCurrentQ((qi) => Math.max(0, qi - 1))} disabled={currentQ === 0} className={BTN_SOFT}>
+          <ChevronLeft className="h-4 w-4" /><span className="hidden sm:inline">Previous</span>
+        </button>
+        <span className="hidden items-center gap-1.5 text-[11px] text-[#555A6E] md:inline-flex">
+          <Keyboard className="h-3.5 w-3.5" /> A–D to answer · ← → to move
+        </span>
         {currentQ < questions.length - 1 ? (
-          <Button onClick={() => setCurrentQ((qi) => Math.min(questions.length - 1, qi + 1))} className="bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm px-3 sm:px-4"><span className="hidden sm:inline">Next</span> <ChevronRight className="h-4 w-4 ml-1" /></Button>
+          <button onClick={() => setCurrentQ((qi) => Math.min(questions.length - 1, qi + 1))} className={BTN_PRIMARY}>
+            Next<ChevronRight className="h-4 w-4" />
+          </button>
         ) : (
-          <Button onClick={handleSubmit} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs sm:text-sm px-3 sm:px-4" disabled={answers.length < questions.length}><Trophy className="h-4 w-4 mr-2 shrink-0" /><span className="hidden sm:inline">Submit </span>Assessment</Button>
+          <button onClick={handleSubmit} disabled={answers.length < questions.length} className={BTN_PRIMARY}>
+            <Trophy className="h-4 w-4" />Submit assessment
+          </button>
         )}
       </div>
-      {answers.length < questions.length && currentQ === questions.length - 1 && (
-        <p className="text-center text-xs text-amber-600">{questions.length - answers.length} question{questions.length - answers.length !== 1 ? "s" : ""} still unanswered</p>
+      {remaining > 0 && currentQ === questions.length - 1 && (
+        <p className="text-center text-xs text-[#FFB547]">{remaining} question{remaining !== 1 ? "s" : ""} still unanswered</p>
       )}
     </div>
   );
 }
 
-function ResultsSection({
-  answers, questions, serverResult, courseId,
+// ─────────────────────────────────────────────────────────────────────────────
+// Results
+// ─────────────────────────────────────────────────────────────────────────────
+
+function readinessTone(pct: number) {
+  if (pct >= 85) return { color: C.mint, label: "Exam Ready" };
+  if (pct >= 70) return { color: C.iris, label: "Almost Ready" };
+  if (pct >= 55) return { color: C.amber, label: "Needs Review" };
+  return { color: C.rose, label: "Needs Practice" };
+}
+
+function ResultsStage({
+  answers, questions, serverResult, courseId, onFeedback,
 }: {
-  answers: QuizAnswer[]; questions: MCQQuestion[]; serverResult?: QuizResult | null; courseId?: string | null;
+  answers: QuizAnswer[]; questions: MCQQuestion[]; serverResult?: QuizResult | null; courseId?: string | null; onFeedback: () => void;
 }) {
-  // Prefer the server-graded result (score is never trusted from the client
-  // — see quizController.js's scoreAnswers) once the submit round-trip has
-  // resolved; fall back to the client computation only for the brief window
-  // before that, so results still render instantly on submit.
+  // Prefer the server-graded result; client computation only bridges the round-trip.
   const clientScore = answers.filter((a) => { const q = questions.find((q) => q.id === a.questionId); return q && q.correct === a.selected; }).length;
   const clientPct = questions.length > 0 ? Math.round((clientScore / questions.length) * 100) : 0;
   const clientTopics = Object.entries(
@@ -1109,204 +1365,221 @@ function ResultsSection({
   const score = serverResult?.score ?? clientScore;
   const total = serverResult?.total ?? questions.length;
   const pct = serverResult?.pct ?? clientPct;
-  const topics = serverResult
-    ? [...serverResult.topicBreakdown].sort((a, b) => b.pct - a.pct)
-    : clientTopics;
+  const topics = serverResult ? [...serverResult.topicBreakdown].sort((a, b) => b.pct - a.pct) : clientTopics;
   const strengths = topics.filter((t) => t.pct >= 70);
   const weaknesses = topics.filter((t) => t.pct < 70);
-  const readinessLabel = serverResult?.readinessLabel ?? (pct >= 85 ? "Exam Ready" : pct >= 70 ? "Almost Ready" : pct >= 55 ? "Needs Review" : "Needs Practice");
-  const readinessColor = pct >= 85 ? "emerald" : pct >= 70 ? "blue" : pct >= 55 ? "amber" : "red";
+  const tone = readinessTone(pct);
+  const readinessLabel = serverResult?.readinessLabel ?? tone.label;
 
   const [suggestions, setSuggestions] = useState<NextCourseSuggestion[] | null>(null);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
   return (
     <div className="space-y-6">
-      <Card className="border-0 shadow-lg bg-white/90 backdrop-blur overflow-hidden">
-        <div className={`bg-${readinessColor}-50 border-b border-${readinessColor}-100 p-4 sm:p-6`}>
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div>
-              <h2 className="text-lg sm:text-2xl font-bold text-slate-900 flex items-center gap-2"><Award className={`h-5 w-5 sm:h-6 sm:w-6 text-${readinessColor}-600 shrink-0`} />Your Learning Readiness Score</h2>
-              <p className="text-muted-foreground mt-1 text-sm sm:text-base">{score} / {total} correct</p>
-            </div>
+      <div className={cx(SURFACE, "lu-rise relative overflow-hidden p-6 sm:p-9")}>
+        <div className="pointer-events-none absolute -right-20 -top-20 h-72 w-72 rounded-full opacity-25 blur-3xl" style={{ background: tone.color }} />
+        <div className="relative flex flex-col items-center gap-7 sm:flex-row sm:gap-10">
+          <Ring value={pct} size={168} stroke={10} color={tone.color}>
             <div className="text-center">
-              <div className={`text-4xl sm:text-5xl font-black text-${readinessColor}-600`}>{pct}%</div>
-              <Badge className={`bg-${readinessColor}-100 text-${readinessColor}-700 border-${readinessColor}-200 mt-1`}>{readinessLabel}</Badge>
+              <p className="lu-serif text-6xl leading-none text-white">{pct}<span className="text-3xl text-[#6E7389]">%</span></p>
             </div>
+          </Ring>
+          <div className="text-center sm:text-left">
+            <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1" style={{ color: tone.color, background: `${tone.color}14`, borderColor: tone.color, boxShadow: `inset 0 0 0 1px ${tone.color}40` }}>
+              <Trophy className="h-3.5 w-3.5" /> {readinessLabel}
+            </span>
+            <h2 className="lu-serif mt-3 text-4xl text-white sm:text-5xl">Your readiness score</h2>
+            <p className="mt-1.5 text-[15px] text-[#8A8FA3]">{score} of {total} answered correctly</p>
+            {serverResult?.trend && (
+              <p className="mt-3 inline-flex items-center gap-1.5 text-sm text-[#B9BCCB]">
+                {serverResult.trend.delta >= 0
+                  ? <TrendingUp className="h-4 w-4 text-[#3DDC97]" />
+                  : <TrendingDown className="h-4 w-4 text-[#FF5C6C]" />}
+                {serverResult.trend.delta > 0 ? "+" : ""}{serverResult.trend.delta}% vs. last attempt ({serverResult.trend.previousPct}%) · attempt #{serverResult.trend.attemptNumber}
+              </p>
+            )}
           </div>
-          <div className="mt-4">
-            <div className="w-full bg-white/60 rounded-full h-3">
-              <div className={`bg-${readinessColor}-500 h-3 rounded-full transition-all duration-1000`} style={{ width: `${pct}%` }} />
-            </div>
-          </div>
+        </div>
+      </div>
 
-          {serverResult?.trend && (
-            <div className="mt-3 flex items-center gap-2 text-sm text-slate-700">
-              <TrendingUp className={`h-4 w-4 ${serverResult.trend.delta >= 0 ? "text-emerald-600" : "text-red-500 rotate-180"}`} />
-              {serverResult.trend.delta > 0 ? "+" : ""}{serverResult.trend.delta}% vs. your last attempt ({serverResult.trend.previousPct}%) · attempt #{serverResult.trend.attemptNumber}
-            </div>
-          )}
-        </div>
-        <div className="p-4 sm:p-6">
-          <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2 text-sm sm:text-base"><BarChart2 className="h-4 w-4 text-slate-500 shrink-0" /> Topic breakdown</h3>
-          <div className="space-y-3">
-            {topics.map(({ topic, pct: tPct, correct, total }) => (
-              <div key={topic}>
-                <div className="flex justify-between text-sm mb-1 gap-2">
-                  <span className="text-slate-700 font-medium truncate">{topic}</span>
-                  <span className={`font-semibold shrink-0 ${tPct >= 70 ? "text-emerald-600" : "text-red-500"}`}>{correct}/{total} · {tPct}%</span>
-                </div>
-                <div className="w-full bg-slate-100 rounded-full h-2">
-                  <div className={`h-2 rounded-full ${tPct >= 70 ? "bg-emerald-500" : "bg-red-400"}`} style={{ width: `${tPct}%` }} />
-                </div>
+      <div className={cx(SURFACE, "p-5 sm:p-7")}>
+        <p className={EYEBROW}>Topic breakdown</p>
+        <div className="mt-5 space-y-4">
+          {topics.map(({ topic, pct: tPct, correct, total: tTotal }) => (
+            <div key={topic}>
+              <div className="mb-1.5 flex justify-between gap-2 text-sm">
+                <span className="truncate font-medium text-[#E3E5EE]">{topic}</span>
+                <span className="shrink-0 font-mono text-xs tabular-nums" style={{ color: tPct >= 70 ? C.mint : C.rose }}>{correct}/{tTotal} · {tPct}%</span>
               </div>
-            ))}
-          </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${tPct}%`, background: tPct >= 70 ? C.mint : C.rose }} />
+              </div>
+            </div>
+          ))}
         </div>
-      </Card>
-      <div className="grid sm:grid-cols-2 gap-4">
-        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
-          <h3 className="font-semibold text-emerald-700 mb-3 flex items-center gap-2 text-sm sm:text-base"><TrendingUp className="h-4 w-4 shrink-0" /> Strengths</h3>
-          {strengths.length === 0 ? <p className="text-sm text-muted-foreground">Keep studying — strengths will emerge!</p> : (
-            <ul className="space-y-2">{strengths.map(({ topic, pct: tPct }) => (
-              <li key={topic} className="flex items-center justify-between text-sm gap-2">
-                <span className="flex items-center gap-2 truncate"><Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />{topic}</span>
-                <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs shrink-0">{tPct}%</Badge>
-              </li>
-            ))}</ul>
-          )}
-        </Card>
-        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
-          <h3 className="font-semibold text-red-600 mb-3 flex items-center gap-2 text-sm sm:text-base"><TrendingDown className="h-4 w-4 shrink-0" /> Needs review</h3>
-          {weaknesses.length === 0 ? <p className="text-sm text-muted-foreground">Excellent — no weak areas detected!</p> : (
-            <ul className="space-y-2">{weaknesses.map(({ topic, pct: tPct }) => (
-              <li key={topic} className="flex items-center justify-between text-sm gap-2">
-                <span className="flex items-center gap-2 truncate"><AlertCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />{topic}</span>
-                <Badge className="bg-red-50 text-red-600 border-red-200 text-xs shrink-0">{tPct}%</Badge>
-              </li>
-            ))}</ul>
-          )}
-        </Card>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        {[
+          { title: "Strengths", items: strengths, color: C.mint, Icon: TrendingUp, empty: "Keep studying — strengths will emerge." },
+          { title: "Needs review", items: weaknesses, color: C.rose, Icon: TrendingDown, empty: "Excellent — no weak areas detected." },
+        ].map(({ title, items, color, Icon, empty }) => (
+          <div key={title} className={cx(SURFACE, "p-5")}>
+            <p className="flex items-center gap-2 text-sm font-semibold" style={{ color }}><Icon className="h-4 w-4" /> {title}</p>
+            {items.length === 0 ? (
+              <p className="mt-3 text-sm text-[#6E7389]">{empty}</p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {items.map(({ topic, pct: tPct }) => (
+                  <li key={topic} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="truncate text-[#D6D8E2]">{topic}</span>
+                    <span className="shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[11px]" style={{ color, background: `${color}14` }}>{tPct}%</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
       </div>
 
       {serverResult && serverResult.missedQuestions.length > 0 && (
-        <Card className="border-0 shadow-md bg-white/80 backdrop-blur p-4 sm:p-5">
-          <h3 className="font-semibold text-slate-800 mb-3 text-sm sm:text-base">Review missed questions ({serverResult.missedQuestions.length})</h3>
-          <div className="space-y-3">
+        <div className={cx(SURFACE, "p-5 sm:p-7")}>
+          <p className={EYEBROW}>Review missed questions · {serverResult.missedQuestions.length}</p>
+          <div className="mt-4 space-y-3">
             {serverResult.missedQuestions.map((m) => (
-              <div key={m.questionId} className="border-l-2 border-red-300 pl-3">
-                <p className="text-sm font-medium text-slate-800">{m.question}</p>
-                <p className="text-xs text-slate-500 mt-1">Your answer: <span className="text-red-500">{m.yourAnswer ?? "No answer"}</span></p>
-                <p className="text-xs text-slate-500">Correct answer: <span className="text-emerald-600">{m.correctAnswer}</span></p>
+              <div key={m.questionId} className="rounded-xl bg-white/[0.02] p-4 ring-1 ring-white/[0.06]">
+                <p className="text-sm font-medium leading-relaxed text-white">{m.question}</p>
+                <div className="mt-3 grid gap-1.5 text-xs sm:grid-cols-2">
+                  <p className="flex items-start gap-1.5 text-[#8A8FA3]"><X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#FF5C6C]" /><span>You: <span className="text-[#FF8A95]">{m.yourAnswer ?? "No answer"}</span></span></p>
+                  <p className="flex items-start gap-1.5 text-[#8A8FA3]"><Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#3DDC97]" /><span>Correct: <span className="text-[#7BE8B8]">{m.correctAnswer}</span></span></p>
+                </div>
               </div>
             ))}
           </div>
-        </Card>
+        </div>
       )}
 
-      {courseId && (
-        <Card className="border-0 shadow-md bg-gradient-to-r from-blue-50 to-indigo-50 p-4 sm:p-5">
-          {!suggestions ? (
-            <button
-              onClick={() => {
-                setLoadingSuggestions(true);
-                getNextSuggestions(courseId).then(setSuggestions).catch(() => setSuggestions([])).finally(() => setLoadingSuggestions(false));
-              }}
-              disabled={loadingSuggestions}
-              className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-blue-700"
-            >
-              {loadingSuggestions ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              What should I learn next?
-            </button>
-          ) : (
-            <>
-              <h3 className="font-semibold text-slate-800 mb-3 text-sm flex items-center gap-2"><Sparkles className="h-4 w-4 text-blue-600" /> Continue your learning journey</h3>
-              {suggestions.length === 0 ? (
-                <p className="text-sm text-slate-500">Couldn't load suggestions right now.</p>
-              ) : (
-                <div className="space-y-2">
-                  {suggestions.map((s, i) => (
-                    <div key={i} className="bg-white rounded-lg border border-slate-100 p-3">
-                      <p className="text-sm font-medium text-slate-800">{s.topic}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">{s.reason}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </Card>
-      )}
+      <div className="grid gap-4 sm:grid-cols-[1.4fr_1fr]">
+        {courseId && (
+          <div className={cx(SURFACE, "relative overflow-hidden p-5")}>
+            <div className="pointer-events-none absolute -bottom-16 -left-10 h-40 w-40 rounded-full bg-[#8B7CFF]/20 blur-3xl" />
+            {!suggestions ? (
+              <button
+                onClick={() => {
+                  setLoadingSuggestions(true);
+                  getNextSuggestions(courseId).then(setSuggestions).catch(() => setSuggestions([])).finally(() => setLoadingSuggestions(false));
+                }}
+                disabled={loadingSuggestions}
+                className="relative flex h-full w-full flex-col items-start gap-2 text-left"
+              >
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#8B7CFF]/15 ring-1 ring-[#8B7CFF]/30">
+                  {loadingSuggestions ? <Loader2 className="h-4 w-4 animate-spin text-[#B4A9FF]" /> : <Sparkles className="h-4 w-4 text-[#B4A9FF]" />}
+                </span>
+                <span className="lu-serif text-2xl text-white">What should I learn next?</span>
+                <span className="text-xs text-[#8A8FA3]">Get suggestions based on this course and your score →</span>
+              </button>
+            ) : (
+              <div className="relative">
+                <p className="flex items-center gap-2 text-sm font-semibold text-white"><Sparkles className="h-4 w-4 text-[#B4A9FF]" /> Continue your journey</p>
+                {suggestions.length === 0 ? (
+                  <p className="mt-3 text-sm text-[#6E7389]">Couldn't load suggestions right now.</p>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {suggestions.map((s, i) => (
+                      <div key={i} className="rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">
+                        <p className="text-sm font-medium text-white">{s.topic}</p>
+                        <p className="mt-0.5 text-xs text-[#8A8FA3]">{s.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        <div className={cx(SURFACE, "flex flex-col items-start gap-2 p-5")}>
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.05] ring-1 ring-white/[0.08]">
+            <MessageSquare className="h-4 w-4 text-[#E3E5EE]" />
+          </span>
+          <p className="lu-serif text-2xl text-white">How was this course?</p>
+          <p className="text-xs text-[#8A8FA3]">Your feedback shapes what we build next — takes a minute.</p>
+          <button onClick={onFeedback} className={cx(BTN_SOFT, "mt-auto h-9")}>Share feedback</button>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ChatGPT-style account button anchored at the bottom of the sidebar —
-// avatar + name, hover reveals a menu (same controlled-open pattern as the
-// top navbar's user menu in components/navbar/Navbar.tsx, kept in sync so
-// both feel like the same interaction across the app). Opens upward
-// (side="top") since the trigger sits at the bottom of the viewport.
-function SidebarUserMenu({ user, onLogout }: { user: { name: string; email: string; role?: string } | null; onLogout: () => void }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Account menu (custom popover)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function AccountMenu({ user, onLogout, compact = false }: { user: SessionUser; onLogout: () => void; compact?: boolean }) {
   const [open, setOpen] = useState(false);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openMenu = () => { if (closeTimer.current) clearTimeout(closeTimer.current); setOpen(true); };
-  const scheduleClose = () => { if (closeTimer.current) clearTimeout(closeTimer.current); closeTimer.current = setTimeout(() => setOpen(false), 150); };
-  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
 
   if (!user) return null;
+  const initial = user.name?.charAt(0).toUpperCase() || "?";
+  const avatar = (
+    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#8B7CFF] to-[#FF7A45] text-sm font-bold text-[#0A0B10]">{initial}</span>
+  );
 
   return (
-    <div className="border-t border-slate-100 p-2">
-      <DropdownMenu open={open} onOpenChange={setOpen}>
-        <DropdownMenuTrigger asChild>
-          <button
-            onMouseEnter={openMenu}
-            onMouseLeave={scheduleClose}
-            className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-slate-100 transition-colors text-left"
-          >
-            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-sm font-semibold shrink-0">
-              {user.name?.charAt(0).toUpperCase() || "?"}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-slate-800 truncate">{user.name}</p>
-            </div>
-            <ChevronsUpDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-          </button>
-        </DropdownMenuTrigger>
-
-        <DropdownMenuContent
-          side="top"
-          align="start"
-          sideOffset={6}
-          className="w-64 p-2"
-          onMouseEnter={openMenu}
-          onMouseLeave={scheduleClose}
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className={cx("flex items-center gap-2.5 rounded-xl transition-colors hover:bg-white/[0.05]", compact ? "p-1" : "w-full px-2 py-2 text-left")}
+      >
+        {avatar}
+        {!compact && (
+          <>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-medium text-white">{user.name}</span>
+              <span className="block truncate text-[11px] text-[#6E7389]">{user.email}</span>
+            </span>
+            <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-[#6E7389]" />
+          </>
+        )}
+      </button>
+      {open && (
+        <div
+          className={cx(
+            "lu-rise absolute z-50 w-64 rounded-2xl bg-[#171920] p-1.5 shadow-2xl ring-1 ring-white/10",
+            compact ? "bottom-0 left-full ml-2" : "bottom-full left-0 mb-2"
+          )}
         >
-          <DropdownMenuLabel className="px-2 py-1.5">
-            <p className="text-sm font-semibold text-slate-900 truncate">{user.name}</p>
-            <p className="text-xs text-slate-500 truncate">{user.email}</p>
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem asChild className="cursor-pointer rounded-md">
-            <a href="/profile" className="flex items-center gap-2 px-2 py-2">
-              <UserIcon className="h-4 w-4 text-blue-600" />
-              <span className="font-medium">Profile</span>
-            </a>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onLogout} className="cursor-pointer text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md">
-            <div className="flex items-center gap-2 px-2 py-1">
-              <LogOut className="h-4 w-4" />
-              <span className="font-medium">Sign out</span>
-            </div>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          <div className="px-3 py-2.5">
+            <p className="truncate text-sm font-semibold text-white">{user.name}</p>
+            <p className="truncate text-xs text-[#6E7389]">{user.email}</p>
+          </div>
+          <div className="my-1 h-px bg-white/[0.06]" />
+          <Link to="/profile" className="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm text-[#D6D8E2] transition-colors hover:bg-white/[0.06] hover:text-white">
+            <UserIcon className="h-4 w-4 text-[#B4A9FF]" /> Profile
+          </Link>
+          <button onClick={onLogout} className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-sm text-[#FF8A95] transition-colors hover:bg-[#FF5C6C]/10">
+            <LogOut className="h-4 w-4" /> Sign out
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapsed, onToggle, loading, error, credits, onBuy, isMobile, onFeedback, hasMore, loadingMore, onLoadMore, user, onLogout }: {
+// ─────────────────────────────────────────────────────────────────────────────
+// Library rail (course history)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LibraryRail({ history, activeId, onSelect, onNew, onDelete, collapsed, onToggle, loading, error, credits, onBuy, isMobile, onFeedback, hasMore, loadingMore, onLoadMore, user, onLogout }: {
   history: HistoryEntry[]; activeId: string | null;
   onSelect: (entry: HistoryEntry) => void; onNew: () => void;
   onDelete: (id: string) => void; collapsed: boolean; onToggle: () => void;
@@ -1314,17 +1587,12 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
   credits: Credits | null; onBuy: () => void;
   isMobile?: boolean;
   onFeedback: () => void;
-  hasMore: boolean;
-  loadingMore: boolean;
-  onLoadMore: () => void;
-  user: { name: string; email: string; role?: string } | null;
-  onLogout: () => void;
+  hasMore: boolean; loadingMore: boolean; onLoadMore: () => void;
+  user: SessionUser; onLogout: () => void;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const trimmedQuery = searchQuery.trim().toLowerCase();
-  const filteredHistory = trimmedQuery
-    ? history.filter((e) => e.fileName.toLowerCase().includes(trimmedQuery))
-    : history;
+  const filteredHistory = trimmedQuery ? history.filter((e) => e.fileName.toLowerCase().includes(trimmedQuery)) : history;
 
   const groups = filteredHistory.reduce<Record<string, HistoryEntry[]>>((acc, e) => {
     const diffDays = Math.floor((Date.now() - e.createdAt.getTime()) / 86400000);
@@ -1336,83 +1604,117 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
   const groupOrder = ["Today", "Yesterday", "Previous 7 days", "Previous 30 days"];
   const sortedGroups = [...groupOrder.filter((g) => groups[g]), ...Object.keys(groups).filter((g) => !groupOrder.includes(g))];
 
-  return (
-    <>
-      {isMobile && !collapsed && (
-        <div className="fixed inset-0 z-30 bg-black/30 backdrop-blur-[2px]" onClick={onToggle} />
+  const balance = Math.max(credits?.spendableBalance ?? credits?.courseCredits ?? 0, 0);
+  const bonus = Math.max(credits?.signupBonusCredits ?? 0, 0);
+  const outOfCredits = !!credits && !credits.canGenerate;
+
+  // Desktop collapsed → slim icon rail.
+  if (!isMobile && collapsed) {
+    return (
+      <aside className="flex h-screen w-[68px] shrink-0 flex-col items-center gap-1.5 border-r border-white/[0.06] bg-[#0C0D13] py-3">
+        <Logo size={34} />
+        <div className="my-2 h-px w-8 bg-white/[0.06]" />
+        <button onClick={onToggle} className="flex h-10 w-10 items-center justify-center rounded-xl text-[#8A8FA3] transition-colors hover:bg-white/[0.06] hover:text-white" title="Open library">
+          <PanelLeft className="h-4 w-4" />
+        </button>
+        <button onClick={onNew} className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.05] text-white ring-1 ring-white/[0.08] transition-colors hover:bg-white/[0.1]" title="New course">
+          <Plus className="h-4 w-4" />
+        </button>
+        <Link to="/gallery" className="flex h-10 w-10 items-center justify-center rounded-xl text-[#8A8FA3] transition-colors hover:bg-white/[0.06] hover:text-white" title="Gallery">
+          <Film className="h-4 w-4" />
+        </Link>
+        <Link to="/collab" className="flex h-10 w-10 items-center justify-center rounded-xl text-[#8A8FA3] transition-colors hover:bg-white/[0.06] hover:text-white" title="Study with a friend">
+          <Users className="h-4 w-4" />
+        </Link>
+        {credits && (
+          <button onClick={onBuy} className="mt-2 flex flex-col items-center rounded-xl px-2 py-1.5 transition-colors hover:bg-white/[0.05]" title="Credits">
+            <Zap className={cx("h-4 w-4", outOfCredits ? "text-[#FF5C6C]" : "text-[#FFB547]")} />
+            <span className="mt-0.5 font-mono text-[10px] font-semibold text-white">{balance}</span>
+          </button>
+        )}
+        <div className="flex-1" />
+        <button onClick={onFeedback} className="relative flex h-10 w-10 items-center justify-center rounded-xl text-[#8A8FA3] transition-colors hover:bg-white/[0.06] hover:text-white" title="Send feedback">
+          <MessageSquare className="h-4 w-4" />
+          {credits && !credits.feedbackCreditGranted && <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#FFB547]" />}
+        </button>
+        <AccountMenu user={user} onLogout={onLogout} compact />
+      </aside>
+    );
+  }
+
+  const panel = (
+    <aside
+      className={cx(
+        "flex h-full min-h-0 flex-col border-r border-white/[0.06] bg-[#0C0D13] text-[#ECEDF2]",
+        isMobile ? "w-[84vw] max-w-[300px]" : "h-screen w-[280px] shrink-0"
       )}
-      <aside className={`${
-        isMobile
-          ? `fixed top-0 left-0 z-40 h-full ${collapsed ? "-translate-x-full" : "translate-x-0"} w-[80vw] max-w-64`
-          : `h-screen ${collapsed ? "w-0" : "w-64"} shrink-0`
-      } transition-all duration-300 bg-white border-r border-slate-200 flex flex-col min-h-0 overflow-hidden`}>
-      <div className="flex items-center justify-between px-3 py-3 border-b border-slate-100">
-        <button onClick={onToggle} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-all"><PanelLeft className="h-4 w-4" /></button>
-        <button onClick={onNew} className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-all"><PenSquare className="h-4 w-4" /></button>
+    >
+      <div className="flex items-center justify-between px-4 pb-3 pt-4">
+        <div className="flex items-center gap-2.5">
+          <Logo size={30} />
+          <span className="lu-serif text-xl text-white">Level Up</span>
+        </div>
+        <button onClick={onToggle} className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A8FA3] transition-colors hover:bg-white/[0.06] hover:text-white" aria-label="Close library">
+          {isMobile ? <X className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
+        </button>
+      </div>
+
+      <div className="px-3 space-y-1.5">
+        <button onClick={onNew} className="flex h-10 w-full items-center gap-2 rounded-xl bg-white/[0.05] px-3 text-[13px] font-medium text-white ring-1 ring-white/[0.08] transition-all hover:bg-white/[0.09]">
+          <Plus className="h-4 w-4 text-[#B4A9FF]" /> New course
+        </button>
+        <Link to="/gallery" className="flex h-10 w-full items-center gap-2 rounded-xl px-3 text-[13px] font-medium text-[#D6D8E2] transition-colors hover:bg-white/[0.06] hover:text-white">
+          <Film className="h-4 w-4 text-[#8A8FA3]" /> Gallery
+        </Link>
+        <Link to="/collab" className="flex h-10 w-full items-center gap-2 rounded-xl px-3 text-[13px] font-medium text-[#D6D8E2] transition-colors hover:bg-white/[0.06] hover:text-white">
+          <Users className="h-4 w-4 text-[#8A8FA3]" /> Study with a friend
+        </Link>
       </div>
 
       {credits && (
-        <div className={`px-3 py-3 border-b-2 ${
-          !credits.canGenerate
-            ? "border-amber-300 bg-amber-50"
-            : (credits.signupBonusCredits ?? 0) > 0
-            ? "border-emerald-300 bg-emerald-50"
-            : "border-blue-300 bg-blue-50"
-        }`}>
-          {/* No more free-trial flag — every account gets 100 free credits on
-              signup instead (see server's signupBonusCredits/spendableBalance),
-              spent down per course exactly like purchased credits. Shown
-              separately here only while any of that bonus remains, so it's
-              explicit that it's free and expiring, not merged silently into
-              the regular balance below. */}
-          {(credits.signupBonusCredits ?? 0) > 0 && (
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-slate-700 font-semibold flex items-center gap-1.5">
-                <Zap className="h-3.5 w-3.5 text-emerald-600" /> Free credits
-              </span>
-              <span className="text-sm font-extrabold text-emerald-700">
-                {Math.max(credits.signupBonusCredits ?? 0, 0)} / 100
-              </span>
+        <div className="mx-3 mt-3 rounded-2xl bg-gradient-to-br from-white/[0.06] to-white/[0.015] p-3.5 ring-1 ring-white/[0.07]">
+          <div className="flex items-center justify-between">
+            <span className={EYEBROW}>Credits</span>
+            <Zap className={cx("h-3.5 w-3.5", outOfCredits ? "text-[#FF5C6C]" : "text-[#FFB547]")} />
+          </div>
+          <p className="mt-1.5 text-2xl font-bold tracking-tight text-white">
+            {balance}<span className="ml-1.5 text-xs font-medium text-[#6E7389]">remaining</span>
+          </p>
+          {bonus > 0 && (
+            <div className="mt-2.5">
+              <div className="mb-1 flex justify-between text-[10px] text-[#8A8FA3]">
+                <span>Free signup credits</span><span className="font-mono">{bonus}/100</span>
+              </div>
+              <div className="h-1 overflow-hidden rounded-full bg-white/[0.06]">
+                <div className="h-full rounded-full bg-[#3DDC97]" style={{ width: `${Math.min(bonus, 100)}%` }} />
+              </div>
             </div>
           )}
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-slate-700 font-semibold flex items-center gap-1.5">
-              <CreditCard className="h-3.5 w-3.5 text-blue-600" /> Credits
-            </span>
-            <span className={`text-sm font-extrabold ${(credits.spendableBalance ?? credits.courseCredits) > 0 ? "text-blue-700" : "text-slate-500"}`}>
-              {Math.max(credits.spendableBalance ?? credits.courseCredits, 0)} remaining
-            </span>
-          </div>
-          {!credits.canGenerate ? (
-            <button onClick={onBuy}
-              className="w-full mt-1 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-sm font-bold transition-all shadow-md flex items-center justify-center gap-1.5">
-              <MessageSquare className="h-4 w-4" /> Need more credits?
-            </button>
-          ) : (
-            <button onClick={onBuy}
-              className="w-full mt-1 py-2.5 rounded-xl border-2 border-blue-300 bg-white text-blue-700 hover:bg-blue-50 text-sm font-bold transition-all flex items-center justify-center gap-1.5">
-              <MessageSquare className="h-4 w-4" /> Need more credits?
-            </button>
-          )}
+          <button
+            onClick={onBuy}
+            className={cx(
+              "mt-3 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-all",
+              outOfCredits ? "bg-[#8B7CFF] text-[#0A0B10] hover:bg-[#A093FF]" : "text-[#C3BAFF] ring-1 ring-[#8B7CFF]/30 hover:bg-[#8B7CFF]/10"
+            )}
+          >
+            <MessageSquare className="h-3.5 w-3.5" /> Need more credits?
+          </button>
         </div>
       )}
 
       {history.length > 0 && (
-        <div className="px-3 pt-3 pb-1">
+        <div className="px-3 pb-1 pt-4">
           <div className="relative">
-            <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#555A6E]" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search courses…"
-              className="w-full pl-8 pr-7 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-300 transition-all"
+              placeholder="Search your courses"
+              className="h-9 w-full rounded-xl bg-white/[0.03] pl-8 pr-8 text-xs text-white ring-1 ring-white/[0.07] transition-all placeholder:text-[#555A6E] focus:outline-none focus:ring-[#8B7CFF]/50"
             />
             {searchQuery && (
-              <button
-                onClick={() => setSearchQuery("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-all"
-              >
+              <button onClick={() => setSearchQuery("")} className="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-[#6E7389] hover:bg-white/10 hover:text-white" aria-label="Clear search">
                 <X className="h-3 w-3" />
               </button>
             )}
@@ -1420,48 +1722,55 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
         </div>
       )}
 
-      <nav className="flex-1 overflow-y-auto py-2">
+      <nav className="lu-scroll min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {history.length === 0 ? (
-          <div className="px-4 py-8 text-center">
+          <div className="px-4 py-10 text-center">
             {loading ? (
-              <>
-                <Loader2 className="h-6 w-6 text-slate-300 animate-spin mx-auto mb-2" />
-                <p className="text-xs text-slate-400">Loading courses…</p>
-              </>
+              <div className="space-y-2.5 text-left">
+                {[0, 1, 2, 3].map((i) => <Shimmer key={i} className="h-9 w-full rounded-lg" delay={i * 0.12} />)}
+              </div>
             ) : error ? (
               <>
-                <AlertCircle className="h-7 w-7 text-red-300 mx-auto mb-2" />
-                <p className="text-xs text-red-400 font-medium">Failed to load courses</p>
-                <p className="text-xs text-slate-400 mt-1">Check your connection and try again.</p>
+                <AlertCircle className="mx-auto mb-2 h-6 w-6 text-[#FF5C6C]/70" />
+                <p className="text-xs font-medium text-[#FF8A95]">Failed to load courses</p>
+                <p className="mt-1 text-xs text-[#6E7389]">Check your connection and try again.</p>
               </>
             ) : (
               <>
-                <GraduationCap className="h-8 w-8 text-slate-300 mx-auto mb-2" />
-                <p className="text-xs text-slate-400">No courses yet.</p>
-                <p className="text-xs text-slate-400 mt-0.5">Generate one to get started.</p>
+                <GraduationCap className="mx-auto mb-2 h-7 w-7 text-[#3E4253]" />
+                <p className="text-xs text-[#8A8FA3]">Your library is empty.</p>
+                <p className="mt-0.5 text-xs text-[#555A6E]">Generate a course to get started.</p>
               </>
             )}
           </div>
         ) : filteredHistory.length === 0 ? (
-          <div className="px-4 py-8 text-center">
-            <Search className="h-7 w-7 text-slate-300 mx-auto mb-2" />
-            <p className="text-xs text-slate-400">No courses match "{searchQuery.trim()}".</p>
+          <div className="px-4 py-10 text-center">
+            <Search className="mx-auto mb-2 h-6 w-6 text-[#3E4253]" />
+            <p className="text-xs text-[#8A8FA3]">No courses match “{searchQuery.trim()}”.</p>
           </div>
         ) : sortedGroups.map((group) => (
-          <div key={group} className="mb-1">
-            <p className="px-3 py-1.5 text-xs font-semibold text-slate-400">{group}</p>
+          <div key={group} className="mb-2">
+            <p className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#555A6E]">{group}</p>
             {groups[group].map((entry) => {
               const isActive = entry.id === activeId;
+              const generating = entry.lessonStatuses?.some((s) => s === "generating");
               return (
-                <div key={entry.id} className={`group/item relative flex items-center mx-1 rounded-lg transition-all ${isActive ? "bg-slate-100" : "hover:bg-slate-50"}`}>
-                  <button onClick={() => onSelect(entry)} className={`flex-1 text-left px-3 py-2.5 min-w-0 ${isActive ? "text-slate-900" : "text-slate-700"}`}>
-                    <p className="text-xs font-medium leading-snug line-clamp-1 pr-6">{entry.fileName.replace(/\.(pdf|pptx)$/i, "")}</p>
-                    {entry.quizScore !== null && (
-                      <p className="text-xs font-semibold text-emerald-600 mt-1">Quiz: {entry.quizScore}%</p>
+                <div key={entry.id} className={cx("group/item relative flex items-center rounded-xl transition-colors", isActive ? "bg-white/[0.07]" : "hover:bg-white/[0.04]")}>
+                  {isActive && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-[#8B7CFF]" />}
+                  <button onClick={() => onSelect(entry)} className="min-w-0 flex-1 px-3 py-2.5 text-left">
+                    <p className={cx("line-clamp-1 pr-6 text-[13px] leading-snug", isActive ? "font-medium text-white" : "text-[#B9BCCB]")}>{cleanName(entry.fileName)}</p>
+                    {(generating || entry.quizScore !== null) && (
+                      <p className="mt-1 flex items-center gap-2 text-[11px]">
+                        {generating && <span className="flex items-center gap-1.5 text-[#FFB08A]"><RecDot /> Generating</span>}
+                        {entry.quizScore !== null && <span className="font-mono text-[#3DDC97]">Quiz {entry.quizScore}%</span>}
+                      </p>
                     )}
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); if (window.confirm(`Delete "${entry.fileName.replace(/\.(pdf|pptx)$/i, "")}"? This cannot be undone.`)) onDelete(entry.id); }}
-                    className="absolute right-2 top-2 w-6 h-6 flex items-center justify-center rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover/item:opacity-100 transition-all">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); if (window.confirm(`Delete "${cleanName(entry.fileName)}"? This cannot be undone.`)) onDelete(entry.id); }}
+                    className="absolute right-1.5 top-2 flex h-7 w-7 items-center justify-center rounded-lg text-[#6E7389] opacity-0 transition-all hover:bg-[#FF5C6C]/10 hover:text-[#FF5C6C] group-hover/item:opacity-100 focus:opacity-100"
+                    aria-label="Delete course"
+                  >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
@@ -1470,70 +1779,219 @@ function HistorySidebar({ history, activeId, onSelect, onNew, onDelete, collapse
           </div>
         ))}
         {hasMore && (
-          <div className="px-3 pt-1 pb-2">
-            <button
-              onClick={onLoadMore}
-              disabled={loadingMore}
-              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-all disabled:opacity-50"
-            >
-              {loadingMore ? (
-                <><Loader2 className="h-3 w-3 animate-spin" /> Loading…</>
-              ) : (
-                "See more"
-              )}
-            </button>
-          </div>
+          <button
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="mx-auto mb-2 flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-[#8A8FA3] transition-colors hover:bg-white/[0.05] hover:text-white disabled:opacity-50"
+          >
+            {loadingMore ? <><Loader2 className="h-3 w-3 animate-spin" /> Loading…</> : "Show more"}
+          </button>
         )}
       </nav>
 
-      <ReferralCard />
-      <div className="border-t border-slate-100 p-3">
+      <div className="space-y-2 border-t border-white/[0.06] p-3">
+        <ReferralCard />
         <button
           onClick={onFeedback}
-          className="relative w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-bold hover:bg-emerald-100 hover:border-emerald-300 transition-all"
+          className="relative flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#3DDC97]/[0.08] text-[13px] font-semibold text-[#7BE8B8] ring-1 ring-[#3DDC97]/25 transition-all hover:bg-[#3DDC97]/[0.14]"
         >
-          <MessageSquare className="h-4 w-4" />
-          Send feedback
-          {/* One-time reward callout — only for logged-in users (credits is
-              only populated once authenticated) who haven't claimed it yet. */}
+          <MessageSquare className="h-4 w-4" /> Send feedback
           {credits && !credits.feedbackCreditGranted && (
-            <span className="absolute -top-2 -right-2 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-400 text-amber-900 text-[10px] font-extrabold shadow-sm">
+            <span className="absolute -right-1.5 -top-2 flex items-center gap-1 rounded-full bg-[#FFB547] px-1.5 py-0.5 text-[10px] font-extrabold text-[#2A1A00] shadow">
               <Gift className="h-2.5 w-2.5" /> +20
             </span>
           )}
         </button>
+        <AccountMenu user={user} onLogout={onLogout} />
       </div>
-      <SidebarUserMenu user={user} onLogout={onLogout} />
     </aside>
+  );
+
+  if (!isMobile) return panel;
+
+  return (
+    <>
+      {!collapsed && <div className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm" onClick={onToggle} />}
+      <div className={cx("fixed inset-y-0 left-0 z-40 transition-transform duration-300", collapsed ? "-translate-x-full" : "translate-x-0")}>
+        {panel}
+      </div>
     </>
   );
 }
 
-function LessonStatusIcon({ status, completed, isActive }: { status: LessonStatus; completed: boolean; isActive: boolean }) {
-  if (completed) return <CheckCircle className="h-4 w-4 text-emerald-500" />;
-  if (status === "locked") return <Lock className="h-4 w-4 text-amber-500" />;
-  if (status === "failed") return <XCircle className="h-4 w-4 text-red-400" />;
-  if (status === "generating") return <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />;
-  if (isActive) return <Play className="h-4 w-4 text-blue-600 fill-blue-600" />;
-  return <Circle className="h-4 w-4 text-slate-300" />;
+// ─────────────────────────────────────────────────────────────────────────────
+// Syllabus (course outline)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SyllabusPanel({
+  open, isMobile, onClose, loading, lessons, lessonStatuses, lessonProgresses, activeSection, activeLesson,
+  allLessonsReady, quizDone, quizCount, quizScore, onSelectLesson, onSelectQuiz, onSelectResults,
+}: {
+  open: boolean; isMobile: boolean; onClose: () => void; loading: boolean;
+  lessons: Lesson[]; lessonStatuses: LessonStatus[]; lessonProgresses: number[];
+  activeSection: CourseSection; activeLesson: number; allLessonsReady: boolean; quizDone: boolean;
+  quizCount: number; quizScore: number | null;
+  onSelectLesson: (i: number) => void; onSelectQuiz: () => void; onSelectResults: () => void;
+}) {
+  const body = (
+    <aside className={cx("flex h-full min-h-0 flex-col border-l border-white/[0.06] bg-[#0C0D13] text-[#ECEDF2]", isMobile ? "w-[86vw] max-w-[320px]" : "w-[320px]")}>
+      <div className="flex items-center justify-between px-5 pb-2 pt-5">
+        <p className={EYEBROW}>Syllabus</p>
+        {isMobile && (
+          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A8FA3] hover:bg-white/[0.06] hover:text-white" aria-label="Close syllabus">
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      <nav className="lu-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+        {loading ? (
+          <div className="space-y-3 px-2 pt-2" aria-hidden="true">
+            {Array.from({ length: lessons.length || 6 }).map((_, i) => (
+              <div key={i} className="flex items-start gap-3">
+                <Shimmer className="h-8 w-8 shrink-0 rounded-full" delay={i * 0.1} />
+                <div className="flex-1 space-y-2 pt-1"><Shimmer className="h-3 w-4/5" delay={i * 0.1} /><Shimmer className="h-2.5 w-1/2" delay={i * 0.1} /></div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <ol className="relative">
+            <span className="absolute bottom-6 left-[27px] top-6 w-px bg-white/[0.07]" aria-hidden="true" />
+            {lessons.map((lesson, i) => {
+              const status = lessonStatuses[i];
+              const isActive = activeSection === "video" && activeLesson === i;
+              const locked = status === "locked";
+              const progress = lessonProgresses[i] ?? 0;
+              return (
+                <li key={lesson.id}>
+                  <button
+                    disabled={locked}
+                    onClick={() => !locked && onSelectLesson(i)}
+                    className={cx(
+                      "relative flex w-full items-start gap-3 rounded-xl px-2 py-2.5 text-left transition-colors",
+                      isActive ? "bg-[#8B7CFF]/[0.1]" : locked ? "cursor-not-allowed opacity-60" : "hover:bg-white/[0.04]"
+                    )}
+                  >
+                    <span className="relative z-10 shrink-0">
+                      {lesson.completed ? (
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#3DDC97]/15 ring-1 ring-[#3DDC97]/40"><Check className="h-3.5 w-3.5 text-[#3DDC97]" strokeWidth={3} /></span>
+                      ) : locked ? (
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#FFB547]/10 ring-1 ring-[#FFB547]/30"><Lock className="h-3.5 w-3.5 text-[#FFB547]" /></span>
+                      ) : status === "failed" ? (
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#FF5C6C]/10 ring-1 ring-[#FF5C6C]/30"><XCircle className="h-3.5 w-3.5 text-[#FF5C6C]" /></span>
+                      ) : status === "generating" ? (
+                        <span className="block rounded-full bg-[#0C0D13]">
+                          <Ring value={progress} size={32} stroke={2.5} color={C.ember}>
+                            <span className="font-mono text-[9px] font-semibold text-[#FFB08A]">{Math.round(progress)}</span>
+                          </Ring>
+                        </span>
+                      ) : isActive ? (
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#8B7CFF] shadow-[0_0_20px_-2px_rgba(139,124,255,0.8)]"><Play className="ml-0.5 h-3 w-3 fill-[#0A0B10] text-[#0A0B10]" /></span>
+                      ) : (
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#0C0D13] font-mono text-[11px] text-[#8A8FA3] ring-1 ring-white/[0.12]">{pad2(i + 1)}</span>
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1 pt-0.5">
+                      <span className={cx("line-clamp-2 text-[13px] leading-snug", isActive ? "font-semibold text-white" : status === "failed" ? "text-[#FF8A95]" : "text-[#D6D8E2]")}>
+                        {lesson.title}
+                      </span>
+                      <span className="mt-1 block text-[11px]">
+                        {locked ? (
+                          <span className="text-[#FFB547]">Contact us to unlock</span>
+                        ) : status === "generating" ? (
+                          <span className="text-[#FFB08A]">Generating…</span>
+                        ) : status === "failed" ? (
+                          <span className="text-[#FF8A95]">Generation failed</span>
+                        ) : (
+                          <span className="flex items-center gap-1 text-[#6E7389]"><Clock className="h-3 w-3" /> {lesson.duration}</span>
+                        )}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+
+        <p className={cx(EYEBROW, "mb-2 mt-6 px-2")}>Assessment</p>
+        <div className="space-y-1">
+          <button
+            disabled={!allLessonsReady}
+            onClick={() => allLessonsReady && onSelectQuiz()}
+            className={cx(
+              "flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors",
+              activeSection === "quiz" ? "bg-[#8B7CFF]/[0.1]" : !allLessonsReady ? "cursor-not-allowed opacity-40" : "hover:bg-white/[0.04]"
+            )}
+          >
+            <span className={cx("flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-1", quizDone ? "bg-[#3DDC97]/10 ring-[#3DDC97]/30" : "bg-white/[0.03] ring-white/[0.1]")}>
+              <ClipboardList className={cx("h-3.5 w-3.5", quizDone ? "text-[#3DDC97]" : "text-[#B9BCCB]")} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-white">Final quiz</span>
+              <span className="block text-[11px] text-[#6E7389]">{quizCount || 20} questions</span>
+            </span>
+            {!allLessonsReady && <Lock className="h-3 w-3 text-[#555A6E]" />}
+          </button>
+          <button
+            disabled={!quizDone}
+            onClick={() => quizDone && onSelectResults()}
+            className={cx(
+              "flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors",
+              activeSection === "results" ? "bg-[#8B7CFF]/[0.1]" : !quizDone ? "cursor-not-allowed opacity-40" : "hover:bg-white/[0.04]"
+            )}
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.03] ring-1 ring-white/[0.1]">
+              <Trophy className={cx("h-3.5 w-3.5", quizDone ? "text-[#FFB547]" : "text-[#B9BCCB]")} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-white">Results</span>
+              <span className="block text-[11px] text-[#6E7389]">{quizScore !== null ? `Readiness ${quizScore}%` : "Readiness score"}</span>
+            </span>
+            {!quizDone && <Lock className="h-3 w-3 text-[#555A6E]" />}
+          </button>
+        </div>
+      </nav>
+    </aside>
+  );
+
+  if (!isMobile) {
+    return (
+      <div className={cx("h-full shrink-0 overflow-hidden transition-[width] duration-300", open ? "w-[320px]" : "w-0")}>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <>
+      {open && <div className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm" onClick={onClose} />}
+      <div className={cx("fixed inset-y-0 right-0 z-40 transition-transform duration-300", open ? "translate-x-0" : "translate-x-full")}>{body}</div>
+    </>
+  );
 }
+
+function MobileBar({ onMenu, title }: { onMenu: () => void; title?: string }) {
+  return (
+    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/[0.06] bg-[#0A0B10]/80 px-3 backdrop-blur-xl">
+      <button onClick={onMenu} className="flex h-9 w-9 items-center justify-center rounded-lg text-[#B9BCCB] hover:bg-white/[0.06]" aria-label="Open library">
+        <Menu className="h-5 w-5" />
+      </button>
+      <Logo size={26} />
+      <span className="lu-serif truncate text-lg text-white">{title ?? "Level Up"}</span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function AILearningPage() {
   const router = useNavigate();
-  // Read BEFORE `phase`/`courseDetailsLoading` below, specifically so their
-  // OWN initial state can depend on it (see those lazy initializers) — a
-  // direct load/refresh of /ai_tutor/:courseId must never show the "upload a
-  // new course" page even for the single frame before any effect has had a
-  // chance to run. `phase` defaulting to plain "upload" regardless of the
-  // URL was exactly the old bug: refreshing on a course's URL would flash
-  // (or, if the fetch was slow/failing, effectively get stuck showing) the
-  // new-course page before the URL-reading effect below finally corrected
-  // it.
+  // Read before `phase` so a direct load of /ai_tutor/:courseId never flashes the composer.
   const { courseId: urlCourseId } = useParams<{ courseId?: string }>();
   const [phase, setPhase] = useState<AppPhase>(() => (urlCourseId ? "course" : "upload"));
   const [fileName, setFileName] = useState("");
-  // Holds the topic + file the user submitted, while the optional level-check
-  // chat runs, before we actually kick off generation.
   const [pendingGeneration, setPendingGeneration] = useState<{ name: string; file?: File | null; tier?: string | null } | null>(null);
   const [lessons, setLessons] = useState<Lesson[]>(MOCK_LESSONS);
   const [lessonStatuses, setLessonStatuses] = useState<LessonStatus[]>(MOCK_LESSONS.map(() => "generating"));
@@ -1551,47 +2009,25 @@ export default function AILearningPage() {
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [loadingMoreHistory, setLoadingMoreHistory] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
-  // True during the lazy course-detail fetch (restoreEntry's code-backfill
-  // branch, or the URL-reading effect below) — drives LessonListSkeleton/
-  // CourseContentSkeleton so a course that's actually ready doesn't look
-  // indistinguishable from one still generating on the server while its
-  // details are simply in flight to this browser. Starts true (not false)
-  // when the URL already names a course — same reasoning as `phase` above:
-  // a direct load/refresh is ABOUT to fetch that course on the very next
-  // effect tick, so starting false here would flash MOCK_LESSONS'
-  // placeholder content for a frame before the URL-reading effect even gets
-  // a chance to set it true itself.
+  // Distinguishes "fetching a finished course to this browser" from "server still generating".
   const [courseDetailsLoading, setCourseDetailsLoading] = useState(() => !!urlCourseId);
 
-  // course_completed: fire once, only for courses generated in THIS session
-  // (startedCoursesRef), the first time all their lessons finish. Guards prevent
-  // re-firing on re-render or when revisiting an already-finished course.
+  // course_completed fires once, only for courses generated this session.
   const startedCoursesRef = useRef<Set<string>>(new Set());
   const completedFiredRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const ready = lessonStatuses.length > 0 && lessonStatuses.every((s) => s === "ready" || s === "failed");
-    if (
-      ready &&
-      activeHistoryId &&
-      startedCoursesRef.current.has(activeHistoryId) &&
-      !completedFiredRef.current.has(activeHistoryId)
-    ) {
+    if (ready && activeHistoryId && startedCoursesRef.current.has(activeHistoryId) && !completedFiredRef.current.has(activeHistoryId)) {
       completedFiredRef.current.add(activeHistoryId);
       analytics.courseCompleted({ courseId: activeHistoryId });
     }
   }, [lessonStatuses, activeHistoryId]);
-  // Tracks whether the CURRENTLY VIEWED course was generated using the free
-  // trial — used to decide whether to auto-prompt for feedback after the
-  // quiz results are shown (see the quiz onSubmit handler below).
+
   const [activeCourseIsFreeTrial, setActiveCourseIsFreeTrial] = useState(false);
   const [activeCourseQuizMinutes, setActiveCourseQuizMinutes] = useState(30);
   const [historySidebarCollapsed, setHistorySidebarCollapsed] = useState(false);
   const [credits, setCredits] = useState<Credits | null>(null);
   const [retryingLesson, setRetryingLesson] = useState<number | null>(null);
-  // What the retry button says while retryingLesson is set — distinguishes
-  // "Fixing scene 4…" (a targeted, cheap patch) from "Regenerating…" (the
-  // full lesson) so the user knows which one is actually happening. See
-  // handleRetryLesson.
   const [retryingLabel, setRetryingLabel] = useState("Regenerating…");
   const [unlockingCourse, setUnlockingCourse] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -1602,11 +2038,8 @@ export default function AILearningPage() {
   const seenFailuresRef = useRef<Set<number>>(new Set());
 
   const storedUser = localStorage.getItem("user");
-  const user = storedUser ? JSON.parse(storedUser) : null;
+  const user: SessionUser = storedUser ? JSON.parse(storedUser) : null;
 
-  // Same sign-out sequence as Profile.tsx's handleLogout — clears the real
-  // session keys (auth-context's signOut clears a different, unused
-  // "levelup_user" key, so it's not reused here).
   const handleLogout = () => {
     analytics.loggedOut();
     resetUser();
@@ -1617,11 +2050,7 @@ export default function AILearningPage() {
 
   const bgTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const pollCancelRef = useRef<(() => void) | null>(null);
-  // Mirrors activeHistoryId for use inside async callbacks (e.g. restoreEntry's
-  // one-off code-backfill fetch below) that need to check, AT RESOLUTION TIME,
-  // whether the user is still even looking at the course that fetch was for —
-  // reading `activeHistoryId` state directly from a closure captured before
-  // an await would only ever see the value from when the closure was created.
+  // Mirrors activeHistoryId for async callbacks that must check it at resolution time.
   const activeHistoryIdRef = useRef<string | null>(null);
   useEffect(() => { activeHistoryIdRef.current = activeHistoryId; }, [activeHistoryId]);
   const lessonProgresses = useLessonProgress(lessonStatuses, lessons.map((l) => l.sceneProgress));
@@ -1636,6 +2065,14 @@ export default function AILearningPage() {
 
   useEffect(() => { if (!user) router("/login"); }, []);
 
+  const fetchCredits = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${BASE_URL}/api/payment/credits`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setCredits(await res.json());
+    } catch (err) { console.error("Failed to fetch credits:", err); }
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("payment") === "success") {
@@ -1644,21 +2081,8 @@ export default function AILearningPage() {
     }
   }, []);
 
-  const fetchCredits = async () => {
-    try {
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${BASE_URL}/api/payment/credits`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) setCredits(await res.json());
-    } catch (err) { console.error("Failed to fetch credits:", err); }
-  };
-
   useEffect(() => { fetchCredits(); }, []);
 
-  // Course tiers (Quick Explainer/Deeper Dive/Full Mastery) — fetched once
-  // and used both by the input chat's tier picker and to size the loading
-  // skeleton (buildMockLessons) for whichever tier the user selects.
   const [courseTiers, setCourseTiers] = useState<CourseTier[] | null>(null);
   useEffect(() => {
     getPricingConfig()
@@ -1668,6 +2092,13 @@ export default function AILearningPage() {
 
   useEffect(() => { return () => { if (pollCancelRef.current) pollCancelRef.current(); }; }, []);
 
+  // Applies a polled course snapshot to the currently displayed course.
+  const applyCourseUpdate = (course: CourseFromAPI) => {
+    setLessons((prev) => prev.map((l, i) => mergeLesson(l, course.lessons[i])));
+    if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((l) => mapStatus(l?.status)));
+    if (course.questions?.length) setQuizQuestions(course.questions);
+  };
+
   const mapCourseToEntry = (c: CourseFromAPI): HistoryEntry => {
     const mappedLessons: Lesson[] = (c.lessons || []).map((l, i) => ({
       id: i + 1, title: l.title || `Lesson ${i + 1}`, duration: "~2:00", completed: false,
@@ -1675,9 +2106,7 @@ export default function AILearningPage() {
       videoUrl: l.videoUrl, code: l.code ?? null, totalFrames: l.totalFrames ?? null, error: l.error ?? null,
       sceneProgress: l.sceneProgress ?? [], scenes: l.scenes ?? [],
     }));
-    const mappedStatuses: LessonStatus[] = (c.lessons || []).map((l) =>
-      l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : l.status === "locked" ? "locked" : "generating"
-    );
+    const mappedStatuses: LessonStatus[] = (c.lessons || []).map((l) => mapStatus(l.status));
     return {
       id: c._id, fileName: c.topic,
       createdAt: c.createdAt ? new Date(c.createdAt) : new Date(),
@@ -1690,15 +2119,7 @@ export default function AILearningPage() {
     };
   };
 
-  // Fills in server-side watched/quiz state onto an entry that mapCourseToEntry
-  // just built — mapCourseToEntry alone always starts every lesson "not
-  // watched" and every quiz "not done" (it has no server data to draw from),
-  // which is exactly why that state used to reset on every refresh. TWO
-  // separate places construct a HistoryEntry (the sidebar history-list loader
-  // below, and the direct-URL-load effect further down for a fresh page load/
-  // refresh/pasted link) — both need this same enrichment, not just one of
-  // them, or whichever path skips it shows stale defaults regardless of what
-  // the OTHER path's `history` state has already correctly restored.
+  // Restores server-side watched/quiz state onto a freshly mapped entry.
   const enrichEntryWithProgress = async (entry: HistoryEntry): Promise<HistoryEntry> => {
     const [progress, attempt] = await Promise.all([
       getProgress(entry.id).catch(() => null),
@@ -1741,15 +2162,6 @@ export default function AILearningPage() {
         const entries: HistoryEntry[] = courses.map(mapCourseToEntry);
         if (!cancelled) { setHistory(entries); setHistoryLoading(false); }
 
-        // Restore watched/quiz state from the server — mapCourseToEntry
-        // above always starts every lesson "not watched" and every quiz
-        // "not done" (it has no server data yet), which is exactly why
-        // that state used to vanish on every refresh. This background pass
-        // fills it back in per-course without blocking the initial render.
-        // The full enriched result (not just the score) is stashed on the
-        // entry so ResultsSection can render it without recomputing from
-        // scratch — the raw per-question answers aren't sent back down for
-        // an already-graded attempt, only the graded result.
         entries.forEach((entry) => {
           enrichEntryWithProgress(entry).then((enriched) => {
             if (cancelled || enriched === entry) return;
@@ -1762,8 +2174,8 @@ export default function AILearningPage() {
           pollCancelRef.current = pollCourse(stillGenerating._id, (course: CourseFromAPI) => {
             setHistory((prev) => prev.map((e) => e.id !== course._id ? e : {
               ...e,
-              lessons: e.lessons.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }),
-              lessonStatuses: course.lessons.map((l) => l.status === "ready" ? "ready" : l.status === "failed" ? "failed" : l.status === "locked" ? "locked" : "generating"),
+              lessons: e.lessons.map((l, i) => mergeLesson(l, course.lessons[i])),
+              lessonStatuses: course.lessons.map((l) => mapStatus(l.status)),
               questions: course.questions?.length ? course.questions : e.questions,
             }));
           });
@@ -1775,22 +2187,13 @@ export default function AILearningPage() {
 
   const markComplete = (lessonId: number) => {
     setLessons((prev) => prev.map((l) => l.id === lessonId ? { ...l, completed: true } : l));
-    // Feedback trigger moved to firing after quiz RESULTS are shown (see the
-    // quiz onSubmit handler below) — now that the free trial gives the whole
-    // course upfront, "finishing lesson 1" isn't a meaningful checkpoint
-    // anymore. The natural moment to ask for feedback is after the user has
-    // experienced the complete product: all 6 lessons + their quiz score.
   };
 
   useEffect(() => {
     lessonStatuses.forEach((status, i) => {
       if (status === "failed" && !seenFailuresRef.current.has(i)) {
         seenFailuresRef.current.add(i);
-        setFailureBanner({
-          lessonIndex: i,
-          title: lessons[i]?.title || `Lesson ${i + 1}`,
-          error: lessons[i]?.error ?? null,
-        });
+        setFailureBanner({ lessonIndex: i, title: lessons[i]?.title || `Lesson ${i + 1}`, error: lessons[i]?.error ?? null });
       }
       if (status !== "failed" && seenFailuresRef.current.has(i)) {
         seenFailuresRef.current.delete(i);
@@ -1798,48 +2201,24 @@ export default function AILearningPage() {
     });
   }, [lessonStatuses, lessons]);
 
-  // Full-lesson regenerate — unchanged from before, extracted so
-  // handleRetryLesson can fall back to it when a scene-only fix isn't
-  // possible (no crashInfo at all, or the backend couldn't confidently
-  // isolate which scene broke — e.g. a lesson generated before scene
-  // boundaries were tracked). Errors propagate to the caller's own catch —
-  // this never alerts itself, so a scene-fix-then-fallback path never shows
-  // the user two error popups for one failure.
+  // Full-lesson regenerate. Errors propagate to the caller (no double alerts).
   const handleFullRetryLesson = async (lessonIndex: number) => {
     setRetryingLabel("Regenerating…");
     await retryLesson(activeHistoryId!, lessonIndex);
     setLessonStatuses((prev) => prev.map((s, i) => i === lessonIndex ? "generating" : s));
     setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code: null, totalFrames: null } : l));
     if (pollCancelRef.current) pollCancelRef.current();
-    pollCancelRef.current = pollCourse(activeHistoryId!, (course: CourseFromAPI) => {
-      setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-      if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
-      if (course.questions?.length) setQuizQuestions(course.questions);
-    });
+    pollCancelRef.current = pollCourse(activeHistoryId!, applyCourseUpdate);
   };
 
-  // crashInfo (from DynamicPlayer's onRetry — see LessonCrashInfo) means
-  // this came from an actual playback crash, not the "lesson failed to
-  // generate at all" banner — those always call this with no crashInfo and
-  // go straight to a full regenerate, since there's no existing code to
-  // patch a scene INTO in the first place.
-  //
-  // When crashInfo IS present, try the cheap, targeted fix first: patch just
-  // the scene that broke instead of paying for the whole lesson again. Only
-  // falls back to a full regenerate when the backend genuinely can't isolate
-  // a scene (fallbackToFullRetry) — never on a generic network/5xx error,
-  // where retrying the same targeted patch is the right move, not silently
-  // escalating to a full regenerate the user didn't ask for.
+  // With crashInfo: try the targeted scene patch first; fall back to a full
+  // regenerate only when the backend can't isolate the scene.
   const handleRetryLesson = async (lessonIndex: number, crashInfo?: LessonCrashInfo) => {
     if (!activeHistoryId || retryingLesson !== null) return;
     analytics.lessonRegenerated({ lesson: lessonIndex + 1 });
     setRetryingLesson(lessonIndex);
     try {
       if (crashInfo) {
-        // Generic on purpose — whether the backend ends up targeting the
-        // scene or the shared header (a bug some OTHER scene's code calls
-        // into) isn't known until the request resolves, so this can't say
-        // "scene" or "header" specifically without guessing.
         setRetryingLabel("Fixing the part that broke…");
         try {
           const result = await retryScene(activeHistoryId, lessonIndex, crashInfo);
@@ -1867,38 +2246,16 @@ export default function AILearningPage() {
     setUnlockingCourse(true);
     try {
       await unlockCourse(activeHistoryId);
-
-      // FIX 1 — credit counter not dropping: unlockCourse only returns
-      // { ok, message }, not the new balance, so re-fetch credits explicitly
-      // right away instead of waiting for a page reload.
       fetchCredits();
-
-      // Optimistically flip locked lessons to "generating" so the UI doesn't
-      // sit on stale "locked" state while we wait for the server.
       setLessonStatuses((prev) => prev.map((s) => s === "locked" ? "generating" : s));
       if (pollCancelRef.current) pollCancelRef.current();
-
-      // FIX 2 — lessons 2-6 only appearing after refresh: fetch the course
-      // status ONCE immediately, instead of waiting for pollCourse's first
-      // internal tick (which can take several seconds). The backend has
-      // already unlocked and started generating; this pulls that fresh state
-      // into the UI right now rather than on the next poll cycle or reload.
       try {
         const course = await getCourseStatus(activeHistoryId);
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
-        if (course.questions?.length) setQuizQuestions(course.questions);
+        applyCourseUpdate(course);
       } catch (statusErr) {
         console.error("Failed to fetch course status right after unlock:", statusErr);
-        // Not fatal — the poll loop below will pick it up shortly.
       }
-
-      // Keep polling as a backup / to track ongoing lesson generation.
-      pollCancelRef.current = pollCourse(activeHistoryId, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
-        if (course.questions?.length) setQuizQuestions(course.questions);
-      });
+      pollCancelRef.current = pollCourse(activeHistoryId, applyCourseUpdate);
     } catch (err: any) {
       console.error("Failed to unlock course:", err);
       alert(err?.message || "Couldn't unlock this course. Make sure you have a course credit, then try again.");
@@ -1922,51 +2279,24 @@ export default function AILearningPage() {
     try { await deleteCourse(id); } catch (err) { console.error("Failed to delete course:", err); }
   };
 
-  const mapStatus = (s: string): LessonStatus => s === "ready" ? "ready" : s === "failed" ? "failed" : s === "locked" ? "locked" : "generating";
-
-  // Called when the user submits a topic/file from the upload screen.
-  // Instead of generating immediately, it now routes into the optional
-  // level-check chat first. The actual generation happens in runGeneration,
-  // called by the assessment's onComplete/onSkip.
+  // Submit from the composer → optional level check → runGeneration.
   const startNewCourse = async (name: string, file?: File | null, tier?: string | null) => {
     setPendingGeneration({ name, file, tier });
     setFileName(name);
     setPhase("assessment");
   };
 
-  // Does the real generation work. `level` is the result of the level check
-  // (or null if skipped/failed) and gets passed through to the backend so
-  // the course can be pitched appropriately. `tier` is the selected course
-  // tier's key (null for the free trial / a legacy no-tier request).
-  const runGeneration = async (
-    name: string,
-    file: File | null | undefined,
-    level: "beginner" | "intermediate" | "advanced" | null,
-    tier: string | null
-  ) => {
+  const runGeneration = async (name: string, file: File | null | undefined, level: Level, tier: string | null) => {
     analytics.courseStarted({ topic: name, source: file ? (file.name.toLowerCase().endsWith(".pptx") ? "pptx" : "pdf") : "topic" });
     bgTimersRef.current.forEach(clearTimeout); bgTimersRef.current = [];
     if (pollCancelRef.current) pollCancelRef.current();
-    // Jump straight into the course view (not a separate "generating" screen) —
-    // the per-lesson progress bars in the course sidebar already show each
-    // lesson generating live, so a full-screen generating phase is redundant.
     setFileName(name); setPhase("course");
-    // No more free trial — every generation is a real tier, spent from the
-    // user's actual balance (100-credit signup bonus first, same as any
-    // other credits). isFirstCourseEver stands in for the old free-trial
-    // check for the ONE thing that still cares about "first course" as a
-    // moment, not a payment method: the post-quiz feedback prompt below —
-    // signupBonusCredits still being the full, untouched 100 right before
-    // this call means nothing has ever been spent yet.
+    // Untouched 100-credit bonus = first course ever (drives the post-quiz feedback prompt).
     const isFirstCourseEver = credits?.signupBonusCredits === 100;
     setActiveCourseIsFreeTrial(isFirstCourseEver);
-    // Legacy no-tier request (collab rooms) still falls back to 6 lessons/
-    // 30-minute quiz; a selected tier sizes the loading skeleton and quiz
-    // timer to match what's actually about to be generated.
     const selectedTier = tier ? courseTiers?.find((t) => t.key === tier) : null;
     const lessonCount = !selectedTier ? 6 : selectedTier.lessonCount;
     setActiveCourseQuizMinutes(!selectedTier ? 30 : selectedTier.timeAllocationMinutes);
-    // Show lessons in their loading state immediately while the request fires.
     setLessons(buildMockLessons(lessonCount).map((l) => ({ ...l, completed: false, videoUrl: null, code: null, totalFrames: null })));
     setLessonStatuses(buildMockLessons(lessonCount).map(() => "generating"));
     setActiveSection("video"); setActiveLesson(0);
@@ -1981,28 +2311,16 @@ export default function AILearningPage() {
       setLessons(freshLessons); setLessonStatuses(freshStatuses);
       setQuizQuestions([]); setActiveSection("video"); setActiveLesson(0); setQuizAnswers([]); setQuizDone(false);
       seenFailuresRef.current.clear(); setFailureBanner(null);
-      pollCancelRef.current = pollCourse(courseId, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
-        if (course.questions?.length) setQuizQuestions(course.questions);
-      });
+      pollCancelRef.current = pollCourse(courseId, applyCourseUpdate);
     } catch (err: any) {
       console.error(err);
       setPhase("upload");
-      if (err?.status === 402) {
-        // Insufficient credits (a race against the tier picker's own
-        // affordability check, e.g. balance changed in another tab) — send
-        // the user straight to the top-up flow instead of a dead-end alert.
-        setShowPaywall(true);
-      } else {
-        alert(err?.message || "Failed to generate course. Please try again.");
-      }
+      if (err?.status === 402) setShowPaywall(true);
+      else alert(err?.message || "Failed to generate course. Please try again.");
     }
   };
 
-  // Bridges the assessment result into generation. Used by both onComplete
-  // (level determined) and onSkip (level = null).
-  const handleAssessmentDone = (level: "beginner" | "intermediate" | "advanced" | null) => {
+  const handleAssessmentDone = (level: Level) => {
     if (!pendingGeneration) { setPhase("upload"); return; }
     const { name, file, tier } = pendingGeneration;
     setPendingGeneration(null);
@@ -2011,18 +2329,7 @@ export default function AILearningPage() {
 
   const restoreEntry = (entry: HistoryEntry) => {
     if (pollCancelRef.current) pollCancelRef.current();
-    // Reset unconditionally on every call — if a PREVIOUS entry's lazy fetch
-    // is still in flight when the user opens ANOTHER course entirely (that
-    // fetch has no cancellation of its own), this entry might not need any
-    // fetch at all, and would otherwise be stuck showing a skeleton that was
-    // really left over from the abandoned previous one. The lazy-fetch
-    // branch further down flips this back to true, only if THIS entry
-    // actually needs it.
     setCourseDetailsLoading(false);
-    // Only navigate if we're not ALREADY at this course's URL — restoreEntry
-    // is also called by the URL-reading effect below (loading straight from
-    // /ai_tutor/:courseId), where we're already there; navigating again would
-    // just push a redundant duplicate entry onto the browser history stack.
     setActiveHistoryId(entry.id);
     if (urlCourseId !== entry.id) router(`/ai_tutor/${entry.id}`);
     setFileName(entry.fileName); setLessons(entry.lessons);
@@ -2033,20 +2340,9 @@ export default function AILearningPage() {
     setServerQuizResult(entry.serverQuizResult ?? null);
     setActiveSection(entry.quizDone ? "results" : "video"); setActiveLesson(0); setPhase("course");
     if (entry.lessonStatuses?.some((s) => s === "generating")) {
-      pollCancelRef.current = pollCourse(entry.id, (course: CourseFromAPI) => {
-        setLessons((prev) => prev.map((l, i) => { const a = course.lessons[i]; if (!a) return l; return { ...l, title: a.title ?? l.title, description: a.description ?? l.description, keyPoints: a.keyPoints?.length ? a.keyPoints : l.keyPoints, videoUrl: a.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, error: a.error ?? null }; }));
-        setLessonStatuses(course.lessons.map((_, i) => mapStatus(course.lessons[i]?.status ?? "")));
-        if (course.questions?.length) setQuizQuestions(course.questions);
-      });
+      pollCancelRef.current = pollCourse(entry.id, applyCourseUpdate);
     } else if (entry.lessons.some((l) => l.code == null)) {
-      // Ready course, opened for the first time this session, but the
-      // sidebar's list fetch (listCourses) no longer includes the heavy
-      // per-lesson code/sceneProgress fields — see courseController.js's
-      // listCoursesHandler, which excludes them so the initial history load
-      // doesn't transfer/parse megabytes of compiled Remotion code just to
-      // show a title list. Fetch this ONE course's full detail now that the
-      // user is actually watching it, and cache the result back into
-      // `history` so re-selecting the same entry later doesn't fetch again.
+      // The list endpoint omits heavy lesson code — fetch it once, on open.
       setCourseDetailsLoading(true);
       getCourseStatus(entry.id)
         .then((course) => {
@@ -2056,16 +2352,8 @@ export default function AILearningPage() {
               if (!a) return l;
               return { ...l, videoUrl: a.videoUrl ?? l.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress };
             });
-          // Always safe to cache the fetched code back into `history` — it's
-          // correct data for THAT entry regardless of what's on screen now.
           setHistory((prev) => prev.map((e) => (e.id === entry.id ? { ...e, lessons: fillCode(e.lessons) } : e)));
-          // But only overwrite the CURRENTLY DISPLAYED lessons (and clear the
-          // loading flag) if the user is still looking at this same course —
-          // this fetch has no cancellation of its own, so if the user
-          // clicked into a DIFFERENT course while it was in flight, applying
-          // either here would silently corrupt that other course's state (a
-          // real bug: wrong lesson code shown, or the wrong course's
-          // skeleton dismissed, after fast switching).
+          // Only touch the displayed course if the user is still on it.
           if (activeHistoryIdRef.current === entry.id) { setLessons(fillCode); setCourseDetailsLoading(false); }
         })
         .catch((err) => {
@@ -2075,31 +2363,10 @@ export default function AILearningPage() {
     }
   };
 
-  // Makes a course's URL (/ai_tutor/:courseId) an actual source of truth,
-  // not just a label restoreEntry happens to also set — a fresh load,
-  // browser back/forward, or a pasted link all land here. Deliberately
-  // depends ONLY on urlCourseId (not `history`, not `activeHistoryId`):
-  // fetching directly via getCourseStatus works regardless of whether
-  // `history`'s paginated list has even loaded yet, or whether this course
-  // is on a later page than what's currently fetched — waiting on `history`
-  // would mean a deep link to an older course could hang or silently fail
-  // depending on pagination state, for no real benefit (one direct fetch by
-  // id is cheap either way).
-  //
-  // The activeHistoryIdRef check is what keeps this from fighting the FOUR
-  // places that already write the URL (restoreEntry, runGeneration,
-  // handleDeleteCourse, the "new course" buttons) — each of those sets
-  // activeHistoryId (and therefore the ref, via its own effect) synchronously
-  // alongside its own navigate() call, so by the time THIS effect's
-  // dependency (urlCourseId) changes as a result, the ref already matches
-  // and this effect no-ops. It only does real work when the URL changed for
-  // a reason other than this component's own navigation.
+  // URL is a source of truth: fresh load, back/forward, or pasted link.
   useEffect(() => {
     if (!urlCourseId) return;
     if (urlCourseId === activeHistoryIdRef.current) return;
-    // Cleared automatically once restoreEntry runs below (it unconditionally
-    // resets this at its own top) — this entry already has full code from
-    // THIS fetch, so restoreEntry's own lazy-fetch branch won't re-set it.
     setCourseDetailsLoading(true);
     getCourseStatus(urlCourseId)
       .then((course) => enrichEntryWithProgress(mapCourseToEntry(course)))
@@ -2107,12 +2374,6 @@ export default function AILearningPage() {
       .catch((err) => {
         console.error(`Failed to load course ${urlCourseId} from URL:`, err);
         setCourseDetailsLoading(false);
-        // `phase` starts as "course" whenever the URL names one (see its
-        // lazy initializer above) — if THIS is the very first load and the
-        // fetch fails, nothing has ever set phase to "course" for a real
-        // reason, so without resetting it here it would stay stuck on the
-        // course view's (empty) shell even after navigating back to the
-        // bare /ai_tutor URL below.
         setPhase("upload");
         router("/ai_tutor", { replace: true });
       });
@@ -2120,352 +2381,308 @@ export default function AILearningPage() {
 
   const allLessonsReady = lessonStatuses.every((s) => s === "ready" || s === "failed");
 
-  if (phase === "assessment") {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
-        {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} onSuccess={(awarded) => { if (awarded > 0) fetchCredits(); }} />}
-        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
-        <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => { setPendingGeneration(null); setPhase("upload"); router("/ai_tutor"); }} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
-          {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
-          <div className="flex-1 overflow-hidden flex flex-col bg-white/40">
-            <LevelAssessmentChat
-              topic={pendingGeneration?.name || fileName}
-              onComplete={(level) => handleAssessmentDone(level)}
-              onSkip={() => handleAssessmentDone(null)}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // ── Derived view state ──
+  const currentLesson = lessons[activeLesson] ?? lessons[0];
+  const completedCount = lessons.filter((l) => l.completed).length;
+  const courseProgress = lessons.length ? (completedCount / lessons.length) * 100 : 0;
+  const generatingCount = lessonStatuses.filter((s) => s === "generating").length;
+  const activeEntry = history.find((e) => e.id === activeHistoryId);
 
-  if (phase === "upload") {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 flex flex-col">
-        {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} onSuccess={(awarded) => { if (awarded > 0) fetchCredits(); }} />}
-        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
-        <div className="flex flex-1 overflow-hidden relative">
-          <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => {}} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
-          {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
-          <div className="flex-1 overflow-y-auto"><UploadPhase onGenerate={startNewCourse} credits={credits} courseTiers={courseTiers} onRequestTopUp={() => setShowPaywall(true)} /></div>
-        </div>
+  const handleNew = () => {
+    if (isMobile) setHistorySidebarCollapsed(true);
+    if (phase === "upload") return;
+    setPendingGeneration(null);
+    setPhase("upload");
+    router("/ai_tutor");
+  };
+
+  const library = (
+    <LibraryRail
+      history={history}
+      activeId={activeHistoryId}
+      onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }}
+      onNew={handleNew}
+      onDelete={handleDeleteCourse}
+      collapsed={historySidebarCollapsed}
+      onToggle={() => setHistorySidebarCollapsed((c) => !c)}
+      loading={historyLoading}
+      error={historyError}
+      credits={credits}
+      onBuy={() => setShowPaywall(true)}
+      isMobile={isMobile}
+      onFeedback={() => setShowFeedback(true)}
+      hasMore={historyHasMore}
+      loadingMore={loadingMoreHistory}
+      onLoadMore={loadMoreHistory}
+      user={user}
+      onLogout={handleLogout}
+    />
+  );
+
+  const modals = (
+    <>
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} onSuccess={(awarded) => { if (awarded > 0) fetchCredits(); }} />}
+      {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
+      {phase === "course" && showShareModal && activeHistoryId && <ShareModal courseId={activeHistoryId} onClose={() => setShowShareModal(false)} />}
+      {phase === "course" && showPublishModal && activeHistoryId && <PublishModal courseId={activeHistoryId} onClose={() => setShowPublishModal(false)} />}
+    </>
+  );
+
+  const lessonControls = (
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <button disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className={BTN_SOFT}>
+        <ChevronLeft className="h-4 w-4" /><span className="hidden sm:inline">Previous</span>
+      </button>
+      <div className="flex items-center gap-2">
+        {WEB_DOWNLOAD_ENABLED && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
+          <DownloadLessonButton
+            lessonTitle={lessons[activeLesson]?.title}
+            code={lessons[activeLesson].code as string}
+            durationInFrames={lessons[activeLesson].totalFrames ?? 3600}
+          />
+        )}
+        {activeLesson < lessons.length - 1 ? (
+          lessonStatuses[activeLesson + 1] === "locked" ? (
+            <button
+              disabled={unlockingCourse}
+              onClick={handleUnlockCourse}
+              className={cx(BTN_BASE, "bg-[#FFB547] font-semibold text-[#2A1A00] hover:brightness-110")}
+            >
+              {unlockingCourse
+                ? <><Loader2 className="h-4 w-4 animate-spin" /><span className="hidden sm:inline">Unlocking…</span></>
+                : <><Lock className="h-4 w-4" /><span className="hidden sm:inline">Unlock (1 credit)</span><span className="sm:hidden">Unlock</span></>}
+            </button>
+          ) : lessonStatuses[activeLesson + 1] === "generating" ? (
+            <button disabled className={BTN_SOFT}>
+              <Loader2 className="h-4 w-4 animate-spin" /><span className="hidden sm:inline">Next lesson generating…</span>
+            </button>
+          ) : (
+            <button onClick={() => setActiveLesson((i) => i + 1)} className={BTN_PRIMARY}>
+              <span className="hidden sm:inline">Next lesson</span><span className="sm:hidden">Next</span><ChevronRight className="h-4 w-4" />
+            </button>
+          )
+        ) : (
+          <button disabled={!allLessonsReady} onClick={() => setActiveSection("quiz")} className={BTN_PRIMARY}>
+            <ClipboardList className="h-4 w-4" /><span className="hidden sm:inline">Take the</span> quiz
+          </button>
+        )}
       </div>
-    );
-  }
+    </div>
+  );
+
+  const handleQuizSubmit = (answers: QuizAnswer[]) => {
+    setQuizAnswers(answers); setQuizDone(true); setActiveSection("results");
+    // Score recomputed + persisted server-side; client answers never trusted for the score.
+    setServerQuizResult(null);
+    if (activeHistoryId) {
+      submitQuizApi(activeHistoryId, answers)
+        .then(setServerQuizResult)
+        .catch((err) => console.error("Failed to persist quiz result:", err));
+    }
+    if (activeCourseIsFreeTrial) {
+      setTimeout(() => setShowFeedback(true), 3000);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20">
-      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} onSuccess={(awarded) => { if (awarded > 0) fetchCredits(); }} />}
-        {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
-        {showShareModal && activeHistoryId && <ShareModal courseId={activeHistoryId} onClose={() => setShowShareModal(false)} />}
-        {showPublishModal && activeHistoryId && <PublishModal courseId={activeHistoryId} onClose={() => setShowPublishModal(false)} />}
-      <Helmet>
-        {/* ── Primary ── */}
-        <title>{fileName ? `${fileName.replace(/\.(pdf|pptx)$/i, "")} — Level Up AI` : "Your AI Course — Level Up AI"}</title>
-        <meta name="description" content="Generate personalized animated video courses from any topic or PDF. Six narrated lessons and a 20-question readiness quiz, ready in minutes." />
-        <meta name="robots" content="noindex, nofollow" />
-        <link rel="canonical" href="https://leveluppedu.app/ai_tutor" />
+    <div
+      className="flex h-screen overflow-hidden bg-[#0A0B10] text-[#ECEDF2] antialiased selection:bg-[#8B7CFF]/40"
+      style={{ fontFamily: "'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif" }}
+    >
+      <StudioStyles />
+      {modals}
+      {library}
 
-        {/* ── Open Graph ── */}
-        <meta property="og:type" content="website" />
-        <meta property="og:site_name" content="Level Up AI" />
-        <meta property="og:title" content="Level Up AI — Generate Your Course" />
-        <meta property="og:description" content="Type a topic or upload your notes. Get 6 animated lessons with narration and a quiz in minutes." />
-        <meta property="og:url" content="https://leveluppedu.app/ai_tutor" />
-        <meta property="og:image" content="https://leveluppedu.app/logo.png" />
-
-        {/* ── Twitter/X ── */}
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Level Up AI — Generate Your Course" />
-        <meta name="twitter:description" content="Type a topic or upload your notes. Get 6 animated lessons with narration and a quiz in minutes." />
-        <meta name="twitter:image" content="https://leveluppedu.app/logo.png" />
-
-        {/* ── Structured Data: WebApplication ── */}
-        <script type="application/ld+json">{JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "WebApplication",
-          "name": "Level Up AI",
-          "url": "https://leveluppedu.app",
-          "description": "AI-powered platform that generates personalized animated video courses from any topic or PDF.",
-          "applicationCategory": "EducationApplication",
-          "operatingSystem": "Web",
-          "offers": {
-            "@type": "Offer",
-            "price": "4.99",
-            "priceCurrency": "USD",
-            "description": "1 full course — 6 animated lessons, narration, and a 20-question quiz"
-          },
-          "publisher": {
-            "@type": "Organization",
-            "name": "Level Up AI",
-            "url": "https://leveluppedu.app",
-            "logo": {
-              "@type": "ImageObject",
-              "url": "https://leveluppedu.app/logo.png"
-            }
-          }
-        })}</script>
-      </Helmet>
-      <div className="flex h-screen relative">
-        <HistorySidebar history={history} activeId={activeHistoryId} onSelect={(e) => { restoreEntry(e); if (isMobile) setHistorySidebarCollapsed(true); }} onNew={() => { setPhase("upload"); router("/ai_tutor"); }} onDelete={handleDeleteCourse} collapsed={historySidebarCollapsed} onToggle={() => setHistorySidebarCollapsed((c) => !c)} loading={historyLoading} error={historyError} credits={credits} onBuy={() => setShowPaywall(true)} isMobile={isMobile} onFeedback={() => setShowFeedback(true)} hasMore={historyHasMore} loadingMore={loadingMoreHistory} onLoadMore={loadMoreHistory} user={user} onLogout={handleLogout} />
-        {historySidebarCollapsed && <button onClick={() => setHistorySidebarCollapsed(false)} className="absolute left-0 top-4 z-10 w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-r-lg text-slate-500 hover:text-slate-800 shadow-sm transition-all"><PanelLeft className="h-4 w-4" /></button>}
-
-        {isMobile && courseSidebarOpen && (
-          <div className="fixed inset-0 z-30 bg-black/30 backdrop-blur-[2px]" onClick={() => setCourseSidebarOpen(false)} />
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {/* ── Composer ── */}
+        {phase === "upload" && (
+          <>
+            {isMobile && <MobileBar onMenu={() => setHistorySidebarCollapsed(false)} />}
+            <div className="lu-scroll flex-1 overflow-y-auto">
+              <Composer onGenerate={startNewCourse} credits={credits} courseTiers={courseTiers} onRequestTopUp={() => setShowPaywall(true)} />
+            </div>
+          </>
         )}
-        <aside className={`${
-          isMobile
-            ? `fixed top-0 right-0 z-40 h-full w-[85vw] max-w-72 ${courseSidebarOpen ? "translate-x-0" : "translate-x-full"}`
-            : `${courseSidebarOpen ? "w-72" : "w-0 overflow-hidden"} shrink-0`
-        } transition-all duration-300 bg-white border-l border-slate-200 flex flex-col shadow-sm`}>
-          <div className="p-4 sm:p-5 border-b border-slate-100">
-            <div className="flex items-center gap-2 mb-2">
-              <Sparkles className="h-4 w-4 text-blue-600 shrink-0" />
-              <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">AI Course</span>
-            </div>
-            {courseDetailsLoading ? (
-              // No own <style> tag needed — LessonListSkeleton right below
-              // renders one whenever this does (same courseDetailsLoading
-              // condition, same visible panel), so the keyframe is already
-              // in the DOM by the time this animation runs.
-              <ShimmerBox className="h-4 w-2/3" />
-            ) : (
-              <h2 className="font-bold text-slate-900 text-sm leading-snug line-clamp-2">{fileName}</h2>
-            )}
-            {!courseDetailsLoading && !allLessonsReady && (
-              <div className="mt-3 flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
-                <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin shrink-0" />
-                <p className="text-xs text-blue-700">{lessonStatuses.filter((s) => s === "generating").length} lesson{lessonStatuses.filter((s) => s === "generating").length !== 1 ? "s" : ""} generating…</p>
-              </div>
-            )}
-          </div>
 
-          <nav className="flex-1 overflow-y-auto py-3">
-            <div className="px-4 mb-1">
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Video Lessons</p>
+        {/* ── Level check ── */}
+        {phase === "assessment" && (
+          <>
+            {isMobile && <MobileBar onMenu={() => setHistorySidebarCollapsed(false)} />}
+            <div className="relative flex min-h-0 flex-1 flex-col p-3 sm:p-6">
+              <Aurora />
+              <div className="relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+                <div className="lu-rise mb-5 px-1">
+                  <p className={EYEBROW}>Quick level check</p>
+                  <h2 className="lu-serif mt-2 truncate text-3xl text-white sm:text-4xl">
+                    Calibrating <span className="italic text-[#C3BAFF]">{cleanName(pendingGeneration?.name || fileName)}</span>
+                  </h2>
+                  <p className="mt-1 text-sm text-[#8A8FA3]">A few quick questions so lessons land at the right depth. Skip anytime.</p>
+                </div>
+                <div className="lu-rise flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-white text-slate-900 shadow-[0_40px_100px_-40px_rgba(0,0,0,1)] ring-1 ring-white/10" style={{ animationDelay: "80ms" }}>
+                  <LevelAssessmentChat
+                    topic={pendingGeneration?.name || fileName}
+                    onComplete={(level) => handleAssessmentDone(level)}
+                    onSkip={() => handleAssessmentDone(null)}
+                  />
+                </div>
+              </div>
             </div>
-            {courseDetailsLoading ? <LessonListSkeleton count={lessons.length || 6} /> : lessons.map((lesson, i) => {
-              const status = lessonStatuses[i];
-              const isGenerating = status === "generating";
-              const isFailed = status === "failed";
-              const isLockedStatus = status === "locked";
-              const isActive = activeSection === "video" && activeLesson === i;
-              // Only actually disabled while locked behind the free trial —
-              // a still-generating lesson is clickable so the user can watch
-              // ITS OWN filmstrip/progress (see SceneGenerationFilmstrip),
-              // not just whichever lesson happens to be active. All 6 lessons
-              // build concurrently, so there's no reason to trap the user on
-              // one lesson while others finish in the background unseen.
-              const isDisabled = isLockedStatus;
-              const progress = lessonProgresses[i] ?? 0;
-              return (
-                <button key={lesson.id} disabled={isDisabled}
-                  onClick={() => { if (!isDisabled) { analytics.lessonViewed({ lesson: i + 1 }); setActiveLesson(i); setActiveSection("video"); if (isMobile) setCourseSidebarOpen(false); } }}
-                  className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${isActive ? "bg-blue-50 border-r-2 border-blue-600" : isFailed ? "opacity-70 hover:bg-red-50/50" : isLockedStatus ? "opacity-70 cursor-not-allowed" : "hover:bg-slate-50"}`}
-                >
-                  <div className="mt-0.5 shrink-0">
-                    <LessonStatusIcon status={status} completed={lesson.completed} isActive={isActive} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className={`text-xs font-semibold truncate ${isActive ? "text-blue-700" : isFailed ? "text-red-500" : isLockedStatus ? "text-amber-700" : "text-slate-700"}`}>
-                      {i + 1}. {lesson.title}
-                    </p>
-                    {isLockedStatus ? (
-                      <p className="text-xs text-amber-500 mt-0.5 flex items-center gap-1"><Lock className="h-3 w-3" /> Contact us to unlock</p>
-                    ) : isGenerating ? (
-                      <div className="mt-1.5">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-blue-400">generating…</span>
-                          <span className="text-xs font-semibold text-blue-500">{Math.round(progress)}%</span>
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-1 overflow-hidden">
-                          <div className="h-1 rounded-full bg-gradient-to-r from-blue-400 to-indigo-400 transition-all duration-500" style={{ width: `${progress}%` }} />
-                        </div>
-                      </div>
-                    ) : isFailed ? (
-                      <p className="text-xs text-red-400 mt-0.5 flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Generation failed</p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5"><Clock className="h-3 w-3" /> {lesson.duration}</p>
-                    )}
-                  </div>
+          </>
+        )}
+
+        {/* ── Course ── */}
+        {phase === "course" && (
+          <>
+            <Helmet>
+              <title>{fileName ? `${cleanName(fileName)} — Level Up AI` : "Your AI Course — Level Up AI"}</title>
+              <meta name="description" content="Generate personalized animated video courses from any topic or PDF. Six narrated lessons and a 20-question readiness quiz, ready in minutes." />
+              <meta name="robots" content="noindex, nofollow" />
+              <link rel="canonical" href="https://leveluppedu.app/ai_tutor" />
+              <meta property="og:type" content="website" />
+              <meta property="og:site_name" content="Level Up AI" />
+              <meta property="og:title" content="Level Up AI — Generate Your Course" />
+              <meta property="og:description" content="Type a topic or upload your notes. Get 6 animated lessons with narration and a quiz in minutes." />
+              <meta property="og:url" content="https://leveluppedu.app/ai_tutor" />
+              <meta property="og:image" content="https://leveluppedu.app/logo.png" />
+              <meta name="twitter:card" content="summary_large_image" />
+              <meta name="twitter:title" content="Level Up AI — Generate Your Course" />
+              <meta name="twitter:description" content="Type a topic or upload your notes. Get 6 animated lessons with narration and a quiz in minutes." />
+              <meta name="twitter:image" content="https://leveluppedu.app/logo.png" />
+              <script type="application/ld+json">{JSON.stringify({
+                "@context": "https://schema.org",
+                "@type": "WebApplication",
+                "name": "Level Up AI",
+                "url": "https://leveluppedu.app",
+                "description": "AI-powered platform that generates personalized animated video courses from any topic or PDF.",
+                "applicationCategory": "EducationApplication",
+                "operatingSystem": "Web",
+                "offers": { "@type": "Offer", "price": "4.99", "priceCurrency": "USD", "description": "1 full course — 6 animated lessons, narration, and a 20-question quiz" },
+                "publisher": { "@type": "Organization", "name": "Level Up AI", "url": "https://leveluppedu.app", "logo": { "@type": "ImageObject", "url": "https://leveluppedu.app/logo.png" } },
+              })}</script>
+            </Helmet>
+
+            <header className="z-20 flex h-16 shrink-0 items-center gap-3 border-b border-white/[0.06] bg-[#0A0B10]/80 px-3 backdrop-blur-xl sm:px-6">
+              {isMobile && (
+                <button onClick={() => setHistorySidebarCollapsed(false)} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#B9BCCB] hover:bg-white/[0.06]" aria-label="Open library">
+                  <Menu className="h-5 w-5" />
                 </button>
-              );
-            })}
-
-            <div className="px-4 mt-4 mb-1">
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">Assessment</p>
-            </div>
-            <button disabled={!allLessonsReady} onClick={() => { if (allLessonsReady) { setActiveSection("quiz"); if (isMobile) setCourseSidebarOpen(false); } }}
-              className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${activeSection === "quiz" ? "bg-purple-50 border-r-2 border-purple-600" : !allLessonsReady ? "opacity-40 cursor-not-allowed" : "hover:bg-slate-50"}`}>
-              <ClipboardList className={`h-4 w-4 mt-0.5 ${activeSection === "quiz" ? "text-purple-600" : quizDone ? "text-emerald-500" : "text-slate-400"}`} />
-              <div>
-                <p className={`text-xs font-semibold ${activeSection === "quiz" ? "text-purple-700" : "text-slate-700"}`}>Final Quiz</p>
-                <p className="text-xs text-muted-foreground">{quizQuestions.length || 20} questions</p>
+              )}
+              <Ring value={courseDetailsLoading ? 0 : courseProgress} size={36} stroke={3} color={C.mint}>
+                <span className="font-mono text-[9px] font-semibold text-[#B9BCCB]">{completedCount}/{lessons.length}</span>
+              </Ring>
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-1.5 text-[11px] text-[#6E7389]">
+                  {!courseDetailsLoading && generatingCount > 0
+                    ? <><RecDot /> <span className="text-[#FFB08A]">{generatingCount} lesson{generatingCount !== 1 ? "s" : ""} generating</span></>
+                    : <><Sparkles className="h-3 w-3 text-[#B4A9FF]" /> AI course · {lessons.length} lessons</>}
+                </p>
+                {courseDetailsLoading
+                  ? <Shimmer className="mt-1 h-4 w-48" />
+                  : <h1 className="truncate text-[15px] font-semibold text-white">{cleanName(fileName)}</h1>}
               </div>
-              {!allLessonsReady && <Lock className="h-3 w-3 text-slate-300 ml-auto mt-1" />}
-            </button>
-            <button disabled={!quizDone} onClick={() => { if (quizDone) { setActiveSection("results"); if (isMobile) setCourseSidebarOpen(false); } }}
-              className={`w-full text-left px-4 py-3 flex items-start gap-3 transition-all ${activeSection === "results" ? "bg-amber-50 border-r-2 border-amber-500" : !quizDone ? "opacity-40 cursor-not-allowed" : "hover:bg-slate-50"}`}>
-              <Trophy className={`h-4 w-4 mt-0.5 ${activeSection === "results" ? "text-amber-600" : quizDone ? "text-amber-500" : "text-slate-400"}`} />
-              <div>
-                <p className={`text-xs font-semibold ${activeSection === "results" ? "text-amber-700" : "text-slate-700"}`}>Results & Recommendations</p>
-                <p className="text-xs text-muted-foreground">Readiness score</p>
-              </div>
-              {!quizDone && <Lock className="h-3 w-3 text-slate-300 ml-auto mt-1" />}
-            </button>
-          </nav>
-        </aside>
-
-        <main className="flex-1 overflow-y-auto">
-          <div className="px-4 sm:px-6 py-6 sm:py-8">
-            {failureBanner && failureBanner.lessonIndex === activeLesson && (
-              <div className="mb-4 flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-3 sm:px-4 py-3">
-                <XCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-red-700">
-                    This lesson couldn't be generated
-                  </p>
-                  <p className="text-xs text-red-500 mt-0.5">
-                    Something went wrong while building this video. You can try again — it usually works on a retry.
-                  </p>
-                  <button
-                    onClick={() => {
-                      handleRetryLesson(failureBanner.lessonIndex);
-                      setFailureBanner(null);
-                    }}
-                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-red-700 hover:text-red-900 bg-white border border-red-300 rounded-lg px-3 py-1.5 transition-colors"
-                  >
-                    Retry this lesson
+              {activeHistoryId && allLessonsReady && !courseDetailsLoading && (
+                <div className="flex shrink-0 items-center gap-1">
+                  <button onClick={() => setShowShareModal(true)} className={cx(BTN_GHOST, "h-9 px-3")} title="Share">
+                    <Share2 className="h-4 w-4" /><span className="hidden lg:inline">Share</span>
+                  </button>
+                  <button onClick={() => setShowPublishModal(true)} className={cx(BTN_SOFT, "h-9 px-3")} title="Publish">
+                    <Globe2 className="h-4 w-4 text-[#3DDC97]" /><span className="hidden lg:inline">Publish</span>
                   </button>
                 </div>
-                <button onClick={() => setFailureBanner(null)} className="text-red-400 hover:text-red-600 shrink-0">
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            )}
-            <button onClick={() => setCourseSidebarOpen((o) => !o)} className="mb-4 text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1 transition-colors">
-              {courseSidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-              {courseSidebarOpen ? "Hide" : "Show"} course nav
-            </button>
-            {courseDetailsLoading && <CourseContentSkeleton />}
-            {!courseDetailsLoading && activeSection === "video" && (
-              <div className="space-y-6">
-                <VideoPlayer
-                  lesson={lessons[activeLesson]}
-                  onComplete={() => markComplete(lessons[activeLesson].id)}
-                  onRetry={(crashInfo) => handleRetryLesson(activeLesson, crashInfo)}
-                  retrying={retryingLesson === activeLesson}
-                  retryingLabel={retryingLabel}
-                  courseId={activeHistoryId}
-                  lessonNumber={activeLesson + 1}
-                  nextLessonTitle={lessons[activeLesson + 1]?.title}
-                  nextLessonReady={lessonStatuses[activeLesson + 1] === "ready" && !!lessons[activeLesson + 1]?.code}
-                  onPlayNext={() => setActiveLesson((i) => i + 1)}
-                />
-                <div className="flex items-center justify-between gap-2 pt-2">
-                  <Button variant="outline" disabled={activeLesson === 0} onClick={() => setActiveLesson((i) => i - 1)} className="text-xs sm:text-sm px-3 sm:px-4 shrink-0"><ChevronLeft className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">Previous</span></Button>
-                  {WEB_DOWNLOAD_ENABLED && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
-                    <DownloadLessonButton
-                      lessonTitle={lessons[activeLesson]?.title}
-                      code={lessons[activeLesson].code as string}
-                      durationInFrames={lessons[activeLesson].totalFrames ?? 3600}
-                    />
-                  )}
-                  {activeHistoryId && allLessonsReady && (
-                    <Button
-                      variant="outline"
-                      className="text-xs sm:text-sm px-3 sm:px-4 shrink-0 border-blue-200 text-blue-600 hover:bg-blue-50"
-                      onClick={() => setShowShareModal(true)}
-                    >
-                      <Share2 className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Share</span>
-                    </Button>
-                  )}
-                  {activeHistoryId && allLessonsReady && (
-                    <Button
-                      variant="outline"
-                      className="text-xs sm:text-sm px-3 sm:px-4 shrink-0 border-emerald-200 text-emerald-600 hover:bg-emerald-50"
-                      onClick={() => setShowPublishModal(true)}
-                    >
-                      <Globe2 className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Publish</span>
-                    </Button>
-                  )}
-                  {activeLesson < lessons.length - 1 ? (
-                    lessonStatuses[activeLesson + 1] === "locked" ? (
-                      <Button
-                        className="bg-amber-500 hover:bg-amber-600 text-white text-xs sm:text-sm px-3 sm:px-4"
-                        disabled={unlockingCourse}
-                        onClick={handleUnlockCourse}
-                      >
-                        {unlockingCourse ? (
-                          <><Loader2 className="h-4 w-4 sm:mr-2 animate-spin" /><span className="hidden sm:inline">Unlocking…</span></>
-                        ) : (
-                          <><Lock className="h-4 w-4 sm:mr-2" /><span className="hidden sm:inline">Unlock (1 credit)</span><span className="sm:hidden">Unlock</span></>
-                        )}
-                      </Button>
-                    ) : (
-                      <Button className="bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm px-3 sm:px-4"
-                        disabled={lessonStatuses[activeLesson + 1] === "generating"}
-                        onClick={() => setActiveLesson((i) => i + 1)}>
-                        {lessonStatuses[activeLesson + 1] === "generating"
-                          ? (<><Loader2 className="h-4 w-4 sm:mr-2 animate-spin" /><span className="hidden sm:inline">Next lesson generating…</span></>)
-                          : (<><span className="hidden sm:inline">Next Lesson</span><span className="sm:hidden">Next</span> <ChevronRight className="h-4 w-4 ml-1" /></>)}
-                      </Button>
-                    )
-                  ) : (
-                    <Button className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs sm:text-sm px-3 sm:px-4" disabled={!allLessonsReady} onClick={() => setActiveSection("quiz")}>
-                      <ClipboardList className="h-4 w-4 sm:mr-2 shrink-0" /><span className="hidden sm:inline">Take the </span>Quiz
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
-            {!courseDetailsLoading && activeSection === "quiz" && <QuizSection questions={quizQuestions} timeAllocationMinutes={activeCourseQuizMinutes} onSubmit={(answers) => {
-              setQuizAnswers(answers); setQuizDone(true); setActiveSection("results");
-              // Score is recomputed and stored server-side — the client-sent
-              // answers are never trusted as-is for the score itself. This is
-              // also what makes the quiz score survive a refresh (previously
-              // pure client state, gone the moment the page reloaded).
-              setServerQuizResult(null); // stale prior result, if any, while the fresh one loads
-              if (activeHistoryId) {
-                submitQuizApi(activeHistoryId, answers)
-                  .then(setServerQuizResult)
-                  .catch((err) => console.error("Failed to persist quiz result:", err));
-              }
-              // The free trial now includes the full course + quiz. Right after
-              // the user sees their results is the natural moment to ask for
-              // feedback — they've just experienced the complete product. The
-              // 3s delay lets them actually see the score before the modal
-              // interrupts them, rather than popping up the instant they submit.
-              if (activeCourseIsFreeTrial) {
-                setTimeout(() => setShowFeedback(true), 3000);
-              }
-            }} />}
-            {!courseDetailsLoading && activeSection === "results" && (
-              <>
-                <ResultsSection answers={quizAnswers} questions={quizQuestions} serverResult={serverQuizResult} courseId={activeHistoryId} />
-                <Card className="border-0 shadow-md bg-gradient-to-r from-blue-50 to-indigo-50 p-4 sm:p-5 mt-6">
-                  <div className="flex items-start gap-3 sm:gap-4">
-                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                      <MessageSquare className="h-4 w-4 sm:h-5 sm:w-5 text-blue-600" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-semibold text-slate-800 mb-1 text-sm sm:text-base">How was this course?</h3>
-                      <p className="text-xs sm:text-sm text-slate-500 mb-3">Your feedback helps us improve — it only takes a minute.</p>
-                      <button
-                        onClick={() => setShowFeedback(true)}
-                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-blue-200 text-blue-700 text-xs sm:text-sm font-medium hover:bg-blue-50 hover:border-blue-300 transition-all"
-                      >
-                        <MessageSquare className="h-4 w-4" />
-                        Share your feedback
+              )}
+              <button
+                onClick={() => setCourseSidebarOpen((o) => !o)}
+                className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors", courseSidebarOpen && !isMobile ? "bg-white/[0.07] text-white" : "text-[#8A8FA3] hover:bg-white/[0.06] hover:text-white")}
+                aria-label="Toggle syllabus"
+                title="Syllabus"
+              >
+                <PanelRight className="h-4 w-4" />
+              </button>
+            </header>
+
+            <div className="flex min-h-0 flex-1">
+              <main className="lu-scroll min-w-0 flex-1 overflow-y-auto">
+                <div className="mx-auto max-w-5xl px-4 py-7 sm:px-8 sm:py-10">
+                  {failureBanner && failureBanner.lessonIndex === activeLesson && activeSection === "video" && (
+                    <div className="lu-rise mb-6 flex items-start gap-3 rounded-2xl bg-[#FF5C6C]/[0.07] p-4 ring-1 ring-[#FF5C6C]/25">
+                      <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#FF5C6C]" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-white">This lesson couldn't be generated</p>
+                        <p className="mt-0.5 text-xs text-[#B9BCCB]">Something went wrong while building this video. A retry usually fixes it.</p>
+                        <button
+                          onClick={() => { handleRetryLesson(failureBanner.lessonIndex); setFailureBanner(null); }}
+                          className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg bg-white/[0.06] px-3 text-xs font-semibold text-white ring-1 ring-white/10 transition-colors hover:bg-white/[0.1]"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" /> Retry this lesson
+                        </button>
+                      </div>
+                      <button onClick={() => setFailureBanner(null)} className="shrink-0 rounded-md p-1 text-[#8A8FA3] hover:bg-white/5 hover:text-white" aria-label="Dismiss">
+                        <X className="h-4 w-4" />
                       </button>
                     </div>
-                  </div>
-                </Card>
-              </>
-            )}
-          </div>
-        </main>
+                  )}
+
+                  {courseDetailsLoading && <CourseContentSkeleton />}
+
+                  {!courseDetailsLoading && activeSection === "video" && currentLesson && (
+                    <LessonStage
+                      lesson={currentLesson}
+                      onComplete={() => markComplete(currentLesson.id)}
+                      onRetry={(crashInfo) => handleRetryLesson(activeLesson, crashInfo)}
+                      retrying={retryingLesson === activeLesson}
+                      retryingLabel={retryingLabel}
+                      courseId={activeHistoryId}
+                      lessonNumber={activeLesson + 1}
+                      totalLessons={lessons.length}
+                      nextLessonTitle={lessons[activeLesson + 1]?.title}
+                      nextLessonReady={lessonStatuses[activeLesson + 1] === "ready" && !!lessons[activeLesson + 1]?.code}
+                      onPlayNext={() => setActiveLesson((i) => i + 1)}
+                      controls={lessonControls}
+                    />
+                  )}
+
+                  {!courseDetailsLoading && activeSection === "quiz" && (
+                    <QuizStage questions={quizQuestions} timeAllocationMinutes={activeCourseQuizMinutes} onSubmit={handleQuizSubmit} />
+                  )}
+
+                  {!courseDetailsLoading && activeSection === "results" && (
+                    <ResultsStage
+                      answers={quizAnswers}
+                      questions={quizQuestions}
+                      serverResult={serverQuizResult}
+                      courseId={activeHistoryId}
+                      onFeedback={() => setShowFeedback(true)}
+                    />
+                  )}
+                </div>
+              </main>
+
+              <SyllabusPanel
+                open={courseSidebarOpen}
+                isMobile={isMobile}
+                onClose={() => setCourseSidebarOpen(false)}
+                loading={courseDetailsLoading}
+                lessons={lessons}
+                lessonStatuses={lessonStatuses}
+                lessonProgresses={lessonProgresses}
+                activeSection={activeSection}
+                activeLesson={activeLesson}
+                allLessonsReady={allLessonsReady}
+                quizDone={quizDone}
+                quizCount={quizQuestions.length}
+                quizScore={serverQuizResult?.pct ?? activeEntry?.quizScore ?? null}
+                onSelectLesson={(i) => {
+                  analytics.lessonViewed({ lesson: i + 1 });
+                  setActiveLesson(i);
+                  setActiveSection("video");
+                  if (isMobile) setCourseSidebarOpen(false);
+                }}
+                onSelectQuiz={() => { setActiveSection("quiz"); if (isMobile) setCourseSidebarOpen(false); }}
+                onSelectResults={() => { setActiveSection("results"); if (isMobile) setCourseSidebarOpen(false); }}
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

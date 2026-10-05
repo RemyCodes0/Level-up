@@ -60,6 +60,16 @@ interface DynamicPlayerProps {
   // "no skip data available" — falls back to the previous permanent-error
   // behavior, never a hard requirement.
   scenes?: { startFrame: number; endFrame: number }[];
+  // One-shot signal for a caller-driven "move to the next lesson" transition
+  // (the "Up next" overlay's Play next button, or its auto-advance
+  // countdown — see VideoPlayer in AiTutor.tsx) — a mutable ref rather than
+  // a prop value so flipping it doesn't itself trigger a re-render; this
+  // component reads and immediately clears it back to false the moment the
+  // NEW lesson's Component is ready (see the effect below). true means
+  // "seek to 0 AND resume playback automatically"; on any other code change
+  // (opening a lesson from the sidebar, first mount) this stays false and
+  // the new lesson just seeks to 0 without forcing playback, same as today.
+  continuePlaybackRef?: React.RefObject<boolean>;
 }
 
 const FPS = 30;
@@ -369,6 +379,7 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   retryingLabel,
   onSeekBack,
   onFrameUpdate,
+  continuePlaybackRef,
   overlay,
   scenes,
 }) => {
@@ -685,6 +696,31 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
     setPendingSkipFrame(null);
   }, [code]);
 
+  // Every lesson change lands here (this component is no longer remounted
+  // per lesson — see PlayerErrorBoundary's own comment on why — so the SAME
+  // Player instance just receives a new `component` prop). Reset playback
+  // to frame 0 regardless of source (a stale mid-lesson frame position from
+  // the PREVIOUS lesson would otherwise carry over onto the new one). Only
+  // resume playback automatically when continuePlaybackRef was explicitly
+  // armed by the caller (the "Up next" overlay's Play next button or its
+  // auto-advance countdown) — every other transition (opening a lesson from
+  // the sidebar, first mount) leaves it false, so playback stays paused
+  // until the user clicks, same as before this change. Keyed on Component
+  // (not code) for the same reason the pendingSkipFrame effect above is —
+  // guarantees playerRef.current already points at the instance actually
+  // showing this new composition.
+  useEffect(() => {
+    if (!Component) return;
+    const player = playerRef.current;
+    if (!player) return;
+    player.seekTo(0);
+    if (continuePlaybackRef?.current) {
+      continuePlaybackRef.current = false;
+      player.play();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Component]);
+
   // Drives the countdown: starts at AUTO_SKIP_SECONDS the moment a render-
   // time crash lands somewhere a next scene actually exists to jump to,
   // ticks down once a second, and triggers the skip itself at zero. A
@@ -966,6 +1002,10 @@ interface PlayerErrorBoundaryProps {
   onRetry?: (info?: LessonCrashInfo) => void;
   retrying?: boolean;
   retryingLabel?: string;
+  // Any value that changes when the content underneath should get a clean
+  // slate again (e.g. the lesson's own code) — see componentDidUpdate below.
+  // Deliberately a prop to watch, not a `key`: see this class's own comment.
+  resetKey?: string | number | null;
   children: ReactNode;
 }
 interface PlayerErrorBoundaryState {
@@ -996,10 +1036,19 @@ interface PlayerErrorBoundaryState {
 //
 // A React class component is the only way to implement this — there is no
 // hooks-based equivalent for componentDidCatch/getDerivedStateFromError.
-// Keyed by `code` at the call site (VideoPlayer in AiTutor.tsx) so a
-// successful regenerate — which replaces `code` with freshly generated code
-// — mounts a BRAND NEW boundary instance instead of staying stuck showing
-// the previous crash forever.
+// `resetKey` (VideoPlayer in AiTutor.tsx passes the lesson's own `code`) is
+// watched in componentDidUpdate below to clear a caught crash whenever it
+// changes — a successful regenerate replaces `code` with freshly generated
+// code, and so does an ordinary lesson-to-lesson transition. Deliberately a
+// PROP, not a `key` — this used to be a `key` (forcing a full unmount/
+// remount on every reset), which also unmounted DynamicPlayer's fullscreen
+// container underneath it. That meant the browser auto-exited fullscreen on
+// every ordinary lesson switch (fullscreen requires the fullscreened element
+// to stay in the DOM), not just on an actual crash recovery — the exact bug
+// behind "pressing Play next minimizes the screen" (per explicit request,
+// 2026-09-13). Resetting state in place keeps this boundary (and everything
+// under it, container included) mounted across BOTH a regenerate and a
+// normal lesson switch; only an actual crash still shows the fallback.
 export class PlayerErrorBoundary extends ReactComponent<PlayerErrorBoundaryProps, PlayerErrorBoundaryState> {
   constructor(props: PlayerErrorBoundaryProps) {
     super(props);
@@ -1014,6 +1063,12 @@ export class PlayerErrorBoundary extends ReactComponent<PlayerErrorBoundaryProps
     // Console-only, like every other crash-detail path in this file — never
     // surfaced in the UI (could reveal internals of the generated code).
     console.error("[PlayerErrorBoundary] Caught a crash rendering the lesson player:", error, info.componentStack);
+  }
+
+  componentDidUpdate(prevProps: PlayerErrorBoundaryProps) {
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false, errorMessage: null });
+    }
   }
 
   render() {

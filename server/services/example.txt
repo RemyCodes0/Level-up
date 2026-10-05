@@ -1,0 +1,4004 @@
+import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig, Series, Sequence, Audio, Easing, interpolateColors, random, Loop } from "remotion";
+import { useMemo, useCallback, useRef } from "react";
+
+
+
+const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
+const FRAME = { w: 1920, h: 1080 };
+const SAFE = { xMin: 120, xMax: 1800, yMin: 120, yMax: 960 };
+const clampPos = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const SVG_FRAME = { position: "absolute", left: 0, top: 0, width: 1920, height: 1080, pointerEvents: "none", overflow: "visible" };
+const ZONES = {
+  title:   { x: 120, y: 120, w: 1680, h: 130, cx: 960, cy: 185 },
+  stage:   { x: 120, y: 270, w: 1680, h: 580, cx: 960, cy: 560 },
+  caption: { x: 120, y: 870, w: 1680, h: 90, cx: 960, cy: 915 },
+};
+
+const PALETTE = {
+  base: "#080B14",
+  accent: "#FFD152",
+  support: "#00E5FF",
+  supportB: "#E040FB",
+  text: "#F4F6FC",
+};
+
+const Backdrop = () => {
+  const frame = useCurrentFrame();
+  const time = frame / 30;
+
+  const fieldLines = useMemo(() => {
+    return Array.from({ length: 9 }).map((_, i) => ({
+      id: i,
+      yBase: 120 + i * 105,
+      amplitude: 18 + (i % 3) * 6,
+      frequency: 0.0035 + (i % 2) * 0.001,
+      phaseOffset: (i * Math.PI) / 4.5,
+    }));
+  }, []);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: FRAME.w,
+        height: FRAME.h,
+        zIndex: 0,
+        pointerEvents: "none",
+        backgroundColor: PALETTE.base,
+        overflow: "hidden",
+      }}
+    >
+      <svg style={SVG_FRAME}>
+        <defs>
+          <radialGradient id="hdr-em-core" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#00E5FF" stopOpacity="0.12" />
+            <stop offset="50%" stopColor="#E040FB" stopOpacity="0.06" />
+            <stop offset="100%" stopColor="#080B14" stopOpacity="0" />
+          </radialGradient>
+          <linearGradient id="hdr-wave-electric" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#00E5FF" stopOpacity="0.0" />
+            <stop offset="25%" stopColor="#00E5FF" stopOpacity="0.18" />
+            <stop offset="75%" stopColor="#00E5FF" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#00E5FF" stopOpacity="0.0" />
+          </linearGradient>
+          <linearGradient id="hdr-wave-magnetic" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#E040FB" stopOpacity="0.0" />
+            <stop offset="25%" stopColor="#E040FB" stopOpacity="0.15" />
+            <stop offset="75%" stopColor="#E040FB" stopOpacity="0.15" />
+            <stop offset="100%" stopColor="#E040FB" stopOpacity="0.0" />
+          </linearGradient>
+        </defs>
+
+        <rect
+          x={ZONES.stage.x}
+          y={ZONES.stage.y}
+          width={ZONES.stage.w}
+          height={ZONES.stage.h}
+          fill="url(#hdr-em-core)"
+          style={{ opacity: 0.9 }}
+        />
+
+        {fieldLines.map((line) => {
+          const isElectric = line.id % 2 === 0;
+          const stroke = isElectric ? "url(#hdr-wave-electric)" : "url(#hdr-wave-magnetic)";
+          const drift = Math.sin(time * 0.9 + line.phaseOffset) * 12;
+          const segments = 16;
+          const step = FRAME.w / segments;
+
+          let pathData = `M 0 ${line.yBase + drift + Math.sin(time * 1.5 + line.phaseOffset) * line.amplitude}`;
+          for (let s = 1; s <= segments; s++) {
+            const x = s * step;
+            const wave = Math.sin(x * line.frequency + time * 1.8 + line.phaseOffset) * line.amplitude;
+            const y = line.yBase + drift + wave;
+            pathData += ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
+          }
+
+          return (
+            <path
+              key={line.id}
+              d={pathData}
+              fill="none"
+              stroke={stroke}
+              strokeWidth={1.5}
+              strokeDasharray={isElectric ? "8 6" : "4 8"}
+              strokeOpacity={0.8}
+            />
+          );
+        })}
+      </svg>
+    </div>
+  );
+};
+
+const Label = ({ children, size = 28 }) => {
+  return (
+    <span
+      style={{
+        color: PALETTE.text,
+        fontSize: size,
+        fontWeight: 600,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        letterSpacing: "0.02em",
+        textShadow: "0 2px 8px rgba(0, 0, 0, 0.85), 0 0 16px rgba(0, 229, 255, 0.25)",
+        userSelect: "none",
+        display: "inline-block",
+      }}
+    >
+      {children}
+    </span>
+  );
+};
+
+const Panel = ({ children, width = 480, height = "auto" }) => {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        backgroundColor: "rgba(12, 17, 32, 0.72)",
+        border: "1px solid rgba(0, 229, 255, 0.22)",
+        borderRadius: 14,
+        padding: "24px 28px",
+        boxShadow: "0 12px 36px rgba(0, 0, 0, 0.55), inset 0 0 20px rgba(0, 229, 255, 0.04)",
+        backdropFilter: "blur(12px)",
+        boxSizing: "border-box",
+        position: "relative",
+      }}
+    >
+      {children}
+    </div>
+  );
+};
+
+const Glow = ({ color = PALETTE.support, size = 180 }) => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: -size / 2,
+        top: -size / 2,
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        background: `radial-gradient(circle, ${color} 0%, rgba(0,0,0,0) 70%)`,
+        opacity: 0.35,
+        pointerEvents: "none",
+        mixBlendMode: "screen",
+      }}
+    />
+  );
+};
+
+const Arrow = ({ from, to, color = PALETTE.accent, width = 3 }) => {
+  const { x: x1, y: y1 } = from;
+  const { x: x2, y: y2 } = to;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const angle = Math.atan2(dy, dx);
+  const headLen = Math.max(12, width * 3.5);
+  const headAngle = Math.PI / 6;
+
+  const leftX = x2 - headLen * Math.cos(angle - headAngle);
+  const leftY = y2 - headLen * Math.sin(angle - headAngle);
+  const rightX = x2 - headLen * Math.cos(angle + headAngle);
+  const rightY = y2 - headLen * Math.sin(angle + headAngle);
+
+  return (
+    <svg style={SVG_FRAME}>
+      <line
+        x1={x1}
+        y1={y1}
+        x2={x2}
+        y2={y2}
+        stroke={color}
+        strokeWidth={width}
+        strokeLinecap="round"
+      />
+      <polygon
+        points={`${x2},${y2} ${leftX},${leftY} ${rightX},${rightY}`}
+        fill={color}
+      />
+    </svg>
+  );
+};
+
+const AngleArc = ({ vertex, angle1, angle2, radius = 45, color = PALETTE.accent }) => {
+  const { x, y } = vertex;
+  const a1 = Math.min(angle1, angle2);
+  const a2 = Math.max(angle1, angle2);
+  const diff = a2 - a1;
+  const largeArcFlag = diff > Math.PI ? 1 : 0;
+
+  const startX = x + radius * Math.cos(a1);
+  const startY = y + radius * Math.sin(a1);
+  const endX = x + radius * Math.cos(a2);
+  const endY = y + radius * Math.sin(a2);
+
+  const pathData = `M ${startX} ${startY} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${endX} ${endY}`;
+
+  return (
+    <svg style={SVG_FRAME}>
+      <path
+        d={pathData}
+        fill="none"
+        stroke={color}
+        strokeWidth={2}
+        strokeDasharray="4 3"
+      />
+    </svg>
+  );
+};
+
+function Scene1() {
+  const frame = useCurrentFrame();
+
+  // Timing breakdown (duration: 598)
+  // 0 - 30: entrance of isolated icons
+  // 30 - 150: icons glide inward along guide paths
+  // 150 - 180: impact, golden flash, merge into unified orb
+  // 180 - 568: continuous pulsation & alternating EM wave ripples
+  // 568 - 598: exit fade / settling
+
+  const enterProgress = spring({
+    frame,
+    fps: 30,
+    config: { damping: 14, stiffness: 80 },
+  });
+
+  // Glide progress: from frame 40 to 150
+  const glideProgress = interpolate(frame, [40, 150], [0, 1], CLAMP);
+  // Flash progress: bursts around frame 150-180
+  const flashOpacity = interpolate(frame, [145, 152, 185], [0, 1, 0], CLAMP);
+  const flashScale = interpolate(frame, [145, 180], [0.2, 3.5], CLAMP);
+
+  // Post-merge state visibility
+  const preMergeOpacity = interpolate(frame, [148, 155], [1, 0], CLAMP);
+  const mergedOpacity = interpolate(frame, [150, 170], [0, 1], CLAMP);
+
+  // Positions
+  // Left spark starts at x = 450, moves to 960
+  // Right magnet starts at x = 1470, moves to 960
+  const leftX = interpolate(glideProgress, [0, 1], [450, 960], CLAMP);
+  const rightX = interpolate(glideProgress, [0, 1], [1470, 960], CLAMP);
+  const centerY = 560;
+
+  // Continuous subtle floating
+  const floatL = Math.sin(frame / 18) * 8;
+  const floatR = Math.cos(frame / 18) * 8;
+  const orbPulse = 1 + 0.08 * Math.sin(frame / 12);
+
+  // Ripples generation (starts expanding after fusion frame 160)
+  const rippleFrames = [0, 45, 90, 135, 180, 225, 270, 315, 360];
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+      <Backdrop />
+      <svg style={SVG_FRAME}>
+        <defs>
+          {/* Gradients */}
+          <radialGradient id="s1-flash-grad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="1" />
+            <stop offset="30%" stopColor={PALETTE.accent} stopOpacity="0.8" />
+            <stop offset="70%" stopColor={PALETTE.supportB} stopOpacity="0.4" />
+            <stop offset="100%" stopColor={PALETTE.base} stopOpacity="0" />
+          </radialGradient>
+          <radialGradient id="s1-orb-grad" cx="40%" cy="35%" r="65%">
+            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.9" />
+            <stop offset="35%" stopColor={PALETTE.support} stopOpacity="0.9" />
+            <stop offset="75%" stopColor={PALETTE.supportB} stopOpacity="0.95" />
+            <stop offset="100%" stopColor="#4A148C" stopOpacity="1" />
+          </radialGradient>
+          <filter id="s1-glow-filter" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="10" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {/* Guide Path Lines */}
+        <line
+          x1={clampPos(400, SAFE.xMin, SAFE.xMax)}
+          y1={clampPos(centerY, SAFE.yMin, SAFE.yMax)}
+          x2={clampPos(1520, SAFE.xMin, SAFE.xMax)}
+          y2={clampPos(centerY, SAFE.yMin, SAFE.yMax)}
+          stroke="rgba(255, 255, 255, 0.12)"
+          strokeWidth="2"
+          strokeDasharray="6 6"
+          opacity={preMergeOpacity}
+        />
+
+        {/* Concentric EM Wave Pulses radiating outward from center */}
+        {mergedOpacity > 0 &&
+          rippleFrames.map((offset, i) => {
+            const age = (frame - 160 + offset * 1.5) % 360;
+            if (frame < 160) return null;
+            const r = interpolate(age, [0, 360], [40, 750], CLAMP);
+            const opacity = interpolate(age, [0, 40, 280, 360], [0, 0.75, 0.4, 0], CLAMP);
+            const isElectric = i % 2 === 0;
+            const ringColor = isElectric ? PALETTE.support : PALETTE.supportB;
+
+            return (
+              <g key={i} opacity={opacity * mergedOpacity}>
+                <circle
+                  cx={clampPos(960, SAFE.xMin, SAFE.xMax)}
+                  cy={clampPos(centerY, SAFE.yMin, SAFE.yMax)}
+                  r={r}
+                  fill="none"
+                  stroke={ringColor}
+                  strokeWidth={isElectric ? 3.5 : 2.5}
+                  strokeDasharray={isElectric ? "none" : "12 8"}
+                  style={{ filter: "drop-shadow(0 0 6px " + ringColor + ")" }}
+                />
+              </g>
+            );
+          })}
+
+        {/* PRE-MERGE: Left Electric Spark Icon */}
+        <g
+          opacity={preMergeOpacity * enterProgress}
+          transform={`translate(${clampPos(leftX, SAFE.xMin, SAFE.xMax)}, ${clampPos(centerY + floatL, SAFE.yMin, SAFE.yMax)})`}
+        >
+          {/* Glow backdrop */}
+          <circle cx="0" cy="0" r="60" fill={PALETTE.support} opacity="0.15" />
+          <circle cx="0" cy="0" r="40" fill={PALETTE.support} opacity="0.25" />
+          {/* Spark shape */}
+          <polygon
+            points="0,-50 14,-10 46,-12 18,14 28,50 -4,22 -32,44 -16,10 -48,-14 -12,-16"
+            fill={PALETTE.support}
+            style={{ filter: "drop-shadow(0 0 12px " + PALETTE.support + ")" }}
+          />
+          <text
+            x="0"
+            y="85"
+            textAnchor="middle"
+            fill={PALETTE.support}
+            fontSize="22"
+            fontWeight="bold"
+            letterSpacing="2"
+          >
+            ELECTRICITY
+          </text>
+        </g>
+
+        {/* PRE-MERGE: Right Horseshoe Magnet Icon */}
+        <g
+          opacity={preMergeOpacity * enterProgress}
+          transform={`translate(${clampPos(rightX, SAFE.xMin, SAFE.xMax)}, ${clampPos(centerY + floatR, SAFE.yMin, SAFE.yMax)})`}
+        >
+          {/* Glow backdrop */}
+          <circle cx="0" cy="0" r="60" fill={PALETTE.accent} opacity="0.12" />
+          {/* Dual-color Horseshoe Magnet */}
+          {/* Left North Pole (Red/Accent) */}
+          <path
+            d="M -36,36 L -36,-10 C -36,-38 -12,-48 0,-48 L 0,-24 C -8,-24 -18,-18 -18,-6 L -18,36 Z"
+            fill="#FF4444"
+            style={{ filter: "drop-shadow(0 0 8px #FF4444)" }}
+          />
+          {/* Right South Pole (Cyan) */}
+          <path
+            d="M 36,36 L 36,-10 C 36,-38 12,-48 0,-48 L 0,-24 C 8,-24 18,-18 18,-6 L 18,36 Z"
+            fill={PALETTE.support}
+            style={{ filter: "drop-shadow(0 0 8px " + PALETTE.support + ")" }}
+          />
+          {/* Pole Tips */}
+          <rect x="-36" y="24" width="18" height="12" fill="#E2E8F0" />
+          <rect x="18" y="24" width="18" height="12" fill="#E2E8F0" />
+          <text x="-27" y="34" textAnchor="middle" fill="#080B14" fontSize="11" fontWeight="900">N</text>
+          <text x="27" y="34" textAnchor="middle" fill="#080B14" fontSize="11" fontWeight="900">S</text>
+          <text
+            x="0"
+            y="85"
+            textAnchor="middle"
+            fill={PALETTE.text}
+            fontSize="22"
+            fontWeight="bold"
+            letterSpacing="2"
+          >
+            MAGNETISM
+          </text>
+        </g>
+
+        {/* Fusion Flash */}
+        {flashOpacity > 0 && (
+          <circle
+            cx={clampPos(960, SAFE.xMin, SAFE.xMax)}
+            cy={clampPos(centerY, SAFE.yMin, SAFE.yMax)}
+            r={180 * flashScale}
+            fill="url(#s1-flash-grad)"
+            opacity={flashOpacity}
+          />
+        )}
+
+        {/* POST-MERGE: Unified Glowing Sphere */}
+        {mergedOpacity > 0 && (
+          <g
+            opacity={mergedOpacity}
+            transform={`translate(${clampPos(960, SAFE.xMin, SAFE.xMax)}, ${clampPos(centerY, SAFE.yMin, SAFE.yMax)}) scale(${orbPulse})`}
+          >
+            {/* Outer halo */}
+            <circle cx="0" cy="0" r="95" fill={PALETTE.supportB} opacity="0.25" />
+            <circle cx="0" cy="0" r="75" fill={PALETTE.support} opacity="0.4" />
+            {/* Main Orb Body */}
+            <circle
+              cx="0"
+              cy="0"
+              r="54"
+              fill="url(#s1-orb-grad)"
+              style={{ filter: "drop-shadow(0 0 24px " + PALETTE.supportB + ")" }}
+            />
+            {/* Pulsing Core Details */}
+            <circle cx="0" cy="0" r="22" fill="#FFFFFF" opacity="0.85" />
+            {/* Orbiting Mini Energy Sparks */}
+            <circle
+              cx={Math.cos(frame / 10) * 70}
+              cy={Math.sin(frame / 10) * 70}
+              r="6"
+              fill={PALETTE.support}
+              style={{ filter: "drop-shadow(0 0 6px " + PALETTE.support + ")" }}
+            />
+            <circle
+              cx={Math.cos(frame / 10 + Math.PI) * 70}
+              cy={Math.sin(frame / 10 + Math.PI) * 70}
+              r="6"
+              fill={PALETTE.accent}
+              style={{ filter: "drop-shadow(0 0 6px " + PALETTE.accent + ")" }}
+            />
+            <text
+              x="0"
+              y="105"
+              textAnchor="middle"
+              fill={PALETTE.accent}
+              fontSize="24"
+              fontWeight="bold"
+              letterSpacing="3"
+            >
+              ELECTROMAGNETISM
+            </text>
+          </g>
+        )}
+      </svg>
+
+      {/* Header Title */}
+      <div style={{ position: "absolute", left: ZONES.title.x, top: ZONES.title.y, width: ZONES.title.w, textAlign: "center" }}>
+        <Label size={58}>Unifying Electricity and Magnetism</Label>
+      </div>
+
+      {/* Footer Caption */}
+      <div style={{ position: "absolute", left: ZONES.caption.x, top: ZONES.caption.y, width: ZONES.caption.w, textAlign: "center" }}>
+        <Label size={30}>
+          {frame < 150
+            ? "Two seemingly independent natural forces glide toward unified synthesis..."
+            : "Electricity and magnetism merge into a single fundamental electromagnetic interaction."}
+        </Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+const S2_ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
+
+function Scene2() {
+  const frame = useCurrentFrame();
+
+  const centerX = ZONES.stage.cx;
+  const centerY = ZONES.stage.cy;
+
+  // Central charge entrance and continuous pulse
+  const centerScale = spring({
+    frame,
+    fps: 30,
+    config: { damping: 14, stiffness: 90 },
+  });
+  const centerPulse = 1 + 0.05 * Math.sin(frame / 15);
+  const centerRadius = 52 * centerScale * centerPulse;
+
+  // Field lines sprouting outward [40 -> 120]
+  const fieldProgress = interpolate(frame, [40, 120], [0, 1], CLAMP);
+  const lineLength = 260 * fieldProgress;
+
+  // Test charge introduction and expulsion
+  // Drops in around frame 160-230, accelerates along 45 deg line frame 240-520
+  const testEnter = spring({
+    frame: frame - 160,
+    fps: 30,
+    config: { damping: 12, stiffness: 80 },
+  });
+
+  const testAccel = interpolate(frame, [240, 520], [0, 1], {
+    easing: Easing.bezier(0.4, 0, 0.2, 1),
+    ...CLAMP,
+  });
+
+  const testDist = interpolate(testAccel, [0, 1], [130, 480]);
+  const testAngle = 45 * (Math.PI / 180);
+  const testX = clampPos(centerX + Math.cos(testAngle) * testDist, SAFE.xMin, SAFE.xMax);
+  const testY = clampPos(centerY - Math.sin(testAngle) * testDist, SAFE.yMin, SAFE.yMax);
+
+  // Force vector visibility & pulse
+  const forceOpacity = interpolate(frame, [220, 250, 530, 560], [0, 1, 1, 0], CLAMP);
+  const forceLen = 65 + 10 * Math.sin(frame / 8);
+
+  // Text title & caption spring animations
+  const titleSpring = spring({
+    frame,
+    fps: 30,
+    config: { damping: 16, stiffness: 100 },
+  });
+
+  const captionOpacity = interpolate(frame, [60, 90], [0, 1], CLAMP);
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+      <Backdrop />
+
+      <svg style={SVG_FRAME}>
+        <defs>
+          <radialGradient id="s2-charge-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#FF5252" stopOpacity="0.8" />
+            <stop offset="60%" stopColor="#FF1744" stopOpacity="0.3" />
+            <stop offset="100%" stopColor="#D50000" stopOpacity="0" />
+          </radialGradient>
+          <radialGradient id="s2-test-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#FF4081" stopOpacity="0.9" />
+            <stop offset="70%" stopColor="#F50057" stopOpacity="0.3" />
+            <stop offset="100%" stopColor="#C51162" stopOpacity="0" />
+          </radialGradient>
+          <filter id="s2-glow" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
+
+        {/* Electric Field Lines */}
+        {S2_ANGLES.map((deg, idx) => {
+          const rad = (deg * Math.PI) / 180;
+          const cosA = Math.cos(rad);
+          const sinA = Math.sin(rad);
+
+          const startR = 60;
+          const x1 = centerX + cosA * startR;
+          const y1 = centerY - sinA * startR;
+          const x2 = centerX + cosA * (startR + lineLength);
+          const y2 = centerY - sinA * (startR + lineLength);
+
+          // Continuous moving pulse chevrons along each line
+          const wavePhase = ((frame * 2.5 + idx * 40) % 180) / 180;
+          const pulseR = startR + lineLength * wavePhase;
+          const px = centerX + cosA * pulseR;
+          const py = centerY - sinA * pulseR;
+
+          return (
+            <g key={deg} opacity={fieldProgress}>
+              {/* Main field spoke line */}
+              <line
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                stroke={PALETTE.support}
+                strokeWidth={3}
+                strokeDasharray="6 4"
+                strokeLinecap="round"
+                filter="url(#s2-glow)"
+              />
+              {/* Outward arrow head */}
+              {fieldProgress > 0.4 && (
+                <polygon
+                  points={`
+                    ${x2},${y2}
+                    ${x2 - 14 * cosA + 8 * sinA},${y2 + 14 * sinA + 8 * cosA}
+                    ${x2 - 14 * cosA - 8 * sinA},${y2 + 14 * sinA - 8 * cosA}
+                  `}
+                  fill={PALETTE.support}
+                />
+              )}
+              {/* Traveling energy ripple */}
+              {fieldProgress > 0.6 && (
+                <circle
+                  cx={px}
+                  cy={py}
+                  r={3.5}
+                  fill={PALETTE.text}
+                  opacity={0.8 * (1 - wavePhase)}
+                />
+              )}
+            </g>
+          );
+        })}
+
+        {/* Central Source Charge (+Q) */}
+        <g transform={`scale(${centerScale})`} style={{ transformOrigin: `${centerX}px ${centerY}px` }}>
+          {/* Ambient Glow */}
+          <circle
+            cx={centerX}
+            cy={centerY}
+            r={centerRadius * 2.2}
+            fill="url(#s2-charge-glow)"
+          />
+          {/* Solid Sphere */}
+          <circle
+            cx={centerX}
+            cy={centerY}
+            r={centerRadius}
+            fill="#FF1744"
+            stroke="#FF8A80"
+            strokeWidth={4}
+            filter="url(#s2-glow)"
+          />
+          {/* Center Label */}
+          <text
+            x={centerX}
+            y={centerY + 14}
+            textAnchor="middle"
+            fill={PALETTE.text}
+            fontSize={42}
+            fontWeight="bold"
+            fontFamily="sans-serif"
+          >
+            +Q
+          </text>
+        </g>
+
+        {/* Test Charge (+q) and its interaction */}
+        {testEnter > 0.01 && (
+          <g
+            opacity={interpolate(testEnter, [0, 1], [0, 1], CLAMP)}
+            transform={`scale(${testEnter})`}
+            style={{ transformOrigin: `${testX}px ${testY}px` }}
+          >
+            {/* Test Charge Glow */}
+            <circle
+              cx={testX}
+              cy={testY}
+              r={38}
+              fill="url(#s2-test-glow)"
+            />
+            {/* Test Charge Body */}
+            <circle
+              cx={testX}
+              cy={testY}
+              r={22}
+              fill="#F50057"
+              stroke="#FF80AB"
+              strokeWidth={3}
+              filter="url(#s2-glow)"
+            />
+            <text
+              x={testX}
+              y={testY + 7}
+              textAnchor="middle"
+              fill={PALETTE.text}
+              fontSize={20}
+              fontWeight="bold"
+              fontFamily="sans-serif"
+            >
+              +q
+            </text>
+
+            {/* Repulsive Force Vector F_e */}
+            {forceOpacity > 0 && (
+              <g opacity={forceOpacity}>
+                <line
+                  x1={testX}
+                  y1={testY}
+                  x2={testX + Math.cos(testAngle) * forceLen}
+                  y2={testY - Math.sin(testAngle) * forceLen}
+                  stroke={PALETTE.accent}
+                  strokeWidth={4}
+                  strokeLinecap="round"
+                />
+                <polygon
+                  points={`
+                    ${testX + Math.cos(testAngle) * (forceLen + 10)},${testY - Math.sin(testAngle) * (forceLen + 10)}
+                    ${testX + Math.cos(testAngle) * (forceLen - 4) + 6 * Math.sin(testAngle)},${testY - Math.sin(testAngle) * (forceLen - 4) + 6 * Math.cos(testAngle)}
+                    ${testX + Math.cos(testAngle) * (forceLen - 4) - 6 * Math.sin(testAngle)},${testY - Math.sin(testAngle) * (forceLen - 4) - 6 * Math.cos(testAngle)}
+                  `}
+                  fill={PALETTE.accent}
+                />
+                <text
+                  x={testX + Math.cos(testAngle) * (forceLen + 24) - 8}
+                  y={testY - Math.sin(testAngle) * (forceLen + 24) - 10}
+                  fill={PALETTE.accent}
+                  fontSize={24}
+                  fontWeight="bold"
+                  fontFamily="sans-serif"
+                >
+                  Fₑ
+                </text>
+              </g>
+            )}
+          </g>
+        )}
+      </svg>
+
+      {/* Screen Title */}
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.title.x,
+          top: ZONES.title.y,
+          width: ZONES.title.w,
+          opacity: titleSpring,
+          transform: `translateY(${(1 - titleSpring) * -20}px)`,
+        }}
+      >
+        <Label size={56}>Stationary Charges and Electric Fields</Label>
+      </div>
+
+      {/* Dynamic Mechanism Caption */}
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.caption.x,
+          top: ZONES.caption.y,
+          width: ZONES.caption.w,
+          opacity: captionOpacity,
+        }}
+      >
+        <Label size={30}>
+          {frame < 160
+            ? "A stationary positive charge radiates electric field lines radially outward into space."
+            : frame < 260
+            ? "A positive test charge placed in the field experiences an outward electrostatic force."
+            : "The electric force accelerates like charges outward along diverging field trajectories."}
+        </Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+function Scene3() {
+  const frame = useCurrentFrame();
+
+  const entrance = spring({
+    frame,
+    fps: 30,
+    config: { damping: 14, mass: 0.9, stiffness: 90 },
+  });
+
+  const wireEntrance = interpolate(frame, [0, 25], [0, 1], CLAMP);
+  const switchClose = interpolate(frame, [35, 55], [0, 1], CLAMP);
+  const electronFlowStart = interpolate(frame, [50, 75], [0, 1], CLAMP);
+  const ringsReveal = interpolate(frame, [70, 105], [0, 1], CLAMP);
+  const labelsReveal = interpolate(frame, [90, 120], [0, 1], CLAMP);
+
+  // Wire geometry
+  const wireX = ZONES.stage.cx - 80;
+  const wireTop = ZONES.stage.y + 40;
+  const wireBottom = ZONES.stage.y + ZONES.stage.h - 50;
+  const wireH = wireBottom - wireTop;
+  const wireRadius = 36;
+
+  // Electrons state & positions
+  const electronCount = 9;
+  const baseSpacing = wireH / (electronCount - 1);
+  const speed = 2.4 * electronFlowStart;
+  const driftOffset = (frame * speed) % (wireH + 40);
+
+  // Switch positions
+  const switchPivotX = wireX - 120;
+  const switchPivotY = wireBottom - 10;
+  const switchAngle = interpolate(switchClose, [0, 1], [-38, 0], CLAMP);
+
+  // Concentric Rings Heights
+  const ringHeights = [
+    wireTop + wireH * 0.28,
+    wireTop + wireH * 0.52,
+    wireTop + wireH * 0.76,
+  ];
+
+  // Continuous rotation for B-field markers
+  const rotPhase = (frame * 0.045) % (Math.PI * 2);
+
+  // Pulse & glow intensity
+  const bGlow = 0.5 + 0.5 * Math.sin(frame * 0.08);
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+      <Backdrop />
+
+      <svg style={SVG_FRAME}>
+        <defs>
+          <linearGradient id="s3-wireGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#C97A40" stopOpacity="0.4" />
+            <stop offset="40%" stopColor="#FFA05C" stopOpacity="0.85" />
+            <stop offset="65%" stopColor="#FF7A29" stopOpacity="0.6" />
+            <stop offset="100%" stopColor="#8A3D0C" stopOpacity="0.4" />
+          </linearGradient>
+
+          <radialGradient id="s3-electronGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#00E5FF" stopOpacity="1" />
+            <stop offset="60%" stopColor="#0088FF" stopOpacity="0.85" />
+            <stop offset="100%" stopColor="#002266" stopOpacity="0" />
+          </radialGradient>
+
+          <filter id="s3-glowB" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+
+          <linearGradient id="s3-ringGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#00FF88" stopOpacity="0.2" />
+            <stop offset="50%" stopColor="#55FF99" stopOpacity="0.95" />
+            <stop offset="100%" stopColor="#00FF88" stopOpacity="0.2" />
+          </linearGradient>
+        </defs>
+
+        {/* --- Background Circuit Lines & Power Supply --- */}
+        <g opacity={wireEntrance}>
+          {/* Wire lead from switch to bottom of wire */}
+          <path
+            d={`M ${switchPivotX - 80} ${switchPivotY} L ${switchPivotX} ${switchPivotY}`}
+            stroke="#65738E"
+            strokeWidth="5"
+            strokeLinecap="round"
+          />
+          {/* Contact node */}
+          <circle cx={switchPivotX + 60} cy={switchPivotY} r="6" fill="#8FA0BC" />
+          <path
+            d={`M ${switchPivotX + 60} ${switchPivotY} L ${wireX} ${wireBottom}`}
+            stroke="#65738E"
+            strokeWidth="5"
+            strokeLinecap="round"
+          />
+
+          {/* Switch Blade */}
+          <line
+            x1={switchPivotX}
+            y1={switchPivotY}
+            x2={switchPivotX + 60 * Math.cos((switchAngle * Math.PI) / 180)}
+            y2={switchPivotY + 60 * Math.sin((switchAngle * Math.PI) / 180)}
+            stroke={switchClose > 0.8 ? PALETTE.accent : "#FF7A29"}
+            strokeWidth="6"
+            strokeLinecap="round"
+          />
+          <circle cx={switchPivotX} cy={switchPivotY} r="7" fill={PALETTE.accent} />
+
+          {/* Top return lead */}
+          <path
+            d={`M ${wireX} ${wireTop} L ${wireX - 160} ${wireTop} L ${wireX - 160} ${switchPivotY - 140} L ${switchPivotX - 80} ${switchPivotY - 140}`}
+            stroke="#65738E"
+            strokeWidth="4"
+            strokeDasharray="6,6"
+            fill="none"
+            opacity="0.4"
+          />
+        </g>
+
+        {/* --- Back Halves of Magnetic Field Rings (rendered behind wire) --- */}
+        {ringsReveal > 0 && ringHeights.map((ry, idx) => {
+          const rx = wireX;
+          const rW = 190 + idx * 25;
+          const rH = 44 + idx * 5;
+          const ringOp = ringsReveal * (0.65 + 0.25 * Math.sin(frame * 0.05 + idx));
+
+          return (
+            <g key={`back-ring-${idx}`} opacity={ringOp}>
+              {/* Back half of ellipse: from left vertex to right vertex through top */}
+              <path
+                d={`M ${rx - rW} ${ry} A ${rW} ${rH} 0 0 1 ${rx + rW} ${ry}`}
+                stroke="#33FFAA"
+                strokeWidth="4"
+                fill="none"
+                strokeDasharray="9,5"
+                opacity="0.5"
+              />
+            </g>
+          );
+        })}
+
+        {/* --- Main Vertical Copper Wire Cylinder --- */}
+        <g opacity={wireEntrance}>
+          {/* Wire Core Glassy/Copper Body */}
+          <rect
+            x={wireX - wireRadius}
+            y={wireTop}
+            width={wireRadius * 2}
+            height={wireH}
+            fill="url(#s3-wireGrad)"
+            rx="8"
+          />
+          {/* Wire Edge Highlights */}
+          <line
+            x1={wireX - wireRadius}
+            y1={wireTop}
+            x2={wireX - wireRadius}
+            y2={wireBottom}
+            stroke="#FFA05C"
+            strokeWidth="2.5"
+            opacity="0.7"
+          />
+          <line
+            x1={wireX + wireRadius}
+            y1={wireTop}
+            x2={wireX + wireRadius}
+            y2={wireBottom}
+            stroke="#FFA05C"
+            strokeWidth="2.5"
+            opacity="0.7"
+          />
+        </g>
+
+        {/* --- Drift Electrons (Moving upwards inside wire) --- */}
+        {Array.from({ length: electronCount + 2 }).map((_, i) => {
+          let ey = (wireBottom + 20) - ((i * baseSpacing + driftOffset) % (wireH + 40));
+          const ex = wireX + Math.sin(i * 1.7 + frame * 0.02) * 10;
+          const inBounds = ey >= wireTop && ey <= wireBottom;
+          const opacity = inBounds ? entrance * (electronFlowStart > 0.1 ? 1 : 0.8) : 0;
+
+          return (
+            <g key={`electron-${i}`} transform={`translate(${ex}, ${ey})`} opacity={opacity}>
+              <circle r="15" fill="url(#s3-electronGlow)" />
+              <circle r="9" fill="#00E5FF" />
+              {/* Minus sign */}
+              <line x1="-5" y1="0" x2="5" y2="0" stroke="#080B14" strokeWidth="2.5" strokeLinecap="round" />
+            </g>
+          );
+        })}
+
+        {/* --- Conventional Current (I) Arrow Indicator --- */}
+        <g opacity={electronFlowStart}>
+          <g transform={`translate(${wireX + 60}, ${wireTop + wireH * 0.5})`}>
+            {/* Upward Conventional Current vector */}
+            <line x1="0" y1="50" x2="0" y2="-50" stroke={PALETTE.accent} strokeWidth="4" />
+            <polygon points="-8,-42 0,-62 8,-42" fill={PALETTE.accent} />
+            <text x="18" y="6" fill={PALETTE.accent} fontSize="24" fontWeight="bold" fontFamily="sans-serif">
+              I (Current)
+            </text>
+            <text x="18" y="28" fill="#A0AEC0" fontSize="15" fontFamily="sans-serif">
+              e⁻ drift upward
+            </text>
+          </g>
+        </g>
+
+        {/* --- Front Halves of Magnetic Field Rings (rendered in front of wire) --- */}
+        {ringsReveal > 0 && ringHeights.map((ry, idx) => {
+          const rx = wireX;
+          const rW = 190 + idx * 25;
+          const rH = 44 + idx * 5;
+          const ringOp = ringsReveal * (0.8 + 0.2 * Math.sin(frame * 0.06 + idx));
+
+          // Calculate animated arrow positions along front perimeter
+          // Front semicircle goes angle from 0 to PI
+          const phaseOffset = rotPhase + (idx * Math.PI) / 3;
+          const arrowAngle1 = (phaseOffset) % Math.PI;
+          const arrowAngle2 = (phaseOffset + Math.PI * 0.55) % Math.PI;
+
+          const ax1 = rx + rW * Math.cos(arrowAngle1);
+          const ay1 = ry + rH * Math.sin(arrowAngle1);
+          const ax2 = rx + rW * Math.cos(arrowAngle2);
+          const ay2 = ry + rH * Math.sin(arrowAngle2);
+
+          // Tangent angle for counterclockwise arrows
+          // Ellipse parametric: x = rx + a cos t, y = ry + b sin t => dx/dt = -a sin t, dy/dt = b cos t
+          const rotDeg1 = (Math.atan2(rH * Math.cos(arrowAngle1), -rW * Math.sin(arrowAngle1)) * 180) / Math.PI;
+          const rotDeg2 = (Math.atan2(rH * Math.cos(arrowAngle2), -rW * Math.sin(arrowAngle2)) * 180) / Math.PI;
+
+          return (
+            <g key={`front-ring-${idx}`} opacity={ringOp} filter="url(#s3-glowB)">
+              {/* Front half arc */}
+              <path
+                d={`M ${rx + rW} ${ry} A ${rW} ${rH} 0 0 1 ${rx - rW} ${ry}`}
+                stroke="url(#s3-ringGrad)"
+                strokeWidth="5"
+                fill="none"
+              />
+
+              {/* Arrow 1 on front arc */}
+              <g transform={`translate(${ax1}, ${ay1}) rotate(${rotDeg1})`}>
+                <polygon points="-7,-6 7,0 -7,6" fill="#33FFAA" />
+              </g>
+
+              {/* Arrow 2 on front arc */}
+              <g transform={`translate(${ax2}, ${ay2}) rotate(${rotDeg2})`}>
+                <polygon points="-7,-6 7,0 -7,6" fill="#33FFAA" />
+              </g>
+            </g>
+          );
+        })}
+
+        {/* --- Right-Hand Rule Explanatory Card / Key Diagram --- */}
+        <g
+          opacity={labelsReveal}
+          transform={`translate(${clampPos(ZONES.stage.x + ZONES.stage.w - 480, SAFE.xMin, SAFE.xMax)}, ${ZONES.stage.y + 40})`}
+        >
+          {/* Info Card Panel */}
+          <rect
+            x="0"
+            y="0"
+            width="440"
+            height="320"
+            rx="18"
+            fill="#101726"
+            stroke="#20304D"
+            strokeWidth="2"
+            opacity="0.9"
+          />
+
+          <text x="30" y="48" fill={PALETTE.text} fontSize="24" fontWeight="bold" fontFamily="sans-serif">
+            Right-Hand Rule
+          </text>
+
+          {/* Rule Item 1: Thumb */}
+          <circle cx="45" cy="100" r="14" fill={PALETTE.accent} opacity="0.2" />
+          <text x="45" y="106" fill={PALETTE.accent} fontSize="18" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">
+            👍
+          </text>
+          <text x="75" y="98" fill={PALETTE.text} fontSize="20" fontWeight="600" fontFamily="sans-serif">
+            Thumb: Current Direction (I)
+          </text>
+          <text x="75" y="120" fill="#8FA0BC" fontSize="16" fontFamily="sans-serif">
+            Points upward along moving charge
+          </text>
+
+          {/* Rule Item 2: Fingers */}
+          <circle cx="45" cy="170" r="14" fill="#33FFAA" opacity="0.2" />
+          <text x="45" y="176" fill="#33FFAA" fontSize="18" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">
+            🔄
+          </text>
+          <text x="75" y="168" fill="#33FFAA" fontSize="20" fontWeight="600" fontFamily="sans-serif">
+            Fingers: Magnetic Field (B)
+          </text>
+          <text x="75" y="190" fill="#8FA0BC" fontSize="16" fontFamily="sans-serif">
+            Curl in concentric circles around wire
+          </text>
+
+          {/* Biot-Savart Law Equation Badge */}
+          <rect x="30" y="225" width="380" height="65" rx="10" fill="#090E1A" stroke="#253856" strokeWidth="1.5" />
+          <text x="48" y="265" fill="#33FFAA" fontSize="22" fontWeight="bold" fontFamily="monospace">
+            B = (μ₀ · I) / (2π · r)
+          </text>
+        </g>
+      </svg>
+
+      {/* --- Title & Stage Captions --- */}
+      <div style={{ position: "absolute", left: ZONES.title.x, top: ZONES.title.y, width: ZONES.title.w }}>
+        <Label size={64}>Moving Charges Generate Magnetic Fields</Label>
+      </div>
+
+      <div style={{ position: "absolute", left: ZONES.caption.x, top: ZONES.caption.y, width: ZONES.caption.w }}>
+        <Label size={32}>
+          {frame < 60
+            ? "Stationary charges create only electric fields."
+            : "When charges flow, a circular magnetic field loops perpendicularly around the conductor."}
+        </Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+const S4_GRID_ROWS = 6;
+const S4_GRID_COLS = 12;
+const S4_FIELD_RECT = { x: 420, y: 320, w: 1080, h: 480 };
+
+function Scene4() {
+  const frame = useCurrentFrame();
+
+  const titleProgress = spring({
+    frame,
+    fps: 30,
+    config: { damping: 14, stiffness: 90 },
+  });
+
+  const gridAlpha = interpolate(frame, [15, 45], [0, 0.85], CLAMP);
+
+  // Trajectory mechanics:
+  // Phase 1: Frame 0..60 -> straight entry from left (x: 160 -> 420, y: 640)
+  // Phase 2: Frame 60..480 -> circular motion in magnetic field (center: 420, 360, radius: 280)
+  //          starts at angle -PI/2 (bottom: 420, 640) and curves upward/rightward
+  // Phase 3: Frame 480..566 -> continuous loop motion / exit stabilization
+
+  const r = 260;
+  const centerX = 440;
+  const centerY = 400;
+
+  // Angular progress through magnetic field
+  const theta = interpolate(frame, [50, 480],
+    [-Math.PI / 2, Math.PI / 2 + 0.35],
+    CLAMP
+  );
+
+  let chargeX = 180;
+  let chargeY = 660;
+  let velAngle = 0; // horizontal right
+
+  if (frame < 50) {
+    chargeX = interpolate(frame, [0, 50], [180, centerX], CLAMP);
+    chargeY = 660;
+    velAngle = 0;
+  } else {
+    chargeX = centerX + r * Math.cos(theta);
+    chargeY = centerY - r * Math.sin(theta);
+    // Velocity is tangent to path (perpendicular to radius vector pointing inward)
+    // Position vector from center: (cos(theta), -sin(theta))
+    // Tangent vector: (-sin(theta), -cos(theta)) in screen coords
+    velAngle = Math.atan2(-Math.cos(theta), -Math.sin(theta));
+  }
+
+  // Clamped coords for charge
+  const safeX = clampPos(chargeX, SAFE.xMin, SAFE.xMax);
+  const safeY = clampPos(chargeY, SAFE.yMin, SAFE.yMax);
+
+  // Force vector points toward circular center (angle to center)
+  const forceAngle = Math.atan2(centerY - safeY, centerX - safeX);
+  const forceMagnitude = interpolate(frame, [45, 65], [0, 80], CLAMP);
+
+  // Velocity arrow length
+  const velLength = 95;
+  const vEndX = safeX + Math.cos(velAngle) * velLength;
+  const vEndY = safeY + Math.sin(velAngle) * velLength;
+
+  const fEndX = safeX + Math.cos(forceAngle) * forceMagnitude;
+  const fEndY = safeY + Math.sin(forceAngle) * forceMagnitude;
+
+  // Continuous subtle pulse
+  const fieldPulse = Math.sin(frame / 14) * 0.15 + 0.85;
+  const glowPulse = Math.sin(frame / 8) * 4 + 18;
+
+  // Build the traced trajectory path
+  const trailPoints = useMemo(() => {
+    const pts = [];
+    const stepCount = 90;
+    for (let i = 0; i <= stepCount; i++) {
+      const f = interpolate(i, [0, stepCount], [0, Math.min(frame, 480)], CLAMP);
+      if (f < 50) {
+        const x = interpolate(f, [0, 50], [180, centerX], CLAMP);
+        pts.push(`${x.toFixed(1)},660.0`);
+      } else {
+        const th = interpolate(f, [50, 480], [-Math.PI / 2, Math.PI / 2 + 0.35], CLAMP);
+        const x = centerX + r * Math.cos(th);
+        const y = centerY - r * Math.sin(th);
+        pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+      }
+    }
+    return pts.length > 1 ? `M ${pts.join(" L ")}` : "";
+  }, [frame]);
+
+  const fieldIntro = spring({
+    frame: Math.max(0, frame - 15),
+    fps: 30,
+    config: { damping: 12 },
+  });
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+      <Backdrop />
+
+      <svg style={SVG_FRAME}>
+        <defs>
+          <filter id="s4-glow" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+
+          <linearGradient id="s4-fieldGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor={PALETTE.support} stopOpacity={0.06 * fieldIntro} />
+            <stop offset="100%" stopColor={PALETTE.supportB} stopOpacity={0.03 * fieldIntro} />
+          </linearGradient>
+
+          <marker id="s4-arrow-v" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M 0 0 L 8 4 L 0 8 z" fill="#00E676" />
+          </marker>
+          <marker id="s4-arrow-f" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M 0 0 L 8 4 L 0 8 z" fill={PALETTE.accent} />
+          </marker>
+        </defs>
+
+        {/* Magnetic field boundary area */}
+        <rect
+          x={S4_FIELD_RECT.x}
+          y={S4_FIELD_RECT.y}
+          width={S4_FIELD_RECT.w}
+          height={S4_FIELD_RECT.h}
+          rx={20}
+          fill="url(#s4-fieldGrad)"
+          stroke={PALETTE.support}
+          strokeWidth={2}
+          strokeDasharray="8 8"
+          strokeOpacity={0.4 * gridAlpha}
+        />
+
+        {/* Field badge label in top-right of field box */}
+        <g opacity={gridAlpha}>
+          <rect
+            x={S4_FIELD_RECT.x + S4_FIELD_RECT.w - 230}
+            y={S4_FIELD_RECT.y + 18}
+            width={210}
+            height={44}
+            rx={10}
+            fill="#0E1729"
+            stroke={PALETTE.support}
+            strokeWidth={1.5}
+          />
+          <text
+            x={S4_FIELD_RECT.x + S4_FIELD_RECT.w - 125}
+            y={S4_FIELD_RECT.y + 47}
+            textAnchor="middle"
+            fill={PALETTE.support}
+            fontSize={20}
+            fontFamily="monospace"
+            fontWeight="bold"
+          >
+            B ⊗ (Into Page)
+          </text>
+        </g>
+
+        {/* Grid of 'X' markers for B-field directed into screen */}
+        {Array.from({ length: S4_GRID_ROWS }).map((_, row) => {
+          const gy = S4_FIELD_RECT.y + 42 + row * 76;
+          return Array.from({ length: S4_GRID_COLS }).map((__, col) => {
+            const gx = S4_FIELD_RECT.x + 46 + col * 86;
+            const crossSize = 9;
+            const sinOffset = Math.sin((frame + row * 8 + col * 5) / 10) * 0.15;
+            return (
+              <g
+                key={`s4-x-${row}-${col}`}
+                opacity={(gridAlpha + sinOffset) * fieldPulse}
+                transform={`translate(${gx}, ${gy})`}
+              >
+                <circle cx={0} cy={0} r={14} fill="none" stroke={PALETTE.support} strokeWidth={1} opacity={0.25} />
+                <line
+                  x1={-crossSize}
+                  y1={-crossSize}
+                  x2={crossSize}
+                  y2={crossSize}
+                  stroke={PALETTE.support}
+                  strokeWidth={2.2}
+                />
+                <line
+                  x1={crossSize}
+                  y1={-crossSize}
+                  x2={-crossSize}
+                  y2={crossSize}
+                  stroke={PALETTE.support}
+                  strokeWidth={2.2}
+                />
+              </g>
+            );
+          });
+        })}
+
+        {/* Traced trajectory path with glowing dashed trail */}
+        {trailPoints && (
+          <path
+            d={trailPoints}
+            fill="none"
+            stroke={PALETTE.accent}
+            strokeWidth={3.5}
+            strokeDasharray="6 6"
+            opacity={0.85}
+          />
+        )}
+
+        {/* Instantaneous velocity vector (Green) */}
+        {frame > 10 && (
+          <g>
+            <line
+              x1={safeX}
+              y1={safeY}
+              x2={vEndX}
+              y2={vEndY}
+              stroke="#00E676"
+              strokeWidth={4}
+              markerEnd="url(#s4-arrow-v)"
+              filter="url(#s4-glow)"
+            />
+            <text
+              x={vEndX + Math.cos(velAngle) * 16}
+              y={vEndY + Math.sin(velAngle) * 16 + 5}
+              fill="#00E676"
+              fontSize={24}
+              fontWeight="bold"
+              textAnchor="middle"
+            >
+              v
+            </text>
+          </g>
+        )}
+
+        {/* Magnetic Lorentz Force vector (Yellow, orthogonal) */}
+        {frame > 50 && forceMagnitude > 10 && (
+          <g>
+            <line
+              x1={safeX}
+              y1={safeY}
+              x2={fEndX}
+              y2={fEndY}
+              stroke={PALETTE.accent}
+              strokeWidth={4}
+              markerEnd="url(#s4-arrow-f)"
+              filter="url(#s4-glow)"
+            />
+            <text
+              x={fEndX + Math.cos(forceAngle) * 22}
+              y={fEndY + Math.sin(forceAngle) * 22 + 6}
+              fill={PALETTE.accent}
+              fontSize={24}
+              fontWeight="bold"
+              textAnchor="middle"
+            >
+              F_B
+            </text>
+
+            {/* Right-angle indicator */}
+            <g transform={`translate(${safeX}, ${safeY}) rotate(${(velAngle * 180) / Math.PI})`}>
+              <path
+                d="M 0 -18 L 18 -18 L 18 0"
+                fill="none"
+                stroke={PALETTE.text}
+                strokeWidth={2}
+                opacity={0.7}
+              />
+            </g>
+          </g>
+        )}
+
+        {/* Charge particle (Red sphere with +q badge) */}
+        <g transform={`translate(${safeX}, ${safeY})`}>
+          <circle
+            cx={0}
+            cy={0}
+            r={glowPulse}
+            fill="#FF1744"
+            opacity={0.3}
+          />
+          <circle
+            cx={0}
+            cy={0}
+            r={16}
+            fill="#FF1744"
+            stroke="#FFFFFF"
+            strokeWidth={2.5}
+            filter="url(#s4-glow)"
+          />
+          <text
+            x={0}
+            y={6}
+            textAnchor="middle"
+            fill="#FFFFFF"
+            fontSize={20}
+            fontWeight="bold"
+            fontFamily="sans-serif"
+          >
+            +q
+          </text>
+        </g>
+
+        {/* Formula callout panel */}
+        {frame > 90 && (
+          <g
+            opacity={interpolate(frame, [90, 120], [0, 1], CLAMP)}
+            transform="translate(1120, 680)"
+          >
+            <rect
+              x={0}
+              y={0}
+              width={340}
+              height={90}
+              rx={12}
+              fill="#0F172A"
+              stroke={PALETTE.accent}
+              strokeWidth={2}
+            />
+            <text x={170} y={38} textAnchor="middle" fill={PALETTE.accent} fontSize={24} fontWeight="bold">
+              F_B = q (v × B)
+            </text>
+            <text x={170} y={68} textAnchor="middle" fill={PALETTE.text} fontSize={18} opacity={0.85}>
+              F ⊥ v  ⟹  Uniform Circular Motion
+            </text>
+          </g>
+        )}
+      </svg>
+
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.title.x,
+          top: ZONES.title.y,
+          width: ZONES.title.w,
+          transform: `translateY(${(1 - titleProgress) * -24}px)`,
+          opacity: titleProgress,
+        }}
+      >
+        <Label size={56}>Magnetic Lorentz Force</Label>
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.caption.x,
+          top: ZONES.caption.y,
+          width: ZONES.caption.w,
+          opacity: interpolate(frame, [30, 60], [0, 1], CLAMP),
+        }}
+      >
+        <Label size={30}>
+          A magnetic field exerts a force perpendicular to velocity, continuously bending the trajectory into a circular arc.
+        </Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+const S5_CONSTANTS = {
+  cx: 960,
+  cy: 560,
+};
+
+function Scene5() {
+  const frame = useCurrentFrame();
+
+  const entrance = spring({
+    frame,
+    fps: 30,
+    config: { damping: 14, mass: 0.9, stiffness: 85 },
+  });
+
+  // Stage progress phases
+  // Phase 1 (0-160): Initial split cards (Electric vs Magnetic)
+  // Phase 2 (160-310): Slide toward center & highlight common 'q'
+  // Phase 3 (310-460): Factor out 'q' and assemble unified formula
+  // Phase 4 (460-627): Unified formula locks in glowing gold frame + continuous particle/field oscillation
+
+  const slideProgress = interpolate(frame, [150, 240], [0, 1], CLAMP);
+  const factorProgress = interpolate(frame, [250, 340], [0, 1], CLAMP);
+  const unifyProgress = interpolate(frame, [350, 430], [0, 1], CLAMP);
+  const borderProgress = interpolate(frame, [430, 490], [0, 1], CLAMP);
+  const exitFade = interpolate(frame, [597, 627], [1, 0], CLAMP);
+
+  // Positions
+  const leftCardX = interpolate(slideProgress, [0, 1], [490, 800]);
+  const rightCardX = interpolate(slideProgress, [0, 1], [1430, 1120]);
+  const splitOpacity = interpolate(unifyProgress, [0, 0.8], [1, 0], CLAMP);
+  const unifiedOpacity = interpolate(unifyProgress, [0.2, 1], [0, 1], CLAMP);
+
+  // Subtle continuous floating
+  const waveFloat = Math.sin(frame / 22) * 6;
+  const pulseScale = 1 + Math.sin(frame / 18) * 0.02;
+
+  // Background particle oscillation representing E & B interaction
+  const particles = useMemo(() => {
+    return Array.from({ length: 14 }).map((_, i) => ({
+      angle: (i * Math.PI * 2) / 14,
+      radius: 180 + (i % 3) * 45,
+      speed: 0.025 + (i % 4) * 0.008,
+      isElectric: i % 2 === 0,
+    }));
+  }, []);
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base, opacity: exitFade }}>
+      <Backdrop />
+
+      <svg style={SVG_FRAME}>
+        <defs>
+          <linearGradient id="s5-gold-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#FFF176" />
+            <stop offset="50%" stopColor={PALETTE.accent} />
+            <stop offset="100%" stopColor="#FFA000" />
+          </linearGradient>
+
+          <filter id="s5-gold-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="8" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+
+          <filter id="s5-cyan-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+
+          <filter id="s5-magenta-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
+
+        {/* Ambient orbital charge trails */}
+        <g opacity={Math.min(entrance, 0.45)}>
+          {particles.map((p, idx) => {
+            const currentAngle = p.angle + frame * p.speed;
+            const px = clampPos(S5_CONSTANTS.cx + Math.cos(currentAngle) * (p.radius + Math.sin(frame / 30) * 15), SAFE.xMin, SAFE.xMax);
+            const py = clampPos(S5_CONSTANTS.cy + Math.sin(currentAngle) * (p.radius * 0.45 + Math.cos(frame / 30) * 10), SAFE.yMin, SAFE.yMax);
+            return (
+              <g key={`p-${idx}`}>
+                <circle
+                  cx={px}
+                  cy={py}
+                  r={p.isElectric ? 3.5 : 2.5}
+                  fill={p.isElectric ? PALETTE.support : PALETTE.supportB}
+                  opacity={0.6 + Math.sin(frame / 12 + idx) * 0.3}
+                />
+              </g>
+            );
+          })}
+        </g>
+
+        {/* Phase 1 & 2: Individual Component Cards */}
+        {splitOpacity > 0.01 && (
+          <g opacity={splitOpacity * entrance} transform={`translate(0, ${waveFloat})`}>
+            {/* Left Electric Card: F_e = q E */}
+            <g transform={`translate(${clampPos(leftCardX - 220, SAFE.xMin, SAFE.xMax)}, 430)`}>
+              <rect
+                x="0"
+                y="0"
+                width="440"
+                height="220"
+                rx="16"
+                fill="#0E1626"
+                stroke={PALETTE.support}
+                strokeWidth={interpolate(factorProgress, [0, 1], [2.5, 4])}
+                strokeDasharray={interpolate(factorProgress, [0, 1], [1000, 12])}
+                filter="url(#s5-cyan-glow)"
+                opacity={0.85}
+              />
+              <text x="220" y="55" fill={PALETTE.support} fontSize="24" fontWeight="600" textAnchor="middle" letterSpacing="2">
+                ELECTRIC FORCE
+              </text>
+              <line x1="40" y1="75" x2="400" y2="75" stroke={PALETTE.support} strokeOpacity="0.3" strokeWidth="1.5" />
+              
+              {/* Formula components */}
+              <text x="95" y="150" fill={PALETTE.support} fontSize="44" fontWeight="bold">
+                F<tspan fontSize="28" dy="10">E</tspan><tspan dy="-10"> =</tspan>
+              </text>
+              <text
+                x="240"
+                y="150"
+                fill={factorProgress > 0.3 ? PALETTE.accent : PALETTE.text}
+                fontSize="48"
+                fontWeight="bold"
+                filter={factorProgress > 0.3 ? "url(#s5-gold-glow)" : undefined}
+              >
+                q
+              </text>
+              <text x="280" y="150" fill={PALETTE.support} fontSize="46" fontWeight="bold">
+                E
+              </text>
+              {/* Vector arrow over E */}
+              <path d="M 282 110 L 310 110 L 305 106 M 310 110 L 305 114" stroke={PALETTE.support} strokeWidth="2.5" fill="none" />
+            </g>
+
+            {/* Plus Operator emerging in Phase 2 */}
+            {slideProgress > 0.4 && (
+              <g transform={`translate(${S5_CONSTANTS.cx}, ${S5_CONSTANTS.cy + 10})`} opacity={slideProgress}>
+                <circle cx="0" cy="0" r="28" fill="#151C2E" stroke={PALETTE.accent} strokeWidth="2" />
+                <path d="M -12 0 L 12 0 M 0 -12 L 0 12" stroke={PALETTE.accent} strokeWidth="4" strokeLinecap="round" />
+              </g>
+            )}
+
+            {/* Right Magnetic Card: F_b = q (v x B) */}
+            <g transform={`translate(${clampPos(rightCardX - 240, SAFE.xMin, SAFE.xMax)}, 430)`}>
+              <rect
+                x="0"
+                y="0"
+                width="480"
+                height="220"
+                rx="16"
+                fill="#181126"
+                stroke={PALETTE.supportB}
+                strokeWidth={interpolate(factorProgress, [0, 1], [2.5, 4])}
+                strokeDasharray={interpolate(factorProgress, [0, 1], [1000, 12])}
+                filter="url(#s5-magenta-glow)"
+                opacity={0.85}
+              />
+              <text x="240" y="55" fill={PALETTE.supportB} fontSize="24" fontWeight="600" textAnchor="middle" letterSpacing="2">
+                MAGNETIC LORENTZ FORCE
+              </text>
+              <line x1="40" y1="75" x2="440" y2="75" stroke={PALETTE.supportB} strokeOpacity="0.3" strokeWidth="1.5" />
+
+              {/* Formula components */}
+              <text x="80" y="150" fill={PALETTE.supportB} fontSize="44" fontWeight="bold">
+                F<tspan fontSize="28" dy="10">B</tspan><tspan dy="-10"> =</tspan>
+              </text>
+              <text
+                x="215"
+                y="150"
+                fill={factorProgress > 0.3 ? PALETTE.accent : PALETTE.text}
+                fontSize="48"
+                fontWeight="bold"
+                filter={factorProgress > 0.3 ? "url(#s5-gold-glow)" : undefined}
+              >
+                q
+              </text>
+              <text x="250" y="150" fill={PALETTE.text} fontSize="44" fontWeight="bold">
+                (
+              </text>
+              <text x="270" y="150" fill="#69F0AE" fontSize="44" fontWeight="bold">
+                v
+              </text>
+              <path d="M 270 110 L 292 110 L 287 106 M 292 110 L 287 114" stroke="#69F0AE" strokeWidth="2.5" fill="none" />
+              <text x="305" y="148" fill={PALETTE.accent} fontSize="34" fontWeight="bold">
+                ×
+              </text>
+              <text x="338" y="150" fill={PALETTE.supportB} fontSize="44" fontWeight="bold">
+                B
+              </text>
+              <path d="M 340 110 L 364 110 L 359 106 M 364 110 L 359 114" stroke={PALETTE.supportB} strokeWidth="2.5" fill="none" />
+              <text x="375" y="150" fill={PALETTE.text} fontSize="44" fontWeight="bold">
+                )
+              </text>
+            </g>
+          </g>
+        )}
+
+        {/* Phase 3 & 4: Unified Lorentz Equation in Golden Showcase */}
+        {unifiedOpacity > 0.01 && (
+          <g
+            opacity={unifiedOpacity}
+            transform={`translate(${S5_CONSTANTS.cx}, ${S5_CONSTANTS.cy + waveFloat}) scale(${pulseScale})`}
+          >
+            {/* Ambient Backing Glow */}
+            <rect
+              x="-460"
+              y="-130"
+              width="920"
+              height="260"
+              rx="24"
+              fill="#FFD152"
+              opacity={0.06 * borderProgress}
+              filter="url(#s5-gold-glow)"
+            />
+
+            {/* Glowing Golden Frame */}
+            <rect
+              x="-450"
+              y="-120"
+              width="900"
+              height="240"
+              rx="20"
+              fill="#0F1424"
+              stroke="url(#s5-gold-grad)"
+              strokeWidth="4.5"
+              filter="url(#s5-gold-glow)"
+              strokeDasharray="2280"
+              strokeDashoffset={interpolate(borderProgress, [0, 1], [2280, 0])}
+            />
+
+            {/* Corner Ornamental Accents */}
+            <g stroke={PALETTE.accent} strokeWidth="3" fill="none" opacity={borderProgress}>
+              <path d="M -430 -90 L -430 -105 L -415 -105" />
+              <path d="M 430 -90 L 430 -105 L 415 -105" />
+              <path d="M -430 90 L -430 105 L -415 105" />
+              <path d="M 430 90 L 430 105 L 415 105" />
+            </g>
+
+            {/* Sub-label banner */}
+            <text
+              x="0"
+              y="-65"
+              fill={PALETTE.accent}
+              fontSize="22"
+              fontWeight="700"
+              letterSpacing="4"
+              textAnchor="middle"
+              opacity={borderProgress}
+            >
+              COMPLETE ELECTROMAGNETIC FORCE
+            </text>
+
+            {/* Unified Equation: F = q ( E + v × B ) */}
+            <g transform="translate(-320, 42)">
+              {/* Total Force F */}
+              <text x="0" y="0" fill={PALETTE.text} fontSize="68" fontWeight="bold">
+                F
+              </text>
+              <path d="M 4 -54 L 42 -54 L 35 -60 M 42 -54 L 35 -48" stroke={PALETTE.text} strokeWidth="3.5" fill="none" />
+
+              {/* Equals */}
+              <text x="65" y="-2" fill={PALETTE.text} fontSize="62" fontWeight="bold">
+                =
+              </text>
+
+              {/* Factored Charge 'q' */}
+              <text
+                x="125"
+                y="0"
+                fill={PALETTE.accent}
+                fontSize="72"
+                fontWeight="900"
+                filter="url(#s5-gold-glow)"
+              >
+                q
+              </text>
+
+              {/* Left Parenthesis */}
+              <text x="180" y="2" fill={PALETTE.accent} fontSize="76" fontWeight="300">
+                [
+              </text>
+
+              {/* Electric Vector E */}
+              <text x="220" y="0" fill={PALETTE.support} fontSize="68" fontWeight="bold" filter="url(#s5-cyan-glow)">
+                E
+              </text>
+              <path d="M 224 -54 L 265 -54 L 258 -60 M 265 -54 L 258 -48" stroke={PALETTE.support} strokeWidth="3.5" fill="none" />
+
+              {/* Plus Operator */}
+              <text x="295" y="-2" fill={PALETTE.accent} fontSize="58" fontWeight="bold">
+                +
+              </text>
+
+              {/* Velocity Vector v */}
+              <text x="360" y="0" fill="#69F0AE" fontSize="66" fontWeight="bold">
+                v
+              </text>
+              <path d="M 364 -54 L 396 -54 L 389 -60 M 396 -54 L 389 -48" stroke="#69F0AE" strokeWidth="3.5" fill="none" />
+
+              {/* Cross Product × */}
+              <text x="418" y="-4" fill={PALETTE.accent} fontSize="52" fontWeight="bold">
+                ×
+              </text>
+
+              {/* Magnetic Vector B */}
+              <text x="470" y="0" fill={PALETTE.supportB} fontSize="68" fontWeight="bold" filter="url(#s5-magenta-glow)">
+                B
+              </text>
+              <path d="M 474 -54 L 514 -54 L 507 -60 M 514 -54 L 507 -48" stroke={PALETTE.supportB} strokeWidth="3.5" fill="none" />
+
+              {/* Right Parenthesis */}
+              <text x="535" y="2" fill={PALETTE.accent} fontSize="76" fontWeight="300">
+                ]
+              </text>
+            </g>
+          </g>
+        )}
+      </svg>
+
+      {/* Header / Title Zone */}
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.title.x,
+          top: ZONES.title.y,
+          width: ZONES.title.w,
+          opacity: entrance,
+          transform: `translateY(${interpolate(entrance, [0, 1], [-20, 0])}px)`,
+        }}
+      >
+        <Label size={56}>The Unified Lorentz Force Law</Label>
+      </div>
+
+      {/* Footer Caption Zone */}
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.caption.x,
+          top: ZONES.caption.y,
+          width: ZONES.caption.w,
+          opacity: entrance,
+          textAlign: "center",
+        }}
+      >
+        <Label size={30}>
+          {frame < 220
+            ? "Electric fields accelerate charges along field lines; magnetic fields deflect moving charges."
+            : frame < 400
+            ? "Factoring out charge q merges the electrostatic and magnetic influences into one unified law."
+            : "Lorentz Force: The total electromagnetic force experienced by a charge moving through space."}
+        </Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+function Scene6() {
+  const frame = useCurrentFrame();
+
+  // Magnet descent & oscillation
+  // Magnet starts high up (~350px), plunges down (~550px), then oscillates in place
+  const magnetDrop = interpolate(frame, [40, 160, 240, 320, 420, 520, 600],
+    [360, 560, 510, 570, 530, 560, 550],
+    CLAMP
+  );
+  const magnetY = clampPos(magnetDrop + Math.sin(frame / 14) * 6, 280, 750);
+
+  // Induced EMF / Flux rate of change
+  const fluxPenetration = interpolate(frame, [40, 150, 260, 360, 480, 600],
+    [0.05, 0.95, 0.6, 0.9, 0.75, 0.85],
+    CLAMP
+  );
+  const dynamicFlux = fluxPenetration + Math.sin(frame / 7) * 0.04;
+  const clampedFlux = Math.max(0, Math.min(1, dynamicFlux));
+
+  // Meter Needle Rotation (angle from -60deg to +60deg)
+  const needleAngle = -60 + clampedFlux * 120;
+
+  // Bulb brightness & glow
+  const bulbGlow = interpolate(clampedFlux, [0, 0.2, 0.8, 1], [0.1, 0.2, 0.9, 1.0], CLAMP);
+  const bulbColor = interpolateColors(
+    clampedFlux,
+    [0, 0.3, 1],
+    ["#3A4050", "#FFE082", "#FFD152"]
+  );
+
+  // Current arrow phase along the coil loop
+  const currentSpeed = clampedFlux * (frame * 0.12);
+
+  // Entrance springs
+  const enterCoil = spring({ frame: frame - 5, fps: 30, config: { damping: 14 } });
+  const enterMagnet = spring({ frame: frame - 15, fps: 30, config: { damping: 14 } });
+  const enterMeter = spring({ frame: frame - 25, fps: 30, config: { damping: 14 } });
+  const enterBulb = spring({ frame: frame - 30, fps: 30, config: { damping: 14 } });
+
+  // Geometry references (Coil at cx: 720, cy: 590)
+  const coilCX = 720;
+  const coilCY = 590;
+  const coilRX = 180;
+  const coilRY = 60;
+
+  // Meter at cx: 340, cy: 580
+  const meterCX = 340;
+  const meterCY = 580;
+
+  // Bulb at cx: 1120, cy: 560
+  const bulbCX = 1120;
+  const bulbCY = 560;
+
+  // Dynamic flux lines from magnet N-pole (bottom of magnet)
+  const nPoleY = magnetY + 45;
+  const sPoleY = magnetY - 45;
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+      <Backdrop />
+      <svg style={SVG_FRAME}>
+        <defs>
+          <radialGradient id="s6-bulb-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor={PALETTE.accent} stopOpacity={0.8 * bulbGlow} />
+            <stop offset="50%" stopColor={PALETTE.accent} stopOpacity={0.3 * bulbGlow} />
+            <stop offset="100%" stopColor={PALETTE.accent} stopOpacity={0} />
+          </radialGradient>
+          <linearGradient id="s6-n-pole" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#FF5252" />
+            <stop offset="100%" stopColor="#D50000" />
+          </linearGradient>
+          <linearGradient id="s6-s-pole" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#2979FF" />
+            <stop offset="100%" stopColor="#1565C0" />
+          </linearGradient>
+          <filter id="s6-blur">
+            <feGaussianBlur stdDeviation="6" />
+          </filter>
+        </defs>
+
+        {/* --- CONNECTING WIRES (Coil -> Meter & Coil -> Bulb) --- */}
+        <g opacity={enterCoil}>
+          {/* Wire to Bulb (Right) */}
+          <path
+            d={`M ${coilCX + 140} ${coilCY - 10} C ${coilCX + 240} ${coilCY - 40}, ${bulbCX - 80} ${bulbCY + 70}, ${bulbCX - 25} ${bulbCY + 50}`}
+            fill="none"
+            stroke="#B0BEC5"
+            strokeWidth="5"
+            strokeLinecap="round"
+          />
+          <path
+            d={`M ${coilCX + 120} ${coilCY + 20} C ${coilCX + 240} ${coilCY + 60}, ${bulbCX - 80} ${bulbCY + 90}, ${bulbCX + 25} ${bulbCY + 50}`}
+            fill="none"
+            stroke="#B0BEC5"
+            strokeWidth="5"
+            strokeLinecap="round"
+          />
+
+          {/* Wire to Flux Meter (Left) */}
+          <path
+            d={`M ${coilCX - 140} ${coilCY - 10} C ${coilCX - 220} ${coilCY - 40}, ${meterCX + 90} ${meterCY + 30}, ${meterCX + 60} ${meterCY + 30}`}
+            fill="none"
+            stroke="#607D8B"
+            strokeWidth="4"
+            strokeLinecap="round"
+          />
+          <path
+            d={`M ${coilCX - 120} ${coilCY + 20} C ${coilCX - 220} ${coilCY + 50}, ${meterCX + 90} ${meterCY + 50}, ${meterCX + 60} ${meterCY + 50}`}
+            fill="none"
+            stroke="#607D8B"
+            strokeWidth="4"
+            strokeLinecap="round"
+          />
+        </g>
+
+        {/* --- BACK HALF OF WIRE COIL --- */}
+        <g opacity={enterCoil}>
+          <path
+            d={`M ${coilCX - coilRX} ${coilCY} A ${coilRX} ${coilRY} 0 0 1 ${coilCX + coilRX} ${coilCY}`}
+            fill="none"
+            stroke="#CD7F32"
+            strokeWidth="10"
+            strokeLinecap="round"
+            opacity="0.6"
+          />
+        </g>
+
+        {/* --- MAGNETIC FIELD LINES (Emanating from Magnet N-Pole) --- */}
+        <g opacity={enterMagnet}>
+          {/* Left loop 1 */}
+          <path
+            d={`M ${coilCX - 20} ${nPoleY} C ${coilCX - 140} ${nPoleY + 60}, ${coilCX - 200} ${sPoleY - 40}, ${coilCX - 20} ${sPoleY}`}
+            fill="none"
+            stroke={PALETTE.supportB}
+            strokeWidth="2.5"
+            strokeDasharray="8 6"
+            strokeDashoffset={-frame * 1.5}
+            opacity={0.7}
+          />
+          {/* Left loop 2 (wider) */}
+          <path
+            d={`M ${coilCX - 15} ${nPoleY} C ${coilCX - 240} ${nPoleY + 110}, ${coilCX - 300} ${sPoleY - 80}, ${coilCX - 15} ${sPoleY}`}
+            fill="none"
+            stroke={PALETTE.supportB}
+            strokeWidth="2"
+            strokeDasharray="8 6"
+            strokeDashoffset={-frame * 1.5}
+            opacity={0.45}
+          />
+          {/* Right loop 1 */}
+          <path
+            d={`M ${coilCX + 20} ${nPoleY} C ${coilCX + 140} ${nPoleY + 60}, ${coilCX + 200} ${sPoleY - 40}, ${coilCX + 20} ${sPoleY}`}
+            fill="none"
+            stroke={PALETTE.supportB}
+            strokeWidth="2.5"
+            strokeDasharray="8 6"
+            strokeDashoffset={-frame * 1.5}
+            opacity={0.7}
+          />
+          {/* Right loop 2 (wider) */}
+          <path
+            d={`M ${coilCX + 15} ${nPoleY} C ${coilCX + 240} ${nPoleY + 110}, ${coilCX + 300} ${sPoleY - 80}, ${coilCX + 15} ${sPoleY}`}
+            fill="none"
+            stroke={PALETTE.supportB}
+            strokeWidth="2"
+            strokeDasharray="8 6"
+            strokeDashoffset={-frame * 1.5}
+            opacity={0.45}
+          />
+          {/* Center flux vectors penetrating straight downward */}
+          {[-40, 0, 40].map((offsetX, i) => {
+            const lineX = coilCX + offsetX;
+            const startY = nPoleY;
+            const endY = nPoleY + 120 + Math.sin(frame / 8 + i) * 10;
+            return (
+              <g key={`flux-vec-${i}`} opacity={0.8}>
+                <line
+                  x1={lineX}
+                  y1={startY}
+                  x2={lineX}
+                  y2={endY}
+                  stroke={PALETTE.supportB}
+                  strokeWidth="3"
+                  strokeDasharray="6 4"
+                  strokeDashoffset={-frame * 2}
+                />
+                <polygon
+                  points={`${lineX - 5},${endY - 6} ${lineX + 5},${endY - 6} ${lineX},${endY + 4}`}
+                  fill={PALETTE.supportB}
+                />
+              </g>
+            );
+          })}
+        </g>
+
+        {/* --- BAR MAGNET --- */}
+        <g opacity={enterMagnet} transform={`translate(0, 0)`}>
+          {/* Magnet drop shadow */}
+          <rect
+            x={coilCX - 32}
+            y={magnetY - 88}
+            width="64"
+            height="180"
+            rx="10"
+            fill="rgba(0,0,0,0.5)"
+            filter="url(#s6-blur)"
+          />
+          {/* South Pole (Blue, Top) */}
+          <rect
+            x={coilCX - 30}
+            y={magnetY - 90}
+            width="60"
+            height="90"
+            rx="6"
+            fill="url(#s6-s-pole)"
+          />
+          {/* North Pole (Red, Bottom) */}
+          <rect
+            x={coilCX - 30}
+            y={magnetY}
+            width="60"
+            height="90"
+            rx="6"
+            fill="url(#s6-n-pole)"
+          />
+          {/* Magnet Labels */}
+          <text
+            x={coilCX}
+            y={magnetY - 35}
+            fill="#FFFFFF"
+            fontSize="32"
+            fontWeight="bold"
+            fontFamily="sans-serif"
+            textAnchor="middle"
+          >
+            S
+          </text>
+          <text
+            x={coilCX}
+            y={magnetY + 55}
+            fill="#FFFFFF"
+            fontSize="32"
+            fontWeight="bold"
+            fontFamily="sans-serif"
+            textAnchor="middle"
+          >
+            N
+          </text>
+          {/* Motion Velocity Arrow above magnet */}
+          {frame > 35 && frame < 580 && (
+            <g opacity={Math.min(1, (frame - 35) / 20)}>
+              <line
+                x1={coilCX + 65}
+                y1={magnetY - 40}
+                x2={coilCX + 65}
+                y2={magnetY + 40}
+                stroke={PALETTE.accent}
+                strokeWidth="4"
+              />
+              <polygon
+                points={`${coilCX + 58},${magnetY + 36} ${coilCX + 72},${magnetY + 36} ${coilCX + 65},${magnetY + 52}`}
+                fill={PALETTE.accent}
+              />
+              <text
+                x={coilCX + 80}
+                y={magnetY + 12}
+                fill={PALETTE.accent}
+                fontSize="20"
+                fontFamily="sans-serif"
+                fontWeight="bold"
+              >
+                v
+              </text>
+            </g>
+          )}
+        </g>
+
+        {/* --- FRONT HALF OF WIRE COIL (Layers over magnet when magnet is inside) --- */}
+        <g opacity={enterCoil}>
+          <path
+            d={`M ${coilCX - coilRX} ${coilCY} A ${coilRX} ${coilRY} 0 0 0 ${coilCX + coilRX} ${coilCY}`}
+            fill="none"
+            stroke="#E68A00"
+            strokeWidth="11"
+            strokeLinecap="round"
+          />
+          <path
+            d={`M ${coilCX - coilRX} ${coilCY} A ${coilRX} ${coilRY} 0 0 0 ${coilCX + coilRX} ${coilCY}`}
+            fill="none"
+            stroke="#FFD54F"
+            strokeWidth="4"
+            strokeLinecap="round"
+          />
+
+          {/* Induced Current Arrows swirling counter-clockwise on front arc */}
+          {clampedFlux > 0.15 && (
+            <g opacity={clampedFlux}>
+              {[0.25, 0.5, 0.75].map((tOffset, idx) => {
+                const t = ((currentSpeed + tOffset) % 1 + 1) % 1;
+                const angle = Math.PI * (1 - t);
+                const arrowX = coilCX + coilRX * Math.cos(angle);
+                const arrowY = coilCY + coilRY * Math.sin(angle);
+                const tangentX = -coilRX * Math.sin(angle);
+                const tangentY = coilRY * Math.cos(angle);
+                const rot = (Math.atan2(tangentY, tangentX) * 180) / Math.PI;
+
+                return (
+                  <polygon
+                    key={`curr-arrow-${idx}`}
+                    points="-6,-5 8,0 -6,5"
+                    fill={PALETTE.accent}
+                    transform={`translate(${arrowX}, ${arrowY}) rotate(${rot})`}
+                  />
+                );
+              })}
+              <text
+                x={coilCX}
+                y={coilCY + 45}
+                fill={PALETTE.accent}
+                fontSize="22"
+                fontWeight="bold"
+                fontFamily="sans-serif"
+                textAnchor="middle"
+              >
+                Induced Current (I)
+              </text>
+            </g>
+          )}
+        </g>
+
+        {/* --- FLUX METER GAUGE (Left) --- */}
+        <g opacity={enterMeter} transform={`translate(${meterCX}, ${meterCY})`}>
+          {/* Meter Base Casing */}
+          <rect
+            x="-75"
+            y="-65"
+            width="150"
+            height="130"
+            rx="14"
+            fill="#121829"
+            stroke="#2C3856"
+            strokeWidth="3"
+          />
+          {/* Dial Arc Scale */}
+          <path
+            d="M -50 -10 A 55 55 0 0 1 50 -10"
+            fill="none"
+            stroke="#455A64"
+            strokeWidth="6"
+            strokeLinecap="round"
+          />
+          {/* Active Colored Scale */}
+          <path
+            d="M -15 -42 A 55 55 0 0 1 48 -14"
+            fill="none"
+            stroke="#00E676"
+            strokeWidth="6"
+            strokeLinecap="round"
+          />
+          {/* Dial Needle */}
+          <line
+            x1="0"
+            y1="10"
+            x2="0"
+            y2="-48"
+            stroke="#FF5252"
+            strokeWidth="3.5"
+            strokeLinecap="round"
+            transform={`rotate(${needleAngle}, 0, 10)`}
+          />
+          <circle cx="0" cy="10" r="6" fill="#CFD8DC" />
+          <text
+            x="0"
+            y="45"
+            fill={PALETTE.text}
+            fontSize="16"
+            fontFamily="sans-serif"
+            fontWeight="bold"
+            textAnchor="middle"
+          >
+            FLUX RATE (dΦ/dt)
+          </text>
+        </g>
+
+        {/* --- LIGHT BULB (Right) --- */}
+        <g opacity={enterBulb} transform={`translate(${bulbCX}, ${bulbCY})`}>
+          {/* Bulb Outer Ambient Glow */}
+          {bulbGlow > 0.2 && (
+            <circle
+              cx="0"
+              cy="0"
+              r={70 + bulbGlow * 35 + Math.sin(frame / 4) * 5}
+              fill="url(#s6-bulb-glow)"
+            />
+          )}
+
+          {/* Light Rays */}
+          {bulbGlow > 0.4 && (
+            <g opacity={bulbGlow}>
+              {[0, 45, 90, 135, 180, 225, 270, 315].map((deg, i) => {
+                const rad = (deg * Math.PI) / 180;
+                const r1 = 44;
+                const r2 = 56 + Math.sin(frame / 5 + i) * 4;
+                return (
+                  <line
+                    key={`ray-${i}`}
+                    x1={Math.cos(rad) * r1}
+                    y1={Math.sin(rad) * r1}
+                    x2={Math.cos(rad) * r2}
+                    y2={Math.sin(rad) * r2}
+                    stroke={PALETTE.accent}
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                  />
+                );
+              })}
+            </g>
+          )}
+
+          {/* Glass Bulb Body */}
+          <path
+            d="M -22 25 C -35 10 -38 -20 -18 -38 C 0 -54 36 -42 38 -18 C 38 10 22 25 15 32 L -15 32 Z"
+            fill={bulbColor}
+            opacity="0.9"
+          />
+          {/* Filament */}
+          <path
+            d="M -8 20 L -8 -5 L 0 -15 L 8 -5 L 8 20"
+            fill="none"
+            stroke={bulbGlow > 0.3 ? "#FFFFFF" : "#607D8B"}
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+          />
+          {/* Metal Base */}
+          <rect x="-14" y="32" width="28" height="18" rx="3" fill="#78909C" />
+          <line x1="-12" y1="38" x2="12" y2="38" stroke="#455A64" strokeWidth="2" />
+          <line x1="-12" y1="44" x2="12" y2="44" stroke="#455A64" strokeWidth="2" />
+          <rect x="-8" y="50" width="16" height="6" rx="2" fill="#37474F" />
+
+          <text
+            x="0"
+            y="78"
+            fill={PALETTE.text}
+            fontSize="18"
+            fontFamily="sans-serif"
+            fontWeight="bold"
+            textAnchor="middle"
+          >
+            LOAD (EMF)
+          </text>
+        </g>
+      </svg>
+
+      {/* --- TITLE ZONE --- */}
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.title.x,
+          top: ZONES.title.y,
+          width: ZONES.title.w,
+          textAlign: "center",
+        }}
+      >
+        <Label size={64}>Faraday's Law of Induction</Label>
+      </div>
+
+      {/* --- CAPTION ZONE --- */}
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.caption.x,
+          top: ZONES.caption.y,
+          width: ZONES.caption.w,
+          textAlign: "center",
+        }}
+      >
+        <Label size={32}>
+          {frame < 120
+            ? "A stationary magnetic field produces zero current inside the wire loop."
+            : frame < 360
+            ? "A changing magnetic flux (dΦ/dt) induces an electromotive force (EMF = -dΦ/dt)."
+            : "The plunging magnet increases flux density, driving induced current to light the bulb."}
+        </Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+const S7_RING_CENTER = { x: 960, y: 640 };
+const S7_RING_RX = 240;
+const S7_RING_RY = 55;
+
+function Scene7() {
+  const frame = useCurrentFrame();
+
+  const entrance = spring({
+    frame,
+    fps: 60,
+    config: { damping: 14, stiffness: 80 },
+  });
+
+  const magnetProgress = interpolate(frame, [30, 200, 360, 520, 620],
+    [0, 0.55, 0.65, 0.9, 0.85],
+    CLAMP
+  );
+
+  const bobble = Math.sin(frame / 18) * 6;
+  const magnetStartY = 330;
+  const magnetTargetY = 530;
+  const magnetY = clampPos(
+    magnetStartY + (magnetTargetY - magnetStartY) * magnetProgress + bobble,
+    SAFE.yMin + 40,
+    SAFE.yMax - 40
+  );
+
+  const fluxDensity = interpolate(frame, [40, 220, 500], [0.1, 0.75, 1], CLAMP);
+  const currentIntensity = interpolate(frame, [80, 260, 550], [0, 0.85, 1], CLAMP);
+  const repulseIntensity = interpolate(frame, [140, 300, 550], [0, 0.9, 1], CLAMP);
+
+  const currentAngle = (frame * 0.08) % (Math.PI * 2);
+
+  const extArrows = useMemo(() => {
+    return [-140, -70, 0, 70, 140].map((dx, i) => {
+      const yOffset = Math.abs(dx) * 0.15;
+      return { id: i, dx, yOffset };
+    });
+  }, []);
+
+  const counterArrows = useMemo(() => {
+    return [-80, -30, 30, 80].map((dx, i) => {
+      const yOffset = Math.abs(dx) * 0.1;
+      return { id: i, dx, yOffset };
+    });
+  }, []);
+
+  const magnetWidth = 100;
+  const magnetHeight = 160;
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+      <Backdrop />
+
+      <svg style={SVG_FRAME}>
+        <defs>
+          <linearGradient id="s7-copper" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#FF8A65" />
+            <stop offset="50%" stopColor="#D84315" />
+            <stop offset="100%" stopColor="#BF360C" />
+          </linearGradient>
+          <linearGradient id="s7-north" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#FF3D71" />
+            <stop offset="100%" stopColor="#D50000" />
+          </linearGradient>
+          <linearGradient id="s7-south" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#2979FF" />
+            <stop offset="100%" stopColor="#0044FF" />
+          </linearGradient>
+          <filter id="s7-glow-cyan" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          <filter id="s7-glow-magenta" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="5" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {/* Back half of copper ring */}
+        <g opacity={entrance}>
+          <path
+            d={`M ${S7_RING_CENTER.x - S7_RING_RX} ${S7_RING_CENTER.y} A ${S7_RING_RX} ${S7_RING_RY} 0 0 1 ${S7_RING_CENTER.x + S7_RING_RX} ${S7_RING_CENTER.y}`}
+            fill="none"
+            stroke="url(#s7-copper)"
+            strokeWidth={18}
+            strokeLinecap="round"
+          />
+        </g>
+
+        {/* External falling magnetic flux (purple downward lines) */}
+        <g opacity={fluxDensity * entrance} filter="url(#s7-glow-magenta)">
+          {extArrows.map((a) => {
+            const startY = magnetY + magnetHeight / 2;
+            const endY = S7_RING_CENTER.y + 110 - a.yOffset;
+            const curX = S7_RING_CENTER.x + a.dx;
+            const pulse = (Math.sin(frame * 0.15 + a.id) + 1) * 0.5;
+            return (
+              <g key={`ext-${a.id}`}>
+                <line
+                  x1={curX}
+                  y1={startY}
+                  x2={curX}
+                  y2={endY}
+                  stroke={PALETTE.supportB}
+                  strokeWidth={2.5 + pulse * 1.5}
+                  strokeDasharray="8 6"
+                  opacity={0.7 + pulse * 0.3}
+                />
+                <polygon
+                  points={`${curX},${endY + 12} ${curX - 6},${endY} ${curX + 6},${endY}`}
+                  fill={PALETTE.supportB}
+                />
+              </g>
+            );
+          })}
+        </g>
+
+        {/* Falling Bar Magnet */}
+        <g
+          transform={`translate(${S7_RING_CENTER.x}, ${magnetY}) scale(${entrance})`}
+        >
+          {/* Magnet South Pole (Top) */}
+          <rect
+            x={-magnetWidth / 2}
+            y={-magnetHeight / 2}
+            width={magnetWidth}
+            height={magnetHeight / 2}
+            rx={6}
+            fill="url(#s7-south)"
+          />
+          <text
+            x={0}
+            y={-magnetHeight / 4 + 8}
+            fill={PALETTE.text}
+            fontSize={28}
+            fontWeight="bold"
+            textAnchor="middle"
+            fontFamily="sans-serif"
+          >
+            S
+          </text>
+
+          {/* Magnet North Pole (Bottom - encroaching) */}
+          <rect
+            x={-magnetWidth / 2}
+            y={0}
+            width={magnetWidth}
+            height={magnetHeight / 2}
+            rx={6}
+            fill="url(#s7-north)"
+          />
+          <text
+            x={0}
+            y={magnetHeight / 4 + 8}
+            fill={PALETTE.text}
+            fontSize={28}
+            fontWeight="bold"
+            textAnchor="middle"
+            fontFamily="sans-serif"
+          >
+            N
+          </text>
+
+          {/* Repulsion Force Vector (Opposing magnet descent) */}
+          {repulseIntensity > 0.05 && (
+            <g
+              transform={`translate(0, ${magnetHeight / 2 + 10})`}
+              opacity={repulseIntensity}
+            >
+              <line
+                x1={0}
+                y1={50 * repulseIntensity}
+                x2={0}
+                y2={0}
+                stroke="#FF1744"
+                strokeWidth={5}
+              />
+              <polygon
+                points={`0,0 -8,14 8,14`}
+                fill="#FF1744"
+              />
+              <text
+                x={16}
+                y={28}
+                fill="#FF1744"
+                fontSize={22}
+                fontWeight="bold"
+                fontFamily="sans-serif"
+              >
+                F_repulsion
+              </text>
+            </g>
+          )}
+        </g>
+
+        {/* Induced Opposing Magnetic Field (Upward Cyan Arrows) */}
+        <g opacity={currentIntensity * entrance} filter="url(#s7-glow-cyan)">
+          {counterArrows.map((ca) => {
+            const rootY = S7_RING_CENTER.y - ca.yOffset;
+            const topY = rootY - 140 * currentIntensity;
+            const curX = S7_RING_CENTER.x + ca.dx;
+            const flow = (Math.sin(frame * 0.18 + ca.id * 1.5) + 1) * 0.5;
+            return (
+              <g key={`ind-${ca.id}`}>
+                <line
+                  x1={curX}
+                  y1={rootY}
+                  x2={curX}
+                  y2={topY}
+                  stroke={PALETTE.support}
+                  strokeWidth={3 + flow * 2}
+                />
+                <polygon
+                  points={`${curX},${topY - 12} ${curX - 7},${topY} ${curX + 7},${topY}`}
+                  fill={PALETTE.support}
+                />
+              </g>
+            );
+          })}
+        </g>
+
+        {/* Front half of copper ring (creates 3D occlusion) */}
+        <g opacity={entrance}>
+          <path
+            d={`M ${S7_RING_CENTER.x - S7_RING_RX} ${S7_RING_CENTER.y} A ${S7_RING_RX} ${S7_RING_RY} 0 0 0 ${S7_RING_CENTER.x + S7_RING_RX} ${S7_RING_CENTER.y}`}
+            fill="none"
+            stroke="url(#s7-copper)"
+            strokeWidth={18}
+            strokeLinecap="round"
+          />
+        </g>
+
+        {/* Animated Induced Current Beads orbiting counter-clockwise */}
+        <g opacity={currentIntensity * entrance}>
+          {[0, 1, 2, 3, 4, 5].map((i) => {
+            const angle = currentAngle + (i * Math.PI * 2) / 6;
+            const cx = S7_RING_CENTER.x + Math.cos(angle) * (S7_RING_RX - 2);
+            const cy = S7_RING_CENTER.y + Math.sin(angle) * (S7_RING_RY - 2);
+            const isFront = Math.sin(angle) >= 0;
+            return (
+              <circle
+                key={`bead-${i}`}
+                cx={cx}
+                cy={cy}
+                r={isFront ? 6 : 4}
+                fill={PALETTE.accent}
+                filter="url(#s7-glow-cyan)"
+                opacity={isFront ? 1 : 0.6}
+              />
+            );
+          })}
+        </g>
+
+        {/* Dynamic labels & physical parameters callouts */}
+        <g opacity={entrance} transform={`translate(${SAFE.xMin + 40}, ${ZONES.stage.y + 60})`}>
+          <rect
+            x={0}
+            y={0}
+            width={320}
+            height={160}
+            rx={10}
+            fill="#101528"
+            stroke={PALETTE.supportB}
+            strokeWidth={2}
+            opacity={0.85}
+          />
+          <text
+            x={20}
+            y={35}
+            fill={PALETTE.supportB}
+            fontSize={20}
+            fontWeight="bold"
+            fontFamily="sans-serif"
+          >
+            External Flux (Φ_ext)
+          </text>
+          <text
+            x={20}
+            y={65}
+            fill={PALETTE.text}
+            fontSize={16}
+            fontFamily="sans-serif"
+          >
+            Direction: Downward (increasing)
+          </text>
+          <line x1={20} y1={85} x2={300} y2={85} stroke="#22304d" strokeWidth={1.5} />
+          <text
+            x={20}
+            y={115}
+            fill={PALETTE.support}
+            fontSize={20}
+            fontWeight="bold"
+            fontFamily="sans-serif"
+          >
+            Induced B-Field (B_ind)
+          </text>
+          <text
+            x={20}
+            y={145}
+            fill={PALETTE.text}
+            fontSize={16}
+            fontFamily="sans-serif"
+          >
+            Opposes ΔΦ : Upward Push
+          </text>
+        </g>
+      </svg>
+
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.title.x,
+          top: ZONES.title.y,
+          width: ZONES.title.w,
+        }}
+      >
+        <Label size={56}>Lenz&apos;s Law and Flux Opposition</Label>
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.caption.x,
+          top: ZONES.caption.y,
+          width: ZONES.caption.w,
+        }}
+      >
+        <Label size={30}>
+          An approaching North pole induces counter-clockwise current, creating an opposing upward magnetic pole that repels descent.
+        </Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+function Scene8() {
+  const frame = useCurrentFrame();
+
+  // Animations & Timers
+  const enterProgress = spring({
+    frame,
+    fps: 60,
+    config: { damping: 14, mass: 0.9, stiffness: 80 }
+  });
+
+  // Rotation speed starts stationary and accelerates to constant spinning
+  const spinStartFrame = 35;
+  const spinTime = Math.max(0, frame - spinStartFrame);
+  const spinVelocity = interpolate(frame, [35, 100], [0, 0.055], CLAMP);
+  const rotationAngle = frame < spinStartFrame ? 0 : (spinTime * spinVelocity * 1.6);
+
+  // Field strength & active state
+  const fieldOpacity = interpolate(frame, [10, 40], [0, 0.85], CLAMP);
+  const scopeTraceProgress = interpolate(frame, [45, 520], [0, 1], CLAMP);
+
+  // Layout parameters
+  const genCenterX = 560;
+  const genCenterY = ZONES.stage.cy + 10;
+  const poleWidth = 110;
+  const poleHeight = 240;
+  const poleGap = 340;
+
+  const leftPoleX = genCenterX - poleGap / 2 - poleWidth;
+  const rightPoleX = genCenterX + poleGap / 2;
+  const poleY = genCenterY - poleHeight / 2;
+
+  // Coil 3D projection parameters
+  const coilHalfW = 115;
+  const coilHalfH = 80;
+  const cosTheta = Math.cos(rotationAngle);
+  const sinTheta = Math.sin(rotationAngle);
+
+  // Perspective coil corners projected
+  const p1 = { x: genCenterX - coilHalfW * cosTheta, y: genCenterY - coilHalfH - coilHalfW * sinTheta * 0.25 };
+  const p2 = { x: genCenterX + coilHalfW * cosTheta, y: genCenterY - coilHalfH + coilHalfW * sinTheta * 0.25 };
+  const p3 = { x: genCenterX + coilHalfW * cosTheta, y: genCenterY + coilHalfH + coilHalfW * sinTheta * 0.25 };
+  const p4 = { x: genCenterX - coilHalfW * cosTheta, y: genCenterY + coilHalfH - coilHalfW * sinTheta * 0.25 };
+
+  // Current magnitude and polarity from sin(theta)
+  const currentMagnitude = Math.sin(rotationAngle);
+  const currentAbs = Math.abs(currentMagnitude);
+  const currentFlowColor = currentMagnitude >= 0 ? PALETTE.support : PALETTE.supportB;
+
+  // Oscilloscope Setup on right side
+  const scopeX = 1120;
+  const scopeY = ZONES.stage.y + 45;
+  const scopeW = 590;
+  const scopeH = 480;
+  const scopeCenterY = scopeY + scopeH / 2;
+
+  // Generate oscilloscope grid and wave points
+  const wavePointsCount = 200;
+  const scopeD = useMemo(() => {
+    const pts = [];
+    const maxDrawIndex = Math.floor(scopeTraceProgress * wavePointsCount);
+    const visibleCycles = 3.2;
+    const waveAmp = 130;
+
+    for (let i = 0; i <= maxDrawIndex; i++) {
+      const u = i / wavePointsCount;
+      const px = scopeX + 60 + u * (scopeW - 100);
+      // Synchronized with current rotation angle at current frame
+      const phase = rotationAngle - (1 - u) * (Math.PI * 2 * visibleCycles);
+      const py = scopeCenterY - Math.sin(phase) * waveAmp;
+      pts.push(`${i === 0 ? "M" : "L"} ${px.toFixed(1)} ${py.toFixed(1)}`);
+    }
+    return pts.join(" ");
+  }, [scopeTraceProgress, rotationAngle, scopeCenterY, scopeX, scopeW]);
+
+  // Current probe pen point on oscilloscope
+  const penX = scopeX + 60 + scopeTraceProgress * (scopeW - 100);
+  const penY = scopeCenterY - currentMagnitude * 130;
+
+  // Field line specs
+  const fieldLines = [-80, -40, 0, 40, 80];
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+      <Backdrop />
+      <svg style={SVG_FRAME}>
+        <defs>
+          {/* North pole red-orange gradient */}
+          <linearGradient id="s8-north-grad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#FF1744" stopOpacity="0.95" />
+            <stop offset="100%" stopColor="#D50000" stopOpacity="0.85" />
+          </linearGradient>
+
+          {/* South pole blue-cyan gradient */}
+          <linearGradient id="s8-south-grad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#00B0FF" stopOpacity="0.85" />
+            <stop offset="100%" stopColor="#2979FF" stopOpacity="0.95" />
+          </linearGradient>
+
+          {/* Magnetic field line arrow marker */}
+          <marker id="s8-b-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#00E676" opacity="0.8" />
+          </marker>
+
+          {/* Oscilloscope screen grid pattern */}
+          <pattern id="s8-scope-grid" width="30" height="30" patternUnits="userSpaceOnUse">
+            <path d="M 30 0 L 0 0 0 30" fill="none" stroke={PALETTE.support} strokeWidth="1" strokeOpacity="0.12" />
+          </pattern>
+
+          {/* Glow filter for active trace */}
+          <filter id="s8-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="5" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {/* ================= LEFT / CENTER: GENERATOR ARMATURE ================= */}
+        {/* Background Axle shaft */}
+        <line
+          x1={genCenterX - 240}
+          y1={genCenterY}
+          x2={genCenterX + 240}
+          y2={genCenterY}
+          stroke="#455A64"
+          strokeWidth={8}
+          strokeLinecap="round"
+          opacity={0.7 * enterProgress}
+        />
+
+        {/* Magnetic Field Lines (N -> S) */}
+        {fieldLines.map((offsetY, idx) => {
+          const ly = genCenterY + offsetY;
+          const flowShift = (frame * 1.5 + idx * 25) % 40;
+          return (
+            <g key={`bline-${idx}`} opacity={fieldOpacity}>
+              <line
+                x1={leftPoleX + poleWidth}
+                y1={ly}
+                x2={rightPoleX - 8}
+                y2={ly}
+                stroke="#00E676"
+                strokeWidth={2}
+                strokeDasharray="10 8"
+                strokeDashoffset={-flowShift}
+                markerEnd="url(#s8-b-arrow)"
+              />
+            </g>
+          );
+        })}
+
+        {/* North Pole Block */}
+        <g opacity={enterProgress} transform={`translate(0, ${Math.sin(frame / 35) * 1.5})`}>
+          <rect
+            x={leftPoleX}
+            y={poleY}
+            width={poleWidth}
+            height={poleHeight}
+            rx={10}
+            fill="url(#s8-north-grad)"
+            stroke="#FF5252"
+            strokeWidth={3}
+          />
+          <text
+            x={leftPoleX + poleWidth / 2}
+            y={genCenterY + 16}
+            fill="#FFFFFF"
+            fontSize={52}
+            fontWeight="bold"
+            textAnchor="middle"
+            fontFamily="sans-serif"
+          >
+            N
+          </text>
+        </g>
+
+        {/* South Pole Block */}
+        <g opacity={enterProgress} transform={`translate(0, ${-Math.sin(frame / 35) * 1.5})`}>
+          <rect
+            x={rightPoleX}
+            y={poleY}
+            width={poleWidth}
+            height={poleHeight}
+            rx={10}
+            fill="url(#s8-south-grad)"
+            stroke="#40C4FF"
+            strokeWidth={3}
+          />
+          <text
+            x={rightPoleX + poleWidth / 2}
+            y={genCenterY + 16}
+            fill="#FFFFFF"
+            fontSize={52}
+            fontWeight="bold"
+            textAnchor="middle"
+            fontFamily="sans-serif"
+          >
+            S
+          </text>
+        </g>
+
+        {/* Rotating Rectangular Armature Coil */}
+        <g opacity={enterProgress}>
+          {/* Wire loop body */}
+          <polygon
+            points={`${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y} ${p4.x},${p4.y}`}
+            fill={currentFlowColor}
+            fillOpacity={0.08 + currentAbs * 0.12}
+            stroke={currentAbs > 0.2 ? currentFlowColor : PALETTE.accent}
+            strokeWidth={6}
+            strokeLinejoin="round"
+          />
+
+          {/* Dynamic Induced Current Flow Indicators on Coil Edges */}
+          {currentAbs > 0.15 && (
+            <>
+              {/* Top edge current chevron */}
+              <circle
+                cx={genCenterX}
+                cy={genCenterY - coilHalfH}
+                r={6}
+                fill={PALETTE.accent}
+                filter="url(#s8-glow)"
+              />
+              {/* Bottom edge current chevron */}
+              <circle
+                cx={genCenterX}
+                cy={genCenterY + coilHalfH}
+                r={6}
+                fill={PALETTE.accent}
+                filter="url(#s8-glow)"
+              />
+            </>
+          )}
+
+          {/* Central Axle Hub & Slip Rings */}
+          <circle cx={genCenterX + 160} cy={genCenterY} r={18} fill="#B0BEC5" stroke="#78909C" strokeWidth={3} />
+          <circle cx={genCenterX + 195} cy={genCenterY} r={18} fill="#CFD8DC" stroke="#78909C" strokeWidth={3} />
+
+          {/* Brushes & Connecting Wires towards Oscilloscope */}
+          <path
+            d={`M ${genCenterX + 160} ${genCenterY + 18} L ${genCenterX + 160} ${genCenterY + 120} L ${scopeX} ${scopeCenterY + 60}`}
+            fill="none"
+            stroke={PALETTE.support}
+            strokeWidth={3.5}
+            strokeDasharray="6 4"
+            opacity={0.8}
+          />
+          <path
+            d={`M ${genCenterX + 195} ${genCenterY + 18} L ${genCenterX + 195} ${genCenterY + 140} L ${scopeX} ${scopeCenterY + 90}`}
+            fill="none"
+            stroke={PALETTE.supportB}
+            strokeWidth={3.5}
+            strokeDasharray="6 4"
+            opacity={0.8}
+          />
+
+          {/* Rotation Direction Arrow Indicator */}
+          <path
+            d={`M ${genCenterX - 60} ${genCenterY - coilHalfH - 45} A 65 35 0 0 1 ${genCenterX + 60} ${genCenterY - coilHalfH - 45}`}
+            fill="none"
+            stroke={PALETTE.accent}
+            strokeWidth={3}
+            strokeDasharray="5 3"
+          />
+          <polygon
+            points={`${genCenterX + 62},${genCenterY - coilHalfH - 45} ${genCenterX + 50},${genCenterY - coilHalfH - 53} ${genCenterX + 52},${genCenterY - coilHalfH - 38}`}
+            fill={PALETTE.accent}
+          />
+          <text
+            x={genCenterX}
+            y={genCenterY - coilHalfH - 58}
+            fill={PALETTE.accent}
+            fontSize={20}
+            textAnchor="middle"
+            fontFamily="sans-serif"
+            fontWeight="600"
+          >
+            ω (Mechanical Torque)
+          </text>
+        </g>
+
+        {/* ================= RIGHT: OSCILLOSCOPE MONITOR ================= */}
+        <g opacity={enterProgress}>
+          {/* Bezel frame */}
+          <rect
+            x={scopeX}
+            y={scopeY}
+            width={scopeW}
+            height={scopeH}
+            rx={16}
+            fill="#0D1322"
+            stroke="#263238"
+            strokeWidth={5}
+          />
+
+          {/* CRT Screen area */}
+          <rect
+            x={scopeX + 20}
+            y={scopeY + 20}
+            width={scopeW - 40}
+            height={scopeH - 40}
+            rx={8}
+            fill="#060A10"
+            stroke="#1B263B"
+            strokeWidth={2}
+          />
+
+          {/* Grid pattern */}
+          <rect
+            x={scopeX + 20}
+            y={scopeY + 20}
+            width={scopeW - 40}
+            height={scopeH - 40}
+            fill="url(#s8-scope-grid)"
+          />
+
+          {/* Zero baseline axis */}
+          <line
+            x1={scopeX + 20}
+            y1={scopeCenterY}
+            x2={scopeX + scopeW - 20}
+            y2={scopeCenterY}
+            stroke={PALETTE.support}
+            strokeWidth={1.5}
+            strokeOpacity={0.4}
+            strokeDasharray="4 4"
+          />
+
+          {/* Oscilloscope plotted sine wave trace */}
+          {scopeD && (
+            <path
+              d={scopeD}
+              fill="none"
+              stroke={PALETTE.accent}
+              strokeWidth={4.5}
+              filter="url(#s8-glow)"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
+
+          {/* Realtime Pen / Probe Indicator */}
+          {scopeTraceProgress > 0 && (
+            <g transform={`translate(${penX}, ${penY})`}>
+              <circle r={9} fill="#FFFFFF" filter="url(#s8-glow)" />
+              <circle r={4} fill={PALETTE.accent} />
+              {/* Output voltage readout label */}
+              <text
+                x={18}
+                y={-12}
+                fill={PALETTE.accent}
+                fontSize={22}
+                fontWeight="bold"
+                fontFamily="sans-serif"
+              >
+                {`${(currentMagnitude * 120).toFixed(0)} V`}
+              </text>
+            </g>
+          )}
+
+          {/* Scope Header Badge */}
+          <rect
+            x={scopeX + 35}
+            y={scopeY + 32}
+            width={240}
+            height={36}
+            rx={6}
+            fill="#0A192F"
+            stroke={PALETTE.support}
+            strokeWidth={1.5}
+            strokeOpacity={0.6}
+          />
+          <text
+            x={scopeX + 48}
+            y={scopeY + 56}
+            fill={PALETTE.support}
+            fontSize={18}
+            fontWeight="bold"
+            fontFamily="sans-serif"
+          >
+            OUTPUT: AC VOLTAGE ε(t)
+          </text>
+
+          {/* Peak / Zero Phase Markers */}
+          <text
+            x={scopeX + scopeW - 35}
+            y={scopeCenterY - 120}
+            fill={PALETTE.text}
+            fontSize={16}
+            opacity={0.65}
+            textAnchor="end"
+            fontFamily="sans-serif"
+          >
+            +ε max (θ = 90°)
+          </text>
+          <text
+            x={scopeX + scopeW - 35}
+            y={scopeCenterY + 130}
+            fill={PALETTE.text}
+            fontSize={16}
+            opacity={0.65}
+            textAnchor="end"
+            fontFamily="sans-serif"
+          >
+            -ε max (θ = 270°)
+          </text>
+        </g>
+      </svg>
+
+      {/* Header Title */}
+      <div style={{ position: "absolute", left: ZONES.title.x, top: ZONES.title.y, width: ZONES.title.w }}>
+        <Label size={56}>Application: Electric Power Generation</Label>
+      </div>
+
+      {/* Footer / Mechanism Caption */}
+      <div style={{ position: "absolute", left: ZONES.caption.x, top: ZONES.caption.y, width: ZONES.caption.w }}>
+        <Label size={30}>
+          {frame < 60
+            ? "Mechanical torque continuously rotates a conducting loop inside a uniform magnetic field..."
+            : "Changing magnetic flux generates alternating electromotive force: ε = NBAω · sin(ωt)"}
+        </Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+const S9_EQUATIONS = [
+  { title: "Gauss's Law", eq: "∇ · E = ρ / ε₀", desc: "Electric charges create divergent E fields" },
+  { title: "Gauss's Magnetism", eq: "∇ · B = 0", desc: "No magnetic monopoles exist" },
+  { title: "Faraday's Law", eq: "∇ × E = -∂B / ∂t", desc: "Changing B-field induces circulating E-field" },
+  { title: "Ampère-Maxwell", eq: "∇ × B = μ₀J + μ₀ε₀(∂E / ∂t)", desc: "Changing E-field induces circulating B-field" },
+];
+
+function Scene9() {
+  const frame = useCurrentFrame();
+
+  // Timing breakdown:
+  // 0 - 45: Entrance of 4 equation cards stacked on left
+  // 45 - 190: Showcards in full glory, glowing connections
+  // 190 - 260: Collapse into center point with flash & burst
+  // 260 - 618: Unfold into full 3D EM Wave traveling horizontally across stage
+  // 618 - 648: Exit / settle
+
+  const enterSpring = spring({ frame, fps: 30, config: { damping: 14, stiffness: 80 } });
+
+  // Phase transitions
+  const collapseProgress = interpolate(frame, [190, 255], [0, 1], CLAMP);
+  const waveUnfoldProgress = interpolate(frame, [255, 310], [0, 1], CLAMP);
+  const exitFade = interpolate(frame, [618, 648], [1, 0.85], CLAMP);
+
+  // Continuous propagation parameter
+  const phase = (frame * 0.12) % (Math.PI * 2);
+  const ambientPulse = Math.sin(frame * 0.08) * 0.2 + 0.8;
+
+  // Wave origin & propagation geometry
+  const waveStartX = 240;
+  const waveEndX = 1680;
+  const waveLengthPx = waveEndX - waveStartX;
+  const waveCenterY = ZONES.stage.cy + 15;
+  const numCycles = 3.2;
+  const eAmpMax = 110;
+  const bAmpMax = 65; // isometric projection horizontal/skew component
+  const bSkewY = 32;  // isometric depth slant
+
+  // Generate EM Wave discrete points along the axis
+  const waveStep = 12;
+  const wavePoints = useMemo(() => {
+    const pts = [];
+    for (let x = 0; x <= waveLengthPx; x += waveStep) {
+      const k = (x / waveLengthPx) * (numCycles * Math.PI * 2);
+      pts.push({ xOffset: x, k });
+    }
+    return pts;
+  }, [waveLengthPx]);
+
+  // Flash burst at collapse moment
+  const flashOpacity = interpolate(frame, [245, 260, 280], [0, 0.9, 0], CLAMP);
+  const flashScale = interpolate(frame, [245, 260, 285], [0.2, 2.5, 3.8], CLAMP);
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base, opacity: exitFade }}>
+      <Backdrop />
+
+      <svg style={SVG_FRAME}>
+        <defs>
+          <linearGradient id="s9-card-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#13192B" stopOpacity="0.95" />
+            <stop offset="100%" stopColor="#0B0F1D" stopOpacity="0.95" />
+          </linearGradient>
+
+          <linearGradient id="s9-e-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor={PALETTE.support} stopOpacity="0.9" />
+            <stop offset="100%" stopColor={PALETTE.support} stopOpacity="0.1" />
+          </linearGradient>
+
+          <linearGradient id="s9-b-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor={PALETTE.supportB} stopOpacity="0.85" />
+            <stop offset="100%" stopColor={PALETTE.supportB} stopOpacity="0.1" />
+          </linearGradient>
+
+          <filter id="s9-glow-e" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+
+          <filter id="s9-glow-b" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+
+          <marker id="s9-arrow-e" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+            <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill={PALETTE.support} />
+          </marker>
+          <marker id="s9-arrow-b" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse">
+            <path d="M 0 1.5 L 10 5 L 0 8.5 z" fill={PALETTE.supportB} />
+          </marker>
+        </defs>
+
+        {/* ----------------- PHASE 1 & 2: EQUATION CARDS ----------------- */}
+        {collapseProgress < 1 && (
+          <g opacity={1 - collapseProgress}>
+            {S9_EQUATIONS.map((eq, idx) => {
+              const cardDelay = idx * 6;
+              const cardSpring = spring({ frame: frame - cardDelay, fps: 30, config: { damping: 16, stiffness: 90 } });
+              const cardYInitial = ZONES.stage.y + 40 + idx * 125;
+              const cardXInitial = ZONES.stage.x + 80;
+
+              // Collapse toward stage center
+              const targetX = ZONES.stage.cx - 240;
+              const targetY = ZONES.stage.cy - 45;
+              const curX = interpolate(collapseProgress, [0, 1], [cardXInitial, targetX], CLAMP);
+              const curY = interpolate(collapseProgress, [0, 1], [cardYInitial, targetY], CLAMP);
+              const curScale = interpolate(collapseProgress, [0, 1], [1, 0.15], CLAMP) * cardSpring;
+
+              const cardW = 680;
+              const cardH = 100;
+
+              // Glow on Maxwell terms connecting Faraday and Ampère
+              const isCoupled = idx >= 2;
+              const linkPulse = Math.sin(frame * 0.15 + idx) * 0.3 + 0.7;
+
+              return (
+                <g key={idx} transform={`translate(${curX}, ${curY}) scale(${curScale})`}>
+                  {/* Card background */}
+                  <rect
+                    x={0}
+                    y={0}
+                    width={cardW}
+                    height={cardH}
+                    rx={12}
+                    fill="url(#s9-card-grad)"
+                    stroke={isCoupled ? PALETTE.accent : PALETTE.support}
+                    strokeWidth={isCoupled ? 2 : 1.5}
+                    strokeOpacity={isCoupled ? linkPulse : 0.6}
+                    filter={isCoupled ? "url(#s9-glow-e)" : undefined}
+                  />
+
+                  {/* Left accent indicator bar */}
+                  <rect
+                    x={0}
+                    y={0}
+                    width={8}
+                    height={cardH}
+                    rx={4}
+                    fill={idx % 2 === 0 ? PALETTE.support : PALETTE.supportB}
+                  />
+
+                  {/* Text rendered via SVG */}
+                  <text
+                    x={30}
+                    y={38}
+                    fill={PALETTE.accent}
+                    fontSize={22}
+                    fontWeight={700}
+                    fontFamily="sans-serif"
+                    letterSpacing="0.05em"
+                  >
+                    {eq.title.toUpperCase()}
+                  </text>
+
+                  <text
+                    x={30}
+                    y={75}
+                    fill={PALETTE.text}
+                    fontSize={28}
+                    fontWeight={600}
+                    fontFamily="monospace"
+                  >
+                    {eq.eq}
+                  </text>
+
+                  <text
+                    x={cardW - 20}
+                    y={58}
+                    fill={PALETTE.text}
+                    opacity={0.65}
+                    fontSize={17}
+                    fontWeight={400}
+                    fontFamily="sans-serif"
+                    textAnchor="end"
+                  >
+                    {eq.desc}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Coupling visual links between Faraday (idx 2) & Ampère-Maxwell (idx 3) */}
+            {collapseProgress < 0.6 && (
+              <g opacity={Math.max(0, enterSpring - collapseProgress * 2)}>
+                <path
+                  d={`M ${ZONES.stage.x + 780} ${ZONES.stage.y + 340} Q ${ZONES.stage.x + 850} ${ZONES.stage.y + 395} ${ZONES.stage.x + 780} ${ZONES.stage.y + 450}`}
+                  fill="none"
+                  stroke={PALETTE.accent}
+                  strokeWidth={2.5}
+                  strokeDasharray="6 4"
+                  strokeDashoffset={-frame * 1.5}
+                />
+                <text
+                  x={ZONES.stage.x + 865}
+                  y={ZONES.stage.y + 400}
+                  fill={PALETTE.accent}
+                  fontSize={20}
+                  fontWeight={600}
+                  fontFamily="sans-serif"
+                >
+                  Coupled Induction → Wave Speed c = 1 / √(μ₀ε₀)
+                </text>
+              </g>
+            )}
+          </g>
+        )}
+
+        {/* ----------------- BURST FLASH ON MERGE ----------------- */}
+        {flashOpacity > 0.01 && (
+          <g transform={`translate(${ZONES.stage.cx}, ${ZONES.stage.cy}) scale(${flashScale})`} opacity={flashOpacity}>
+            <circle cx={0} cy={0} r={50} fill={PALETTE.accent} filter="url(#s9-glow-e)" />
+            <circle cx={0} cy={0} r={25} fill="#FFFFFF" />
+          </g>
+        )}
+
+        {/* ----------------- PHASE 3: 3D ELECTROMAGNETIC WAVE ----------------- */}
+        {waveUnfoldProgress > 0 && (
+          <g opacity={waveUnfoldProgress}>
+            {/* 3D Coordinate Reference Axes */}
+            {/* X Axis (Propagation axis, horizontal right) */}
+            <line
+              x1={waveStartX - 40}
+              y1={waveCenterY}
+              x2={waveStartX + waveLengthPx * waveUnfoldProgress + 40}
+              y2={waveCenterY}
+              stroke={PALETTE.text}
+              strokeWidth={2}
+              opacity={0.4}
+            />
+            {/* Y Axis (Electric Field, vertical) */}
+            <line
+              x1={waveStartX}
+              y1={waveCenterY - 170}
+              x2={waveStartX}
+              y2={waveCenterY + 170}
+              stroke={PALETTE.support}
+              strokeWidth={2}
+              opacity={0.5}
+            />
+            {/* Z Axis (Magnetic Field, isometric slant) */}
+            <line
+              x1={waveStartX - 100}
+              y1={waveCenterY - 60}
+              x2={waveStartX + 100}
+              y2={waveCenterY + 60}
+              stroke={PALETTE.supportB}
+              strokeWidth={2}
+              opacity={0.5}
+            />
+
+            {/* Axis Label Tags */}
+            <text x={waveStartX + 15} y={waveCenterY - 150} fill={PALETTE.support} fontSize={22} fontWeight={700}>
+              +E (Electric)
+            </text>
+            <text x={waveStartX + 90} y={waveCenterY + 75} fill={PALETTE.supportB} fontSize={22} fontWeight={700}>
+              +B (Magnetic)
+            </text>
+            <text x={waveStartX + waveLengthPx * waveUnfoldProgress + 10} y={waveCenterY - 15} fill={PALETTE.accent} fontSize={22} fontWeight={700}>
+              Propagation Direction (c) →
+            </text>
+
+            {/* Continuous EM Wave Sine Vectors */}
+            {wavePoints.map((pt, i) => {
+              if (pt.xOffset > waveLengthPx * waveUnfoldProgress) return null;
+
+              const xPos = waveStartX + pt.xOffset;
+              const sinVal = Math.sin(pt.k - phase);
+
+              // Electric Field vector (pure vertical along Y)
+              const ey = -sinVal * eAmpMax;
+              // Magnetic Field vector (skewed along isometric Z plane)
+              const bx = sinVal * bAmpMax;
+              const by = sinVal * bSkewY;
+
+              // Only draw vector arrows on periodic intervals to avoid clutter
+              const isMajor = i % 2 === 0;
+
+              return (
+                <g key={i}>
+                  {/* Electric Vector Arrow */}
+                  {isMajor && Math.abs(ey) > 8 && (
+                    <line
+                      x1={xPos}
+                      y1={waveCenterY}
+                      x2={xPos}
+                      y2={waveCenterY + ey}
+                      stroke={PALETTE.support}
+                      strokeWidth={1.8}
+                      opacity={0.7}
+                      markerEnd="url(#s9-arrow-e)"
+                    />
+                  )}
+
+                  {/* Magnetic Vector Arrow */}
+                  {isMajor && Math.abs(bx) > 6 && (
+                    <line
+                      x1={xPos}
+                      y1={waveCenterY}
+                      x2={xPos + bx}
+                      y2={waveCenterY + by}
+                      stroke={PALETTE.supportB}
+                      strokeWidth={1.8}
+                      opacity={0.7}
+                      markerEnd="url(#s9-arrow-b)"
+                    />
+                  )}
+                </g>
+              );
+            })}
+
+            {/* Smooth Sine Envelope Curves */}
+            {(() => {
+              const activePts = wavePoints.filter((pt) => pt.xOffset <= waveLengthPx * waveUnfoldProgress);
+              if (activePts.length < 2) return null;
+
+              // E-field curve path (Vertical Cyan)
+              const ePath = activePts.reduce((acc, pt, idx) => {
+                const x = waveStartX + pt.xOffset;
+                const y = waveCenterY - Math.sin(pt.k - phase) * eAmpMax;
+                return idx === 0 ? `M ${x} ${y}` : `${acc} L ${x} ${y}`;
+              }, "");
+
+              // B-field curve path (Slanted Magenta)
+              const bPath = activePts.reduce((acc, pt, idx) => {
+                const sinVal = Math.sin(pt.k - phase);
+                const x = waveStartX + pt.xOffset + sinVal * bAmpMax;
+                const y = waveCenterY + sinVal * bSkewY;
+                return idx === 0 ? `M ${x} ${y}` : `${acc} L ${x} ${y}`;
+              }, "");
+
+              return (
+                <g>
+                  <path
+                    d={ePath}
+                    fill="none"
+                    stroke={PALETTE.support}
+                    strokeWidth={4}
+                    filter="url(#s9-glow-e)"
+                  />
+                  <path
+                    d={bPath}
+                    fill="none"
+                    stroke={PALETTE.supportB}
+                    strokeWidth={4}
+                    filter="url(#s9-glow-b)"
+                  />
+                </g>
+              );
+            })()}
+
+            {/* Crest Pulse Beads */}
+            {wavePoints.map((pt, i) => {
+              if (i % 8 !== 0 || pt.xOffset > waveLengthPx * waveUnfoldProgress) return null;
+              const xPos = waveStartX + pt.xOffset;
+              const sinVal = Math.sin(pt.k - phase);
+              const ey = -sinVal * eAmpMax;
+              const bx = sinVal * bAmpMax;
+              const by = sinVal * bSkewY;
+
+              return (
+                <g key={`bead-${i}`}>
+                  <circle cx={xPos} cy={waveCenterY + ey} r={4} fill={PALETTE.support} />
+                  <circle cx={xPos + bx} cy={waveCenterY + by} r={4} fill={PALETTE.supportB} />
+                </g>
+              );
+            })}
+
+            {/* Wave property annotation badge */}
+            <g transform={`translate(${ZONES.stage.cx - 260}, ${ZONES.stage.y + 470})`}>
+              <rect
+                x={0}
+                y={0}
+                width={520}
+                height={60}
+                rx={10}
+                fill="#0B0F1D"
+                stroke={PALETTE.accent}
+                strokeWidth={1.5}
+                opacity={0.9 * waveUnfoldProgress}
+              />
+              <text
+                x={260}
+                y={37}
+                fill={PALETTE.accent}
+                fontSize={22}
+                fontWeight={700}
+                fontFamily="sans-serif"
+                textAnchor="middle"
+              >
+                Self-Sustaining Transverse EM Wave: E ⊥ B ⊥ v
+              </text>
+            </g>
+          </g>
+        )}
+      </svg>
+
+      {/* Header Title in standard ZONES.title */}
+      <div style={{ position: "absolute", left: ZONES.title.x, top: ZONES.title.y, width: ZONES.title.w }}>
+        <Label size={56}>Maxwell's Equations and Light</Label>
+      </div>
+
+      {/* Dynamic Narrative Caption in standard ZONES.caption */}
+      <div style={{ position: "absolute", left: ZONES.caption.x, top: ZONES.caption.y, width: ZONES.caption.w }}>
+        {frame < 210 && (
+          <Label size={30}>
+            James Clerk Maxwell unified electric and magnetic phenomena into four foundational equations.
+          </Label>
+        )}
+        {frame >= 210 && frame < 320 && (
+          <Label size={30}>
+            Faraday and Ampère-Maxwell equations mutually sustain one another through spacetime...
+          </Label>
+        )}
+        {frame >= 320 && (
+          <Label size={30}>
+            Perpendicular oscillating electric and magnetic fields radiate outward as light at speed c = 3 × 10⁸ m/s.
+          </Label>
+        )}
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+function Scene10() {
+  const frame = useCurrentFrame();
+
+  const entrance = spring({
+    frame,
+    fps: 30,
+    config: { damping: 14, mass: 0.9, stiffness: 80 },
+  });
+
+  const q1In = spring({ frame: frame - 15, fps: 30, config: { damping: 12, mass: 0.8 } });
+  const q2In = spring({ frame: frame - 35, fps: 30, config: { damping: 12, mass: 0.8 } });
+  const q3In = spring({ frame: frame - 55, fps: 30, config: { damping: 12, mass: 0.8 } });
+  const q4In = spring({ frame: frame - 75, fps: 30, config: { damping: 12, mass: 0.8 } });
+
+  const globalPulse = (Math.sin(frame / 12) + 1) / 2;
+  const emPhase = (frame * 0.12) % (Math.PI * 2);
+
+  // Quadrant bounds inside stage (1680x580)
+  // Stage is x: 120, y: 270, w: 1680, h: 580
+  const qW = 790;
+  const qH = 265;
+  const qGapX = 20;
+  const qGapY = 20;
+
+  const q1 = { x: 140, y: 280, cx: 140 + qW / 2, cy: 280 + qH / 2 };
+  const q2 = { x: 140 + qW + qGapX, y: 280, cx: 140 + qW + qGapX + qW / 2, cy: 280 + qH / 2 };
+  const q4 = { x: 140, y: 280 + qH + qGapY, cx: 140 + qW / 2, cy: 280 + qH + qGapY + qH / 2 };
+  const q3 = { x: 140 + qW + qGapX, y: 280 + qH + qGapY, cx: 140 + qW + qGapX + qW / 2, cy: 280 + qH + qGapY + qH / 2 };
+
+  // Q1: Electric Field radial spokes
+  const radialArrows = useMemo(() => {
+    return Array.from({ length: 8 }, (_, i) => {
+      const angle = (i * Math.PI * 2) / 8;
+      return { angle, cos: Math.cos(angle), sin: Math.sin(angle) };
+    });
+  }, []);
+
+  // Q4: EM Wave Path points
+  const wavePoints = useMemo(() => {
+    const ptsE = [];
+    const ptsB = [];
+    const len = 480;
+    const steps = 40;
+    for (let i = 0; i <= steps; i++) {
+      const x = (i / steps) * len - len / 2;
+      const k = (i / steps) * Math.PI * 4;
+      ptsE.push({ x, k });
+      ptsB.push({ x, k });
+    }
+    return { ptsE, ptsB };
+  }, []);
+
+  // Q2: Wire electrons
+  const wireElectrons = useMemo(() => {
+    return [0, 1, 2, 3, 4, 5].map((idx) => ({ id: idx, offset: (idx * 50) % 200 }));
+  }, []);
+
+  const badgeScale = interpolate(entrance, [0, 1], [0.4, 1], CLAMP);
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: PALETTE.base }}>
+      <Backdrop />
+
+      <svg style={SVG_FRAME}>
+        <defs>
+          <radialGradient id="s10-charge-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#FF4081" stopOpacity="0.9" />
+            <stop offset="70%" stopColor="#FF4081" stopOpacity="0.3" />
+            <stop offset="100%" stopColor="#FF4081" stopOpacity="0" />
+          </radialGradient>
+          <radialGradient id="s10-badge-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor={PALETTE.accent} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={PALETTE.accent} stopOpacity="0" />
+          </radialGradient>
+          <linearGradient id="s10-wire-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#B87333" stopOpacity="0.8" />
+            <stop offset="50%" stopColor="#FFA726" stopOpacity="0.9" />
+            <stop offset="100%" stopColor="#B87333" stopOpacity="0.8" />
+          </linearGradient>
+          <filter id="s10-glow">
+            <feGaussianBlur stdDeviation="4" result="coloredBlur" />
+            <feMerge>
+              <feMergeNode in="coloredBlur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {/* Quadrant 1: Coulomb Field (Top-Left) */}
+        <g opacity={q1In}>
+          <rect
+            x={q1.x}
+            y={q1.y}
+            width={qW}
+            height={qH}
+            rx={16}
+            fill="none"
+            stroke={PALETTE.accent}
+            strokeWidth={1.5 + globalPulse * 1.5}
+            strokeOpacity={0.4 + globalPulse * 0.4}
+          />
+          <text
+            x={q1.x + 24}
+            y={q1.y + 36}
+            fill={PALETTE.support}
+            fontSize={18}
+            fontFamily="sans-serif"
+            fontWeight="bold"
+            letterSpacing={1.2}
+          >
+            1. STATIC CHARGES & E-FIELDS
+          </text>
+
+          {/* Radial vectors */}
+          {radialArrows.map((r, i) => {
+            const pulseDist = ((frame * 1.5 + i * 15) % 80) + 30;
+            const x1 = q1.cx + r.cos * 24;
+            const y1 = q1.cy + r.sin * 24;
+            const x2 = q1.cx + r.cos * 105;
+            const y2 = q1.cy + r.sin * 105;
+            const dotX = q1.cx + r.cos * pulseDist;
+            const dotY = q1.cy + r.sin * pulseDist;
+
+            return (
+              <g key={`q1-arr-${i}`}>
+                <line
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke={PALETTE.support}
+                  strokeWidth={2}
+                  strokeOpacity={0.65}
+                />
+                <circle cx={dotX} cy={dotY} r={3.5} fill={PALETTE.support} />
+              </g>
+            );
+          })}
+
+          {/* Central positive charge */}
+          <circle cx={q1.cx} cy={q1.cy} r={36} fill="url(#s10-charge-glow)" />
+          <circle cx={q1.cx} cy={q1.cy} r={20} fill="#E91E63" stroke="#FFFFFF" strokeWidth={2} />
+          <text
+            x={q1.cx}
+            y={q1.cy + 7}
+            textAnchor="middle"
+            fill="#FFFFFF"
+            fontSize={22}
+            fontFamily="sans-serif"
+            fontWeight="bold"
+          >
+            +q
+          </text>
+        </g>
+
+        {/* Quadrant 2: Wire & Magnetic Loops (Top-Right) */}
+        <g opacity={q2In}>
+          <rect
+            x={q2.x}
+            y={q2.y}
+            width={qW}
+            height={qH}
+            rx={16}
+            fill="none"
+            stroke={PALETTE.accent}
+            strokeWidth={1.5 + globalPulse * 1.5}
+            strokeOpacity={0.4 + globalPulse * 0.4}
+          />
+          <text
+            x={q2.x + 24}
+            y={q2.y + 36}
+            fill={PALETTE.supportB}
+            fontSize={18}
+            fontFamily="sans-serif"
+            fontWeight="bold"
+            letterSpacing={1.2}
+          >
+            2. MOVING CHARGES & B-FIELDS
+          </text>
+
+          {/* Concentric B-field loops */}
+          {[55, 95].map((radius, rIdx) => {
+            const rot = (frame * (rIdx === 0 ? 2 : 1.4)) % 360;
+            return (
+              <g
+                key={`q2-loop-${rIdx}`}
+                transform={`translate(${q2.cx}, ${q2.cy}) rotate(${rot}) scale(1, 0.45)`}
+              >
+                <circle
+                  cx={0}
+                  cy={0}
+                  r={radius}
+                  fill="none"
+                  stroke="#00E676"
+                  strokeWidth={2}
+                  strokeDasharray="10 8"
+                />
+                <polygon
+                  points="0,-6 8,0 0,6"
+                  transform={`translate(${radius}, 0) rotate(90)`}
+                  fill="#00E676"
+                />
+                <polygon
+                  points="0,-6 8,0 0,6"
+                  transform={`translate(${-radius}, 0) rotate(-90)`}
+                  fill="#00E676"
+                />
+              </g>
+            );
+          })}
+
+          {/* Central wire cylinder */}
+          <rect
+            x={q2.cx - 8}
+            y={q2.cy - 95}
+            width={16}
+            height={190}
+            rx={6}
+            fill="url(#s10-wire-grad)"
+          />
+
+          {/* Moving electrons */}
+          {wireElectrons.map((e) => {
+            const yOffset = (frame * 1.6 + e.offset) % 170;
+            const curY = q2.cy + 85 - yOffset;
+            return (
+              <g key={`q2-e-${e.id}`}>
+                <circle cx={q2.cx} cy={curY} r={5} fill="#2979FF" stroke="#FFFFFF" strokeWidth={1} />
+                <line x1={q2.cx - 3} y1={curY} x2={q2.cx + 3} y2={curY} stroke="#FFFFFF" strokeWidth={1.5} />
+              </g>
+            );
+          })}
+        </g>
+
+        {/* Quadrant 3: Induction Generator (Bottom-Right) */}
+        <g opacity={q3In}>
+          <rect
+            x={q3.x}
+            y={q3.y}
+            width={qW}
+            height={qH}
+            rx={16}
+            fill="none"
+            stroke={PALETTE.accent}
+            strokeWidth={1.5 + globalPulse * 1.5}
+            strokeOpacity={0.4 + globalPulse * 0.4}
+          />
+          <text
+            x={q3.x + 24}
+            y={q3.y + 36}
+            fill={PALETTE.accent}
+            fontSize={18}
+            fontFamily="sans-serif"
+            fontWeight="bold"
+            letterSpacing={1.2}
+          >
+            3. INDUCTION & GENERATORS
+          </text>
+
+          {/* Magnetic poles */}
+          <rect x={q3.cx - 240} y={q3.cy - 45} width={60} height={90} rx={6} fill="#F44336" />
+          <text x={q3.cx - 210} y={q3.cy + 10} textAnchor="middle" fill="#FFFFFF" fontSize={26} fontWeight="bold">N</text>
+
+          <rect x={q3.cx + 180} y={q3.cy - 45} width={60} height={90} rx={6} fill="#2196F3" />
+          <text x={q3.cx + 210} y={q3.cy + 10} textAnchor="middle" fill="#FFFFFF" fontSize={26} fontWeight="bold">S</text>
+
+          {/* B-field lines between poles */}
+          {[-25, 0, 25].map((offsetY, idx) => (
+            <line
+              key={`b-line-${idx}`}
+              x1={q3.cx - 170}
+              y1={q3.cy + offsetY}
+              x2={q3.cx + 170}
+              y2={q3.cy + offsetY}
+              stroke="#00E676"
+              strokeWidth={1.5}
+              strokeOpacity={0.35}
+              strokeDasharray="6 4"
+            />
+          ))}
+
+          {/* Rotating induction loop */}
+          {(() => {
+            const loopAngle = (frame * 0.045) % (Math.PI * 2);
+            const scaleX = Math.cos(loopAngle);
+            const coilW = 140 * Math.abs(scaleX);
+            const bulbIntensity = Math.abs(Math.sin(loopAngle));
+            return (
+              <g>
+                <ellipse
+                  cx={q3.cx}
+                  cy={q3.cy}
+                  rx={Math.max(6, coilW / 2)}
+                  ry={55}
+                  fill="none"
+                  stroke={PALETTE.accent}
+                  strokeWidth={4}
+                  filter="url(#s10-glow)"
+                />
+                {/* Center axle */}
+                <line
+                  x1={q3.cx}
+                  y1={q3.cy - 75}
+                  x2={q3.cx}
+                  y2={q3.cy + 75}
+                  stroke="#9E9E9E"
+                  strokeWidth={2.5}
+                  strokeDasharray="4 4"
+                />
+                {/* Indicator bulb */}
+                <circle
+                  cx={q3.cx}
+                  cy={q3.cy + 85}
+                  r={10}
+                  fill={bulbIntensity > 0.4 ? PALETTE.accent : "#555555"}
+                  filter={bulbIntensity > 0.4 ? "url(#s10-glow)" : undefined}
+                />
+              </g>
+            );
+          })()}
+        </g>
+
+        {/* Quadrant 4: EM Wave (Bottom-Left) */}
+        <g opacity={q4In}>
+          <rect
+            x={q4.x}
+            y={q4.y}
+            width={qW}
+            height={qH}
+            rx={16}
+            fill="none"
+            stroke={PALETTE.accent}
+            strokeWidth={1.5 + globalPulse * 1.5}
+            strokeOpacity={0.4 + globalPulse * 0.4}
+          />
+          <text
+            x={q4.x + 24}
+            y={q4.y + 36}
+            fill={PALETTE.support}
+            fontSize={18}
+            fontFamily="sans-serif"
+            fontWeight="bold"
+            letterSpacing={1.2}
+          >
+            4. ELECTROMAGNETIC WAVES (LIGHT)
+          </text>
+
+          {/* Propagation axis */}
+          <line
+            x1={q4.cx - 250}
+            y1={q4.cy}
+            x2={q4.cx + 250}
+            y2={q4.cy}
+            stroke={PALETTE.text}
+            strokeWidth={1.5}
+            strokeOpacity={0.5}
+          />
+          <polygon
+            points={`${q4.cx + 255},${q4.cy} ${q4.cx + 243},${q4.cy - 5} ${q4.cx + 243},${q4.cy + 5}`}
+            fill={PALETTE.text}
+          />
+          <text
+            x={q4.cx + 265}
+            y={q4.cy + 5}
+            fill={PALETTE.text}
+            fontSize={14}
+            fontFamily="sans-serif"
+          >
+            c
+          </text>
+
+          {/* Transverse wave vectors */}
+          {wavePoints.ptsE.map((pt, i) => {
+            const eVal = Math.sin(pt.k - emPhase) * 42;
+            const bVal = Math.sin(pt.k - emPhase) * 32;
+            const xPos = q4.cx + pt.x;
+
+            return (
+              <g key={`em-seg-${i}`}>
+                {/* Electric field vector (Vertical Cyan) */}
+                <line
+                  x1={xPos}
+                  y1={q4.cy}
+                  x2={xPos}
+                  y2={q4.cy - eVal}
+                  stroke={PALETTE.support}
+                  strokeWidth={1.5}
+                  strokeOpacity={0.7}
+                />
+                {/* Magnetic field vector (Oblique Magenta) */}
+                <line
+                  x1={xPos}
+                  y1={q4.cy}
+                  x2={xPos - bVal * 0.6}
+                  y2={q4.cy + bVal * 0.4}
+                  stroke={PALETTE.supportB}
+                  strokeWidth={1.5}
+                  strokeOpacity={0.7}
+                />
+              </g>
+            );
+          })}
+        </g>
+
+        {/* Center Badge: Unified Electromagnetism */}
+        <g transform={`translate(${ZONES.stage.cx}, ${ZONES.stage.cy}) scale(${badgeScale})`}>
+          <circle cx={0} cy={0} r={105} fill="url(#s10-badge-glow)" />
+          <circle
+            cx={0}
+            cy={0}
+            r={68}
+            fill={PALETTE.base}
+            stroke={PALETTE.accent}
+            strokeWidth={3}
+            filter="url(#s10-glow)"
+          />
+          <circle
+            cx={0}
+            cy={0}
+            r={58}
+            fill="none"
+            stroke={PALETTE.support}
+            strokeWidth={1.5}
+            strokeDasharray="6 4"
+            transform={`rotate(${(frame * 1.5) % 360})`}
+          />
+          <text
+            x={0}
+            y={-6}
+            textAnchor="middle"
+            fill={PALETTE.text}
+            fontSize={16}
+            fontFamily="sans-serif"
+            fontWeight="bold"
+            letterSpacing={1.5}
+          >
+            MAXWELL
+          </text>
+          <text
+            x={0}
+            y={16}
+            textAnchor="middle"
+            fill={PALETTE.accent}
+            fontSize={13}
+            fontFamily="sans-serif"
+            fontWeight="bold"
+            letterSpacing={1.2}
+          >
+            UNIFIED
+          </text>
+        </g>
+      </svg>
+
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.title.x,
+          top: ZONES.title.y,
+          width: ZONES.title.w,
+          textAlign: "center",
+        }}
+      >
+        <Label size={56}>Summary: The Electromagnetic Universe</Label>
+      </div>
+
+      <div
+        style={{
+          position: "absolute",
+          left: ZONES.caption.x,
+          top: ZONES.caption.y,
+          width: ZONES.caption.w,
+          textAlign: "center",
+        }}
+      >
+        <Label size={30}>
+          From static electric charges to rotating generators and self-propagating light waves.
+        </Label>
+      </div>
+    </AbsoluteFill>
+  );
+}
+
+export const Lesson98ae023e = () => {
+  return (
+    <Series>
+      <Series.Sequence durationInFrames={598}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/1c2cc7cc-c085-422a-a04a-63a8fdd017db.wav"} />
+        <Scene1 />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={615}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/31b070e3-25c0-4009-9ba4-a2c2e67d2bbe.wav"} />
+        <Scene2 />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={543}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/a57f9d4a-80cc-4014-ab08-4766d91821a4.wav"} />
+        <Scene3 />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={566}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/401e10cf-5b82-41f2-986b-44cd7c25dc37.wav"} />
+        <Scene4 />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={627}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/4398ab14-387b-4ee8-993f-66ae0a3240ef.wav"} />
+        <Scene5 />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={634}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/aeff2f24-b6c8-49b6-ad86-83e576e6ba5b.wav"} />
+        <Scene6 />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={652}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/f075c067-88f5-40c9-8646-154ec43bd06c.wav"} />
+        <Scene7 />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={588}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/728c2725-5650-4178-a74c-d5bca94490b3.wav"} />
+        <Scene8 />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={648}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/8ba748e7-1e42-47dc-94ac-069dcb64d2dc.wav"} />
+        <Scene9 />
+      </Series.Sequence>
+      <Series.Sequence durationInFrames={627}>
+        <Audio src={"https://level-up-2-dka7.onrender.com/audio/614d8dee-a411-4140-ad58-fd5b5a49f940.wav"} />
+        <Scene10 />
+      </Series.Sequence>
+    </Series>
+  );
+};

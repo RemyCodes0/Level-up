@@ -121,6 +121,21 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
+    /* Hardcoded, not bg-background: the .dark class this variable depends
+       on is never toggled anywhere in the app (no ThemeProvider/next-themes
+       wiring despite the dependency being installed), so --background
+       always resolved to its light (near-white) default. That's the real
+       cause of the white flash on every page load/transition — nearly
+       every page (Landing, auth, Gallery, Collab*, AiTutor) now renders
+       its own #0A0B10 root div regardless, so body itself showing light
+       underneath it for even one frame (initial paint before React mounts,
+       or the gap during a route change) is what actually flashes. A few
+       pages (CreditsDashboard, Profile, Dashboard, PricePage) haven't been
+       moved to this dark theme yet — on those, this trades a white flash
+       for a brief dark one until their own light container paints, which
+       is strictly less jarring and consistent with where the rest of the
+       app is headed, but worth revisiting once/if those get redesigned too. */
+    background-color: #0A0B10;
   }
 }

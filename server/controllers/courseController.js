@@ -1145,15 +1145,43 @@ async function retrySceneHandler(req, res) {
       });
     }
 
-    const patchedCode = targetsHeader
-      ? await patchHeaderFromRuntimeError(
-          lesson, componentName, lesson.code, errorMessage,
-          { userId: req.user._id, courseId }
-        )
-      : await patchSceneFromRuntimeError(
-          lesson, componentName, lesson.code, sceneIndex, errorMessage,
-          { userId: req.user._id, courseId }
-        );
+    // From here on, WHERE the bug is has already been resolved (targetsHeader
+    // / sceneIndex above) — a failure past this point means the targeted FIX
+    // itself didn't come together (the patch LLM call errored, or its
+    // <<<FIND>>>/<<<REPLACE>>> output didn't apply/validate after
+    // patchSceneFromRuntimeError's own 2 internal attempts), NOT that the
+    // broken part couldn't be found. These are two genuinely different
+    // failure modes and must not collapse into the same signal: isolation
+    // failure (above) is the real "we have no idea which scene broke" case
+    // that justifies falling all the way back to a full, far more expensive
+    // lesson regenerate. A failed patch attempt on a CORRECTLY isolated
+    // target doesn't — the frontend's own retry button already exists for
+    // exactly this (its comment: "retrying the same targeted patch is the
+    // right move, not silently escalating to a full regenerate the user
+    // didn't ask for") — so this catch intentionally returns
+    // fallbackToFullRetry: false, unlike the generic 500 below and the
+    // isolation-failure 422 above.
+    let patchedCode;
+    try {
+      patchedCode = targetsHeader
+        ? await patchHeaderFromRuntimeError(
+            lesson, componentName, lesson.code, errorMessage,
+            { userId: req.user._id, courseId }
+          )
+        : await patchSceneFromRuntimeError(
+            lesson, componentName, lesson.code, sceneIndex, errorMessage,
+            { userId: req.user._id, courseId }
+          );
+    } catch (patchErr) {
+      console.error(
+        `retrySceneHandler: targeted patch failed (${targetsHeader ? "header" : `scene ${sceneIndex + 1}`}):`,
+        patchErr.message
+      );
+      return res.status(502).json({
+        error: "Couldn't generate a fix for the broken part — try again.",
+        fallbackToFullRetry: false,
+      });
+    }
 
     await Course.findByIdAndUpdate(courseId, {
       $set: { [`lessons.${idx}.code`]: patchedCode },
@@ -1169,6 +1197,9 @@ async function retrySceneHandler(req, res) {
         : { ok: true, target: "scene", sceneIndex, sceneNumber: sceneIndex + 1, code: patchedCode }
     );
   } catch (err) {
+    // Anything that lands here happened BEFORE a target was isolated (course
+    // lookup, param parsing, the locate* calls above) — genuinely unknown
+    // cause, so fallbackToFullRetry: true is still the right call here.
     console.error("retrySceneHandler error:", err);
     res.status(500).json({ error: "Failed to patch lesson", fallbackToFullRetry: true });
   }
