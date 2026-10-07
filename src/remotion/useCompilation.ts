@@ -150,6 +150,115 @@ const CallableSeries: any = makeCallable(RemotionNS.Series);
 // takes priority here.
 CallableSeries.Sequence = RemotionNS.Series.Sequence;
 
+// ── Per-scene crash containment ───────────────────────────────────────────────
+// The single biggest cause of the "This animation hit an error" red screen: ONE
+// scene throwing during render takes down the WHOLE composition, because the
+// only error boundary above it is Remotion's own Player-level one. A lesson is
+// ~10 independent scenes stitched into a <Series>; one bad arithmetic edge in
+// scene 7 should cost scene 7, not the other nine and the narration with them.
+//
+// So every top-level SceneN component is wrapped in its own boundary at compile
+// time (see the rename+alias pass in useCompilation below). A scene that throws
+// renders this calm fallback instead, the Series timeline keeps advancing, audio
+// keeps playing, and the viewer never sees the red screen. Like the
+// interpolate/spring shields above, this applies to EVERY lesson already
+// generated — no regeneration needed.
+//
+// Deliberately NOT reset on frame change: Remotion re-renders constantly, and a
+// boundary that retries every frame would spin on a deterministic error (and
+// flood the console). Once a scene has thrown, it shows the fallback for the
+// rest of that sequence's mount, which is exactly one scene's worth of time.
+const sceneCrashLogged = new Set<string>();
+
+// Containment alone would trade a LOUD failure for a SILENT one: with the red
+// screen gone, nothing would ever tell the viewer (or the retry machinery) that
+// a scene is broken, so it would quietly show the fallback forever and never get
+// repaired. So a contained crash is still REPORTED here, and DynamicPlayer
+// subscribes to surface a quiet, non-blocking "fix this scene" affordance that
+// feeds the existing crashInfo → retryScene → patchSceneFromRuntimeError path.
+export interface ContainedSceneCrash {
+  sceneName: string;
+  errorMessage: string;
+}
+type SceneCrashListener = (crash: ContainedSceneCrash) => void;
+const sceneCrashListeners = new Set<SceneCrashListener>();
+
+export function onContainedSceneCrash(listener: SceneCrashListener): () => void {
+  sceneCrashListeners.add(listener);
+  return () => sceneCrashListeners.delete(listener);
+}
+
+class SceneErrorBoundary extends React.Component<
+  { sceneName: string; compileId: string; children?: React.ReactNode },
+  { crashed: boolean }
+> {
+  constructor(props: { sceneName: string; compileId: string; children?: React.ReactNode }) {
+    super(props);
+    this.state = { crashed: false };
+  }
+  static getDerivedStateFromError() {
+    return { crashed: true };
+  }
+  componentDidCatch(error: Error) {
+    // Once per scene per COMPILATION — Remotion's repeated renders would
+    // otherwise log (and notify) for the same crash hundreds of times. Keyed by
+    // compileId, not scene name alone: every lesson has a "Scene1", so a
+    // session-wide key would silently suppress the report for every lesson
+    // after the first one that crashed in the same slot.
+    const key = `${this.props.compileId}:${this.props.sceneName}`;
+    if (!sceneCrashLogged.has(key)) {
+      sceneCrashLogged.add(key);
+      console.error(
+        `[scene-shield] ${this.props.sceneName} crashed at render time and was contained — the rest of the lesson keeps playing. Underlying error:`,
+        error
+      );
+      const crash: ContainedSceneCrash = {
+        sceneName: this.props.sceneName,
+        errorMessage: error?.message ?? "Unknown render error",
+      };
+      sceneCrashListeners.forEach((l) => {
+        try { l(crash); } catch { /* a bad listener must not re-break the scene */ }
+      });
+    }
+  }
+  render() {
+    if (!this.state.crashed) return this.props.children;
+    return React.createElement(
+      RemotionNS.AbsoluteFill,
+      {
+        style: {
+          backgroundColor: "#0A0B10",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        },
+      },
+      React.createElement(
+        "div",
+        {
+          style: {
+            color: "rgba(255,255,255,0.28)",
+            fontSize: 26,
+            fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
+            letterSpacing: "0.01em",
+          },
+        },
+        "This part of the lesson couldn't be drawn — the narration continues."
+      )
+    );
+  }
+}
+
+function guardScene(Component: any, sceneName: string, compileId: string): React.FC<any> {
+  const Guarded: React.FC<any> = (props) =>
+    React.createElement(
+      SceneErrorBoundary,
+      { sceneName, compileId },
+      React.createElement(Component, props)
+    );
+  return Guarded;
+}
+
 // ── Sandbox scope ─────────────────────────────────────────────────────────────
 // Expose the ENTIRE Remotion module so any current or future Remotion export
 // (interpolateColors, Easing, Loop, random, etc.) is automatically available
@@ -176,6 +285,7 @@ SCOPE.AbsoluteFill = makeCallable(RemotionNS.AbsoluteFill); // survives direct-c
 SCOPE.Sequence = makeCallable(RemotionNS.Sequence);
 SCOPE.Loop = makeCallable(RemotionNS.Loop);
 SCOPE.Series = CallableSeries;
+SCOPE.__guardScene = guardScene;        // per-scene crash containment (see above)
 
 const SCOPE_KEYS = Object.keys(SCOPE);
 
@@ -248,11 +358,47 @@ export function useCompilation(
       }
 
       // Step 3 — strip export keywords so everything is plain consts/functions.
-      const codeWithoutExports = codeWithoutImports
+      const codeWithoutExportKeywords = codeWithoutImports
         .replace(/export\s+default\s+function\s+/g, "function ")
         .replace(/export\s+default\s+/g, "const __default__ = ")
         .replace(/export\s+const\s+/g, "const ")
         .replace(/export\s+function\s+/g, "function ");
+
+      // Step 3b — wrap every top-level SceneN in its own error boundary, so one
+      // scene throwing can't take the whole lesson down with it (see
+      // SceneErrorBoundary / guardScene above for why this matters).
+      //
+      // Each declaration is renamed `SceneN` → `__raw_SceneN`, then a guarded
+      // alias `const SceneN = __guardScene(__raw_SceneN, "SceneN")` is appended.
+      // The stitched `<SceneN />` call sites in the Lesson component are left
+      // untouched, so they now resolve to the guarded alias instead. Safe
+      // because: the rename regex is anchored to column 0 (declaration lines
+      // only, never JSX call sites, never nested helpers) and \b-terminated, so
+      // `Scene1` can't match `Scene10`; and the aliases are appended at module
+      // level BEFORE the factory's `return <Lesson>`, while `<SceneN />` is only
+      // dereferenced later, at render time, when every alias is initialized.
+      const sceneNames = [
+        ...codeWithoutExportKeywords.matchAll(/^(?:function|const)\s+(Scene\d+)\b/gm),
+      ].map((m) => m[1]);
+
+      let codeWithoutExports = codeWithoutExportKeywords;
+      for (const name of sceneNames) {
+        codeWithoutExports = codeWithoutExports.replace(
+          new RegExp(`^(function|const)(\\s+)${name}\\b`, "m"),
+          `$1$2__raw_${name}`
+        );
+      }
+      if (sceneNames.length > 0) {
+        // Identifies THIS compilation, so the boundary's "report each crash
+        // once" dedup can't leak across lessons (every lesson has a Scene1).
+        const compileId = `c${Math.random().toString(36).slice(2, 10)}`;
+        codeWithoutExports +=
+          "\n" +
+          sceneNames
+            .map((n) => `const ${n} = __guardScene(__raw_${n}, "${n}", "${compileId}");`)
+            .join("\n") +
+          "\n";
+      }
 
       // Step 4 — build the scope destructure prelude, EXCLUDING any name the
       // code already declares at the top level. Without this exclusion, a

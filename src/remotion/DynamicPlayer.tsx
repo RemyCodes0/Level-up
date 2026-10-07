@@ -5,9 +5,9 @@ import type { ErrorInfo, ReactNode } from "react";
 import {
   Loader2, RefreshCw, Play, Pause,
   Maximize2, Minimize2, RotateCcw, SkipBack, SkipForward,
-  Repeat,
+  Repeat, X,
 } from "lucide-react";
-import { useCompilation } from "./useCompilation";
+import { useCompilation, onContainedSceneCrash } from "./useCompilation";
 import { analytics } from "../lib/analytics";
 
 // What actually broke, passed to onRetry so the caller can ask the backend
@@ -686,6 +686,18 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   // forever, until crashInfo eventually changes for an unrelated reason.
   const skipIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // A scene whose crash was CONTAINED by useCompilation's per-scene error
+  // boundary never reaches the Player's "error" event, so none of the state
+  // above fires and the red error screen (correctly) never appears — the other
+  // nine scenes and the narration keep playing. But a contained crash is still
+  // a broken lesson that should get fixed, so the boundary reports it here and
+  // we show a quiet, dismissible pill offering the SAME targeted fix the red
+  // screen used to, rather than letting it fail silently forever.
+  const [containedCrash, setContainedCrash] = useState<{ sceneName: string; errorMessage: string } | null>(null);
+  useEffect(() => onContainedSceneCrash(setContainedCrash), []);
+  // New lesson code (including a successful fix) clears it.
+  useEffect(() => { setContainedCrash(null); }, [code]);
+
   // A successful retry replaces `code` with freshly generated code — clear the
   // crash state so the new lesson gets a clean mount instead of being stuck
   // behind the previous code's error screen.
@@ -811,6 +823,47 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
     };
     player.addEventListener("error", onPlayerError);
     return () => player.removeEventListener("error", onPlayerError);
+  }, [Component]);
+
+  // ── Playback-stall telemetry ────────────────────────────────────────────────
+  // Tells apart the TWO completely different causes of "the video feels like
+  // it's ticking / running at low fps", which need opposite fixes:
+  //
+  //   1. BUFFERING STALLS — Remotion emits "waiting" when it pauses the WHOLE
+  //      composition because an <Audio> isn't buffered yet (BufferedAudio sets
+  //      pauseWhenBuffering, see useCompilation.ts), then "resume" when it
+  //      continues. Each stall freezes picture AND sound for a moment, which
+  //      reads exactly like judder even though no frames were dropped. This is
+  //      OURS to fix: audio delivery/caching, not the generated code.
+  //   2. SLOW FRAMES — the scene is simply too expensive to render in 33ms, so
+  //      Remotion drops/paces frames. No "waiting" event fires at all. That's
+  //      generated-code cost (element count, blur/drop-shadow glows).
+  //
+  // If these lines appear while it stutters, it's (1). If it stutters in
+  // silence, it's (2). Console-only, same convention as the error details above.
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+    let stalls = 0;
+    let totalMs = 0;
+    let startedAt = 0;
+    const onWaiting = () => { startedAt = performance.now(); };
+    const onResume = () => {
+      if (!startedAt) return;
+      const ms = performance.now() - startedAt;
+      startedAt = 0;
+      stalls += 1;
+      totalMs += ms;
+      console.warn(
+        `[playback-stall] #${stalls} lasted ${Math.round(ms)}ms (${Math.round(totalMs)}ms stalled so far) — the composition paused waiting on audio to buffer, which reads as judder. Frame ${player.getCurrentFrame?.() ?? "?"}.`
+      );
+    };
+    player.addEventListener("waiting", onWaiting);
+    player.addEventListener("resume", onResume);
+    return () => {
+      player.removeEventListener("waiting", onWaiting);
+      player.removeEventListener("resume", onResume);
+    };
   }, [Component]);
 
   // Error DETAILS are deliberately console-only, never shown in the UI —
@@ -993,6 +1046,41 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
       />
+
+      {/* Contained-scene-crash pill — the quiet replacement for the old red
+          screen. Non-blocking by design: playback continues behind it, and the
+          fix it offers is the same targeted scene patch the red screen's button
+          used. crashFrame is resolved from the scene's OWN start frame when we
+          have boundary data (more precise than the frame the player happens to
+          be on), falling back to the live frame otherwise. */}
+      {containedCrash && onRetry && !retrying && (
+        <div className="absolute left-1/2 top-3 z-20 -translate-x-1/2 px-3">
+          <div className="flex items-center gap-2.5 rounded-full bg-[#1A1119]/90 px-3 py-1.5 text-xs ring-1 ring-[#FF5C6C]/30 backdrop-blur">
+            <span className="text-[#FFB3BA]">One scene didn’t render</span>
+            <button
+              onClick={() => {
+                const sceneNumber = Number(containedCrash.sceneName.replace(/^Scene/, ""));
+                const idx = Number.isFinite(sceneNumber) ? sceneNumber - 1 : -1;
+                const startFrame = idx >= 0 && scenes && scenes[idx] ? scenes[idx].startFrame : null;
+                onRetry({
+                  crashFrame: startFrame ?? playerRef.current?.getCurrentFrame?.() ?? null,
+                  errorMessage: containedCrash.errorMessage,
+                });
+              }}
+              className="font-medium text-white underline-offset-2 hover:underline"
+            >
+              Fix it
+            </button>
+            <button
+              onClick={() => setContainedCrash(null)}
+              className="text-[#8A8FA3] transition-colors hover:text-white"
+              aria-label="Dismiss"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      )}
       {overlay}
     </div>
   );

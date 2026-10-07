@@ -103,7 +103,19 @@ const audioDir = process.env.NODE_ENV === "production"
   ? "/data/audio"
   : path.resolve(__dirname, "../remotion-render/public/audio");
 
-app.use("/audio", express.static(audioDir));
+// maxAge/immutable (not bare express.static): without them Cache-Control is
+// `public, max-age=0`, so the browser REVALIDATES every narration file on every
+// request — a conditional-GET round-trip that lands right at each scene
+// boundary, which is exactly when Remotion pauses the whole composition waiting
+// on a buffering <Audio> (BufferedAudio sets pauseWhenBuffering, see
+// useCompilation.ts). Those pauses freeze picture and sound together and read
+// as judder/low-fps even though no frame was dropped. Safe to cache forever
+// here because these names are never reused: ttsService.js writes every clip as
+// a fresh `${uuidv4()}.wav`, so regenerating a lesson produces NEW filenames
+// rather than new bytes under an old one. Also makes DynamicPlayer's existing
+// preload="auto" prefetch actually pay off, since the prefetched bytes can now
+// be served from cache instead of re-requested.
+app.use("/audio", express.static(audioDir, { maxAge: "365d", immutable: true }));
 
 // ──────────────────────────────────────────────────────────────────────────
 // EXPLICIT 404 for missing audio files.

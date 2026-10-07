@@ -2211,8 +2211,17 @@ export default function AILearningPage() {
     pollCancelRef.current = pollCourse(activeHistoryId!, applyCourseUpdate);
   };
 
-  // With crashInfo: try the targeted scene patch first; fall back to a full
-  // regenerate only when the backend can't isolate the scene.
+  // With crashInfo: try the targeted scene patch first, then fall back to a
+  // full regenerate. The fallback is UNCONDITIONAL on purpose — this used to
+  // only fall back when the backend set fallbackToFullRetry (i.e. it couldn't
+  // isolate which scene broke) and re-threw everything else, which turned an
+  // ordinary "the patch didn't come together" into a dead end: the user got
+  // "Failed to regenerate lesson. Please try again." and nothing happened,
+  // where previously they'd at least have gotten a (slower) working lesson.
+  // Clicking the button must always end in either a fixed lesson or a
+  // regenerating one — never a bare error with no work started. The alert
+  // below now only fires if the full regenerate ALSO fails, which means the
+  // request itself didn't land (offline, auth, server down).
   const handleRetryLesson = async (lessonIndex: number, crashInfo?: LessonCrashInfo) => {
     if (!activeHistoryId || retryingLesson !== null) return;
     analytics.lessonRegenerated({ lesson: lessonIndex + 1 });
@@ -2225,17 +2234,21 @@ export default function AILearningPage() {
           setLessons((prev) => prev.map((l, i) => i === lessonIndex ? { ...l, code: result.code } : l));
           return;
         } catch (err) {
+          // Either way we continue to the full regenerate below; the only
+          // difference is what we log, so a genuinely-unexpected failure is
+          // still distinguishable from the expected "couldn't isolate it".
           if (err instanceof RetrySceneError && err.fallbackToFullRetry) {
-            console.warn("Scene-only fix unavailable, falling back to full lesson regenerate:", err.message);
+            console.warn("Backend couldn't isolate the broken scene — falling back to a full lesson regenerate:", err.message);
           } else {
-            throw err;
+            console.warn("Targeted scene fix failed — falling back to a full lesson regenerate:", err);
           }
+          setRetryingLabel("Rebuilding this lesson…");
         }
       }
       await handleFullRetryLesson(lessonIndex);
     } catch (err) {
       console.error("Failed to retry lesson:", err);
-      alert("Failed to regenerate lesson. Please try again.");
+      alert("Couldn't start fixing this lesson — check your connection and try again.");
     } finally {
       setRetryingLesson(null);
     }

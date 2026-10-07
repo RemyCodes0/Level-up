@@ -16,6 +16,8 @@ const {
   locateSceneIndexAtLineInFullCode,
   extractUndefinedIdentifier,
   locateIdentifierScope,
+  isHeaderDeclaredName,
+  sceneDeclaresName,
 } = require("../services/claudeService");
 const { generateScenePlan } = require("../services/sceneService");
 const { generateAllSceneAudioPipelined } = require("../services/ttsService");
@@ -1136,6 +1138,46 @@ async function retrySceneHandler(req, res) {
         if (located?.type === "header") targetsHeader = true;
         else if (located?.type === "scene") sceneIndex = located.index;
       }
+
+      // 2b. A crash frame says WHEN it broke, not WHERE the faulty code is.
+      // Every scene calls into the shared header (Backdrop, Label, Panel, Glow,
+      // Arrow, AngleArc, PALETTE, shared data consts) — so a bug IN THE HEADER
+      // throws while whichever scene happened to be on screen is playing, and
+      // tier 2 above confidently (and wrongly) blames that scene. Confirmed
+      // live: a lesson crashed during Scene2, tier 2 routed to Scene2, and the
+      // patch model — which IS shown the header — correctly went after a broken
+      // `useMemo` in the header's Backdrop at line 54, so every one of its
+      // FIND snippets was absent from Scene2's code and all 4 attempts failed
+      // on an impossible task.
+      //
+      // locateErrorIsInHeader (tier 1) already encodes this idea but keys off a
+      // line number, which a browser runtime error never carries — so for the
+      // runtime-crash path it can never fire. This re-checks the same question
+      // using the one positional-free signal a runtime error does carry: the
+      // identifier it names. If that name is owned by the header and isn't
+      // declared in the blamed scene at all, the header is the real culprit.
+      if (sceneIndex !== null) {
+        const identifier = extractUndefinedIdentifier(errorMessage);
+        // Two ways the named identifier can point at the header. The first
+        // (locateIdentifierScope) only resolves names that appear in exactly one
+        // place lesson-wide — which excludes the header helpers that matter most
+        // here, since Backdrop/Label/Glow/Arrow are called from every scene by
+        // design. isHeaderDeclaredName covers precisely that gap: the header
+        // DECLARES the name, and this scene only calls it, so the broken code is
+        // the header's.
+        const located = identifier ? locateIdentifierScope(lesson.code, identifier) : null;
+        const headerOwnsIt =
+          located?.type === "header" ||
+          (isHeaderDeclaredName(lesson.code, identifier) &&
+            !sceneDeclaresName(lesson.code, sceneIndex, identifier));
+        if (headerOwnsIt) {
+          console.log(
+            `[${courseId}] retry-scene: crash frame blamed scene ${sceneIndex + 1}, but "${identifier}" is declared in the shared header — patching the header instead.`
+          );
+          targetsHeader = true;
+          sceneIndex = null;
+        }
+      }
     }
 
     if (!targetsHeader && sceneIndex === null) {
@@ -1177,10 +1219,42 @@ async function retrySceneHandler(req, res) {
         `retrySceneHandler: targeted patch failed (${targetsHeader ? "header" : `scene ${sceneIndex + 1}`}):`,
         patchErr.message
       );
-      return res.status(502).json({
-        error: "Couldn't generate a fix for the broken part — try again.",
-        fallbackToFullRetry: false,
-      });
+
+      // Second chance, and a genuinely informative one: a SCENE patch whose
+      // every attempt failed because the FIND text wasn't in the scene is
+      // strong evidence the faulty code isn't in that scene at all — the model
+      // kept trying to edit something it could see (the header, which the
+      // prompt shows it) but wasn't allowed to touch. Escalate to a header
+      // patch rather than spending a full lesson regenerate. Only worth trying
+      // when we targeted a scene and the failure looks like that specific
+      // mismatch; anything else (provider error, validation failure on a patch
+      // that DID apply) wouldn't be helped by re-aiming at the header.
+      const looksMisrouted =
+        !targetsHeader && /FIND text was not found verbatim|did not contain any/i.test(patchErr.message || "");
+      if (looksMisrouted) {
+        console.log(
+          `[${courseId}] retry-scene: scene ${sceneIndex + 1} patch never matched its own code — re-aiming at the shared header.`
+        );
+        try {
+          patchedCode = await patchHeaderFromRuntimeError(
+            lesson, componentName, lesson.code, errorMessage,
+            { userId: req.user._id, courseId }
+          );
+          targetsHeader = true;
+          sceneIndex = null;
+        } catch (headerErr) {
+          console.error(`retrySceneHandler: header re-aim also failed:`, headerErr.message);
+          return res.status(502).json({
+            error: "Couldn't generate a fix for the broken part — try again.",
+            fallbackToFullRetry: false,
+          });
+        }
+      } else {
+        return res.status(502).json({
+          error: "Couldn't generate a fix for the broken part — try again.",
+          fallbackToFullRetry: false,
+        });
+      }
     }
 
     await Course.findByIdAndUpdate(courseId, {

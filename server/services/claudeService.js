@@ -247,7 +247,7 @@ const CODE_PROVIDERS = {
     // monotonic here either: "low" measured WORSE than "minimal" (3374
     // reasoning tokens) — another reason not to reach for a tier name
     // assuming it's conservative.
-    extraParams: { reasoning: { effort: "medium" },
+    extraParams: { reasoning: { effort: "high" },
      preferred_min_throughput: {
         p99: 400
       }
@@ -3507,23 +3507,41 @@ async function patchSceneInChunk(lesson, targetSceneName, targetScene, brokenChu
 function locateSceneByIndexInFullCode(fullCode, sceneIndex) {
   const targetName = sceneComponentName(sceneIndex);
   const lines = fullCode.split("\n");
-  const markerRe = /^(?:function|const)\s+(Scene\d+)\b/;
-  const markers = [];
+  // Scene STARTS are only `SceneN` declarations...
+  const sceneRe = /^(?:function|const)\s+(Scene\d+)\b/;
+  // ...but a scene's span ENDS at the next top-level declaration of ANY kind.
+  // BUG FIXED (2026-10-06, reproduced live): this used to bound each span by
+  // the next SceneN marker only, so the S{N}_-prefixed top-level consts that
+  // LESSON_CHUNK_RULES explicitly permits between scenes ("Data shared between
+  // two of YOUR OWN scenes may be a top-level const... S3_STEP_LABELS,
+  // S3_NODES") got swallowed into the PRECEDING scene's span. Two real
+  // consequences, both observed: (1) validateSceneFragment rejected the patch
+  // outright ("must contain EXACTLY one top-level declaration named Scene3
+  // (found: Scene3, S4_COLORS)"), burning both attempts; and far worse (2)
+  // when a retry did return just the scene function, spliceScene replaced the
+  // whole span with it and DELETED that shared const — breaking whichever
+  // later scene referenced it, so "fixing" one crash silently created the
+  // next one. Anchored to column 0 (same convention as
+  // collectTopLevelDeclarations in useCompilation.ts) so nested helpers inside
+  // a scene body never count as a boundary.
+  const topLevelRe = /^(?:export\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/;
+  const sceneMarkers = [];
+  const boundaries = [];
   lines.forEach((line, i) => {
-    const m = line.match(markerRe);
-    if (m) markers.push({ name: m[1], startLine: i + 1 });
+    const s = line.match(sceneRe);
+    if (s) sceneMarkers.push({ name: s[1], startLine: i + 1 });
+    const t = line.match(topLevelRe);
+    if (t) boundaries.push({ name: t[1], startLine: i + 1 });
   });
-  // Bounds the LAST scene's span — without this it would swallow the
-  // trailing `export const <Lesson> = () => <Series>...` stitched on below
-  // every scene (see stitchLessonCode), since that's the only thing after it.
-  const exportLine = lines.findIndex((l) => l.startsWith("export const"));
-  if (exportLine !== -1) markers.push({ name: "__END__", startLine: exportLine + 1 });
-  markers.sort((a, b) => a.startLine - b.startLine);
 
-  const idx = markers.findIndex((mk) => mk.name === targetName);
-  if (idx === -1) return null;
-  const endLine = idx + 1 < markers.length ? markers[idx + 1].startLine - 1 : lines.length;
-  return { name: targetName, startLine: markers[idx].startLine, endLine };
+  const marker = sceneMarkers.find((mk) => mk.name === targetName);
+  if (!marker) return null;
+  // First top-level declaration strictly after this scene's own opening line
+  // — a SceneN, an S{N}_ const, or the trailing `export const <Lesson> = ...`
+  // the stitcher appends (see stitchLessonCode), whichever comes first.
+  const next = boundaries.find((b) => b.startLine > marker.startLine);
+  const endLine = next ? next.startLine - 1 : lines.length;
+  return { name: targetName, startLine: marker.startLine, endLine };
 }
 
 // Every scene name actually present in a lesson's saved code, in appearance
@@ -3645,6 +3663,43 @@ function locateIdentifierScope(fullCode, identifier) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+// Is `identifier` something the shared HEADER declares (as opposed to a name
+// local to a scene)? Complements locateIdentifierScope above, which can only
+// answer when a name appears in exactly ONE place across the whole lesson — too
+// strict for the names that matter most here. The header's own helpers
+// (Backdrop, Label, Panel, Glow, Arrow, AngleArc, PALETTE, ZONES, shared data
+// consts) are by design called from EVERY scene, so locateIdentifierScope
+// always finds them in many places and gives up — yet "Label is not a function"
+// during scene 4 almost certainly means the header's Label is broken, not
+// scene 4. This answers the narrower, more useful question for the
+// runtime-crash routing in retrySceneHandler: the name is owned by the header,
+// so a crash naming it points at header code regardless of which scene was
+// on screen when it threw.
+function isHeaderDeclaredName(fullCode, identifier) {
+  if (!identifier) return false;
+  const sceneNames = extractSceneNamesInOrder(fullCode);
+  const headerCode = extractHeaderFromFullCode(fullCode, sceneNames);
+  // getHeaderExposedNames is what the generation path already uses to decide
+  // which names a scene is allowed to reference, so "declared by the header" is
+  // defined here exactly as it is there — one source of truth.
+  return new Set(getHeaderExposedNames(headerCode)).has(identifier);
+}
+
+// Does `identifier` appear anywhere inside ONE specific scene's own code span?
+// Used alongside isHeaderDeclaredName to tell "the scene redeclared/shadowed
+// this name itself" (patch the scene) apart from "the scene merely calls the
+// header's version" (patch the header).
+function sceneDeclaresName(fullCode, sceneIndex, identifier) {
+  if (!identifier) return false;
+  const located = locateSceneByIndexInFullCode(fullCode, sceneIndex);
+  if (!located) return false;
+  const sceneCode = fullCode.split("\n").slice(located.startLine - 1, located.endLine).join("\n");
+  // A DECLARATION of the name inside the scene (const/let/var/function/class),
+  // not a mere reference — references are exactly what we expect and must not
+  // count as the scene owning it.
+  return new RegExp(`\\b(?:const|let|var|function|class)\\s+${identifier}\\b`).test(sceneCode);
+}
+
 // Pulls durationInFrames for one scene straight out of the stitcher's own
 // <Series.Sequence durationInFrames={N}>...<SceneN /> block — the same
 // number stitchLessonCode wrote there originally, so this is always exactly
@@ -3749,7 +3804,15 @@ function applyPatchBlocks(sceneCode, blocks) {
 // reasoning-off (LESSON_CODE_PROVIDER_NO_REASONING below) for the same
 // reason as patchSceneInChunk — shown the already-correct code plus the
 // exact runtime error, it only has to locate+fix, not write from scratch.
-async function patchSceneFromRuntimeError(lesson, componentName, fullCode, sceneIndex, errorMessage, { userId = null, courseId = null, maxAttempts = 2 } = {}) {
+// maxAttempts raised 2 → 4 (2026-10-06): measured live, a single attempt lands
+// a valid surgical patch only about half the time — the model tends to slip on
+// the strict FIND/REPLACE contract (non-verbatim FIND text) or to reintroduce a
+// binding the scene already declares ("Identifier 'fps' has already been
+// declared"). Each attempt is one reasoning-off call of ~2s and a fraction of a
+// cent, so the cheapest way to make the user-facing "fix this scene" button
+// actually succeed is simply more attempts, not a better prompt. The retry loop
+// already feeds the previous rejection reason back in as feedback.
+async function patchSceneFromRuntimeError(lesson, componentName, fullCode, sceneIndex, errorMessage, { userId = null, courseId = null, maxAttempts = 4 } = {}) {
   const sceneNames = extractSceneNamesInOrder(fullCode);
   const targetSceneName = sceneComponentName(sceneIndex);
   if (!sceneNames.includes(targetSceneName)) {
@@ -3951,7 +4014,9 @@ ${feedback ? `\n⚠️ YOUR PREVIOUS ATTEMPT WAS REJECTED for this exact reason:
 // anything the scenes depend on beyond the actual bug — the find/replace
 // format's own guarantee (untouched code comes back byte-identical) is what
 // keeps that risk bounded rather than eliminated.
-async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, errorMessage, { userId = null, courseId = null, maxAttempts = 2 } = {}) {
+// maxAttempts raised 2 → 4 for the same measured reason as
+// patchSceneFromRuntimeError above — see its comment.
+async function patchHeaderFromRuntimeError(lesson, componentName, fullCode, errorMessage, { userId = null, courseId = null, maxAttempts = 4 } = {}) {
   const sceneNames = extractSceneNamesInOrder(fullCode);
   const located = locateHeaderInFullCode(fullCode);
   if (!located) {
@@ -4605,6 +4670,8 @@ module.exports = {
   locateErrorIsInHeader,
   extractUndefinedIdentifier,
   locateIdentifierScope,
+  isHeaderDeclaredName,
+  sceneDeclaresName,
   extractErrorLine,
   locateSceneIndexAtLineInFullCode,
 };
