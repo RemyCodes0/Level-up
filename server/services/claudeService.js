@@ -1661,6 +1661,23 @@ a backdrop motif, and reusable helper components. Nothing else: no scene content
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, interpolateColors, spring, Easing, random } from "remotion";
 import { useMemo, useCallback, useRef } from "react";
 
+=== ALREADY IN SCOPE — DO NOT IMPORT, DO NOT DECLARE ===
+Tex — renders real mathematical notation (LaTeX, KaTeX-backed). Available to the
+header and to every scene without importing it. Contract:
+  <Tex tex="x^2" />                     inline, inherits surrounding font size
+  <Tex tex="\\int_0^1 x^2\\,dx" block /> centred on its own line, display size
+  <Tex tex="\\frac{a}{b}" color={PALETTE.text} size={48} />
+Use it for EVERY mathematical expression — exponents, subscripts, fractions,
+roots, integrals, sums, limits, vectors, matrices, Greek letters. Never typeset
+math as plain text ("x^2", "sqrt(x)", "integral from 0 to 1") and never fake a
+superscript with your own offset/baseline tricks. Non-math prose stays in the
+header's Label helper as usual — Tex is only for the mathematics itself.
+ONE backslash per command inside the quotes (a JSX attribute is not a JS string,
+so nothing is unescaped; "\\\\" would mean an unwanted LaTeX line break). ONE
+expression = ONE Tex: never split an equation into several Tex elements you then
+position yourself, and write multi-step derivations as a single Tex using
+\\begin{aligned} ... \\\\ ... \\end{aligned}.
+
 === FIXED CONSTS (copy verbatim, immediately after imports) ===
 const CLAMP = { extrapolateLeft: "clamp", extrapolateRight: "clamp" };
 const FRAME = { w: 1920, h: 1080 };
@@ -1845,6 +1862,43 @@ in scope — imports, PALETTE, Backdrop, Label, Panel, Glow, CLAMP, SVG_FRAME, Z
 clampPos, and any data consts it declares. Use those exact names, never redeclare them.
 Other chunks are written in parallel with no visibility into yours. Never assume a name exists
 unless it appears in the header above or in your own chunk.
+
+MATH — Tex is already in scope (do NOT import or declare it). Every mathematical expression
+goes through it, so the viewer sees real notation instead of source code:
+  <Tex tex="x^2" />                               inline, inherits font size
+  <Tex tex="\\int_0^1 x^2\\,dx" block />           centred on its own line
+  <Tex tex="\\frac{d}{dx}\\sin x" color={PALETTE.text} size={44} />
+NEVER write math as plain text — not "x^2", not "x²", not "sqrt(x)", not "sum from i=1 to n",
+not "∫₀¹", and never hand-rolled superscripts via your own offsets, smaller font spans, or
+baseline shifts. Exponents, subscripts, fractions, roots, integrals, sums, limits, vectors,
+matrices and Greek letters all go through Tex. Plain prose still uses Label — Tex is for the
+mathematics only, never for sentences.
+BACKSLASHES: write LaTeX commands with ONE backslash inside the quotes — tex="\\int_0^1 x^2\\,dx",
+tex="\\frac{a}{b}", tex="\\sqrt{n}". A JSX attribute string is NOT a JS string: nothing is
+unescaped, so what you type is exactly what the renderer receives. Writing two backslashes is a
+REAL BUG — in LaTeX "\\\\" means END OF LINE, so tex="\\\\frac{a}{b}" renders a stray line break
+followed by the literal letters "frac", not a fraction. One backslash, always.
+
+ONE EXPRESSION = ONE <Tex/>. Never split a single equation across several <Tex/> elements that you
+then position next to each other — not tex="x^2" + tex="=" + tex="4", not one per term. Put the
+WHOLE expression in one Tex and let LaTeX typeset it: tex="x^2 = 4". Splitting it means you, not
+LaTeX, are responsible for spacing, baselines and alignment, and you will get them wrong.
+
+A MULTI-STEP DERIVATION IS ALSO ONE <Tex/>, using an aligned environment with & before each = and
+\\\\ between steps:
+  <Tex block size={44} color={PALETTE.text} tex="\\begin{aligned} \\int_0^2 x^2\\,dx &= \\left[\\frac{x^3}{3}\\right]_0^2 \\\\ &= \\frac{2^3}{3} - \\frac{0^3}{3} \\\\ &= \\frac{8}{3} \\end{aligned}" />
+NEVER fake a derivation by stacking separate <Tex/> elements at hand-computed top offsets. Rendered
+math is MUCH taller than a line of text — a single \\frac is roughly two and a half line-heights, and
+\\int with limits or \\left[...\\right] is taller still — so offsets that look right for text overlap
+badly once the math renders, which is a bug that has shipped and been visibly wrong on screen.
+Inside \\begin{aligned} (and only there) "\\\\" IS correct: it separates rows.
+
+GIVE MATH ITS OWN SPACE: a Tex block owns a clear horizontal band of ZONES.stage. Do not place other
+labels, captions or diagram parts at the same coordinates hoping they fit around it, and do not sit a
+formula on top of a diagram — put the diagram beside or below it with real separation.
+Tex renders HTML, so it must live in a normal <div>/AbsoluteFill subtree — NEVER inside an
+<svg>. To label math on an SVG diagram, position an absolutely-positioned <div> containing the
+<Tex/> over the diagram instead of using <text>.
 
 The title band's text is THIS SCENE'S OWN short headline (a few words, not a sentence —
 see onScreenText below), DIFFERENT scene to scene, not the lesson's overall name.

@@ -426,6 +426,22 @@ const JS_GLOBALS = new Set([
   "isNaN", "isFinite", "parseInt", "parseFloat",
 ]);
 
+// Names the client-side sandbox injects into every lesson's scope WITHOUT an
+// import — see SCOPE in src/remotion/useCompilation.ts. They aren't Remotion
+// exports and they aren't declared by the header, so neither
+// collectImportedNames nor headerAvailableNames would ever see them, and a
+// scene that legitimately uses one would be rejected as an undefined
+// reference. Deliberately NOT added to CANONICAL_REMOTION_EXPORTS: that list
+// becomes a literal `import { ... } from "remotion"` in the stitched file, and
+// these don't come from Remotion.
+//
+// Tex: KaTeX-backed math typesetting, so a lesson can render real notation
+// (x², ∫₀¹, fractions, radicals) instead of plain-text "x^2". Sandbox-provided
+// rather than header-declared because the header may only import from
+// react/remotion (validateHeaderFragment enforces that), so it has no way to
+// reach a real LaTeX engine itself.
+const SANDBOX_PROVIDED_NAMES = new Set(["Tex"]);
+
 // Walks every import in the file and returns the set of LOCAL names it binds
 // (handles default/named/aliased specifiers — e.g. `import { Series as S }`
 // binds "S", not "Series"). Used to build the "what's actually in scope"
@@ -868,7 +884,7 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
     throw new Error(importErrors.join("\n"));
   }
 
-  const undefinedRefs = checkNoUndefinedReferences(ast, new Set([...collectImportedNames(ast), ...JS_GLOBALS]));
+  const undefinedRefs = checkNoUndefinedReferences(ast, new Set([...collectImportedNames(ast), ...JS_GLOBALS, ...SANDBOX_PROVIDED_NAMES]));
   if (undefinedRefs.length > 0) {
     throw new Error(`Generated code references undefined identifier(s):\n${undefinedRefs.join("\n")}`);
   }
@@ -1144,7 +1160,7 @@ function validateHeaderFragment(code, { reservedNames = [] } = {}) {
     );
   }
 
-  const undefinedRefs = checkNoUndefinedReferences(ast, new Set([...collectImportedNames(ast), ...JS_GLOBALS]));
+  const undefinedRefs = checkNoUndefinedReferences(ast, new Set([...collectImportedNames(ast), ...JS_GLOBALS, ...SANDBOX_PROVIDED_NAMES]));
   if (undefinedRefs.length > 0) {
     throw new Error(`Header references undefined identifier(s):\n${undefinedRefs.join("\n")}`);
   }
@@ -1314,7 +1330,7 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
     );
   }
 
-  const undefinedRefs = checkNoUndefinedReferences(ast, new Set([...headerAvailableNames, ...JS_GLOBALS]));
+  const undefinedRefs = checkNoUndefinedReferences(ast, new Set([...headerAvailableNames, ...JS_GLOBALS, ...SANDBOX_PROVIDED_NAMES]));
   if (undefinedRefs.length > 0) {
     throw new Error(`${sceneName} references undefined identifier(s):\n${undefinedRefs.join("\n")}`);
   }
@@ -1429,7 +1445,7 @@ function validateChunkFragment(code, expectedSceneNames, { availableNames = [] }
     );
   }
 
-  const undefinedRefs = checkNoUndefinedReferences(ast, new Set([...availableNames, ...JS_GLOBALS]));
+  const undefinedRefs = checkNoUndefinedReferences(ast, new Set([...availableNames, ...JS_GLOBALS, ...SANDBOX_PROVIDED_NAMES]));
   if (undefinedRefs.length > 0) {
     throw new Error(`Chunk references undefined identifier(s):\n${undefinedRefs.join("\n")}`);
   }

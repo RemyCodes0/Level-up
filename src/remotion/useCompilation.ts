@@ -1,6 +1,8 @@
 import * as Babel from "@babel/standalone";
 import React, { useMemo, useCallback, useRef } from "react";
 import * as RemotionNS from "remotion";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 
 interface CompilationResult {
   Component: React.ComponentType | null;
@@ -150,6 +152,121 @@ const CallableSeries: any = makeCallable(RemotionNS.Series);
 // takes priority here.
 CallableSeries.Sequence = RemotionNS.Series.Sequence;
 
+// ── Math typesetting ─────────────────────────────────────────────────────────
+// Real notation instead of plain-text "x^2" / "integral from 0 to 1". KaTeX
+// (not MathJax) specifically because Remotion re-renders the whole tree on
+// EVERY frame and must be deterministic: katex.renderToString is synchronous
+// and pure, so frame N always produces identical markup, with no async layout
+// pass that would tear or flicker during playback or export.
+//
+// Provided through the sandbox SCOPE rather than declared by the header,
+// because validateHeaderFragment only lets the header import from
+// react/remotion — it has no way to reach a LaTeX engine itself. The server
+// mirrors this in validateCode.js's SANDBOX_PROVIDED_NAMES so a scene using
+// <Tex/> isn't rejected as an undefined reference.
+//
+// Rendered markup is cached per (tex, displayMode): a 10-scene lesson plays
+// ~5400 frames, and re-running the parser 30x/second for an equation that
+// never changes would be pure waste — this makes it one parse per distinct
+// expression for the whole lesson.
+// Injected once: neutralises KaTeX's own display-mode margin (see the comment
+// on the Tex component's style below for why it caused overlapping formulas).
+const LU_TEX_CSS = `.lu-tex .katex-display{margin:0}.lu-tex .katex{text-align:inherit}`;
+if (typeof document !== "undefined" && !document.getElementById("lu-tex-css")) {
+  const el = document.createElement("style");
+  el.id = "lu-tex-css";
+  el.textContent = LU_TEX_CSS;
+  document.head.appendChild(el);
+}
+
+const texCache = new Map<string, string>();
+
+// Repairs the single most common way generated math arrives broken: DOUBLED
+// backslashes. A JSX attribute (tex="\int x") is not a JS string literal —
+// nothing is unescaped, so what the model types is what KaTeX receives. A model
+// that "helpfully" escapes them emits tex="\\int x", and in LaTeX "\\" means END
+// OF LINE — so the formula renders as a stray line break followed by the literal
+// letters "int". Confirmed in a real lesson: 11 of 35 <Tex/> usages had it, which
+// is exactly the "int"/"frac"/", dx" garbage seen on screen.
+//
+// The prompt now says one backslash (see LESSON_CHUNK_RULES), but this repairs
+// every lesson ALREADY generated, with no regeneration — same spirit as the
+// interpolate/spring shields above.
+//
+// Skipped entirely when the expression contains \begin{...}: inside matrix and
+// array environments "\\" is a genuine row separator, and collapsing it there
+// would silently flatten a matrix into one row.
+function repairDoubledBackslashes(tex: string): string {
+  if (tex.includes("\\begin{")) return tex;
+  // Before a letter (\\int, \\frac) OR one of LaTeX's non-letter commands —
+  // \, \; \: \! are spacing, \{ \} \% \$ \& \# \_ \| are escaped literals.
+  // Missing the punctuation ones is not cosmetic: "f(x)\\,dx" was rendering as
+  // a line break followed by the literal text ", dx".
+  //
+  // Still left alone: "\\[" (line break with explicit spacing), "\\" before
+  // whitespace, and "\\" at end of string — those read as deliberate breaks.
+  return tex.replace(/\\\\(?=[a-zA-Z,;:!{}%$&#_|])/g, "\\");
+}
+
+function renderTex(rawTex: string, displayMode: boolean): string {
+  const tex = repairDoubledBackslashes(rawTex);
+  const key = `${displayMode ? "d" : "i"}:${tex}`;
+  const hit = texCache.get(key);
+  if (hit !== undefined) return hit;
+  let html: string;
+  try {
+    html = katex.renderToString(tex, {
+      displayMode,
+      // Never throw mid-playback: a malformed expression renders in KaTeX's
+      // error colour and the lesson keeps going, instead of taking the scene
+      // (or, before the per-scene boundary below, the whole lesson) down.
+      throwOnError: false,
+      strict: false,
+      trust: false,
+      output: "html",
+    });
+  } catch (err) {
+    console.warn(`[Tex] failed to render ${JSON.stringify(tex)} — falling back to raw text:`, err);
+    html = `<span>${tex.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch] as string))}</span>`;
+  }
+  texCache.set(key, html);
+  return html;
+}
+
+// <Tex tex="\int_0^1 x^2\,dx" /> — `block` centres it on its own line
+// (KaTeX displayMode), otherwise it flows inline at the surrounding font size.
+// color/size are plain style passthroughs so generated scenes can tie it to the
+// lesson's PALETTE without knowing anything about KaTeX internals.
+const Tex: React.FC<{
+  tex?: string;
+  children?: string;
+  block?: boolean;
+  color?: string;
+  size?: number | string;
+  style?: React.CSSProperties;
+}> = ({ tex, children, block = false, color, size, style }) => {
+  const source = typeof tex === "string" ? tex : typeof children === "string" ? children : "";
+  const html = source ? renderTex(source, block) : "";
+  return React.createElement("span", {
+    className: "lu-tex",
+    style: {
+      display: block ? "block" : "inline-block",
+      color,
+      fontSize: size,
+      lineHeight: 1.2,
+      // Generated scenes position everything absolutely at coordinates chosen
+      // for compact text. KaTeX's own katex-display margin (1em top AND bottom)
+      // makes a block formula occupy far more vertical space than those
+      // coordinates assume, which is why formulas collided with the labels
+      // around them on screen. Zeroed in LU_TEX_CSS below so a <Tex/> occupies
+      // exactly the box it's placed in; whitespace stays the scene's business.
+      whiteSpace: "nowrap",
+      ...style,
+    },
+    dangerouslySetInnerHTML: { __html: html },
+  });
+};
+
 // ── Per-scene crash containment ───────────────────────────────────────────────
 // The single biggest cause of the "This animation hit an error" red screen: ONE
 // scene throwing during render takes down the WHOLE composition, because the
@@ -285,6 +402,7 @@ SCOPE.AbsoluteFill = makeCallable(RemotionNS.AbsoluteFill); // survives direct-c
 SCOPE.Sequence = makeCallable(RemotionNS.Sequence);
 SCOPE.Loop = makeCallable(RemotionNS.Loop);
 SCOPE.Series = CallableSeries;
+SCOPE.Tex = Tex;                        // KaTeX math typesetting (see above)
 SCOPE.__guardScene = guardScene;        // per-scene crash containment (see above)
 
 const SCOPE_KEYS = Object.keys(SCOPE);

@@ -84,6 +84,14 @@ Rules:
 - AVOID "THE STATIC LEGEND" — a diagram that just names/labels things with a checkmark or caption next to each, where nothing ever actually moves or transforms, is a slide, not an animation, no matter how many shapes/colors/labels it lists. If the concept is a process (an algorithm, a comparison, a growth, a flow), the visualDescription must describe that process actually happening on screen — not its conclusion stated in text.
 - Even intro/summary scenes get a real mechanism: an intro can build the lesson's central object piece by piece; a summary can replay the key transformation compressed — never "title floats over background".
 - Cover the lesson's title, description, and all key points across the scenes.
+- MATH IS WRITTEN AS LaTeX in visualDescription and mechanism (before/after/driver): the code
+  generator typesets those through a real LaTeX renderer, so give it the actual markup —
+  "\\int_0^1 x^2\\,dx", "\\frac{dy}{dx}", "\\sqrt{n}", "\\sum_{i=1}^{n} a_i", "\\alpha" — not
+  prose like "the integral from 0 to 1 of x squared" and not pseudo-code like "x^2" or "sqrt(x)".
+  TWO EXCEPTIONS, both because they are SPOKEN or rendered as plain text, where LaTeX would be
+  read aloud or displayed literally: "narration" must stay plain spoken English ("the integral
+  from zero to one of x squared d x" — write what the voice should SAY), and "onScreenText" must
+  stay a plain short headline with no LaTeX markup in it.
 - The first scene is an intro, the last scene is a summary.
 - All content specific to the topic, never generic.
 - IMPORTANT: Output strictly valid JSON. No trailing commas. Escape any double quotes inside strings. No text before or after the JSON.
