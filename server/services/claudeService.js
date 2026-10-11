@@ -1729,23 +1729,33 @@ const ZONES = {
      - Opacity ceiling: under 0.25 alpha anywhere it overlaps ZONES.stage, under 0.40
        elsewhere. The backdrop is meant to be SEEN — it carries the lesson's visual
        identity — so do not render it so faint it disappears.
-     - PEACEFUL, ALWAYS. The reason to keep it subtle is not low opacity, it is calm
-       motion. It must never pull the eye away from the diagram. Hard rules:
-         * SLOW. Oscillation period 12-20 seconds. Nothing in the backdrop completes a
-           visible cycle in under 10 seconds.
+     - ALIVE, BUT CALM. The backdrop must be VISIBLY MOVING — a viewer who looks at it
+       for two or three seconds should clearly see it flowing, breathing, drifting. A
+       backdrop that looks like a still image is a failure, exactly as much as a
+       distracting one is. What makes it unobtrusive is the CHARACTER of the motion
+       (slow, smooth, continuous), never the absence of it. Hard rules:
+         * SLOW BUT PERCEPTIBLE. Oscillation period 6-12 seconds. Slow enough to feel
+           unhurried, fast enough that the movement is obvious when looked at. Do not go
+           slower than this "to be safe" — that is how a backdrop ends up looking frozen.
+         * REAL TRAVEL. Elements move a meaningful distance — roughly 5-15% of the frame
+           over a cycle — and large slow forms may drift fully across the frame or loop
+           continuously (a flowing current, a turning orbit, a rolling wave). Gentle
+           scaling and slow rotation count as motion too. What is banned is sudden
+           movement, not movement.
          * FEW AND LARGE. A handful of big, soft forms (roughly 3-8) — gradients, wide
-           arcs, broad waves, slow gentle orbits. NEVER a dense field of dozens of small
+           arcs, broad waves, slow orbits. NEVER a dense field of dozens of small
            particles, dots, sparks or streaks: density reads as noise no matter how
            transparent it is.
-         * SMALL AMPLITUDE. Elements drift within a few percent of the frame. Nothing
-           travels across the screen, sweeps through ZONES.stage, or visibly enters and
-           exits.
          * SOFT. Blurred or low-contrast edges against the base colour. No hard-edged
            shapes, no high-saturation accents, no outlines.
-         * NO FLICKER. No strobing, no rapid opacity pulsing, no colour cycling, no
-           twinkle, no fast rotation. Opacity and hue change slowly if at all.
-       The test: if a viewer reading the diagram would notice the background moving, it
-       is too strong — slow it down or soften it, do NOT simply fade it out.
+         * SMOOTH, NEVER SUDDEN. No strobing, no rapid opacity pulsing, no colour
+           cycling, no twinkle, no fast spin, no element popping in or out. Every change
+           eases continuously — use Math.sin(frame / k) style functions so the motion
+           never jumps.
+       The test is NOT "can it be noticed" — it should be noticeable. The test is: watch
+       the diagram for ten seconds; if your eye got PULLED to the background, the motion
+       is too fast or too sharp — slow it and soften it. If you glance at the background
+       and it appears to be a static picture, it is too weak — give it more travel.
 
 3. HELPERS — all three, always, fully implemented:
      Label({ children, size })           — text in PALETTE.text with a textShadow for legibility
