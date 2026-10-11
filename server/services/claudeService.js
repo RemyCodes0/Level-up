@@ -1703,6 +1703,26 @@ const ZONES = {
 2. Backdrop — a component named EXACTLY \`Backdrop\` expressing one recurring visual idea
    tied to the subject. Mandatory contract:
      - Full-frame, position:"absolute", left/top 0, zIndex 0, pointerEvents:"none"
+     - ABOUT THIS LESSON'S SUBJECT, not a generic ambience. The viewer should feel they
+       are sitting inside the topic before a single word is spoken, so derive the motif's
+       SHAPE from what is actually being taught — the same way PALETTE is chosen for this
+       subject specifically. Shape comes from the subject; MOTION stays peaceful per the
+       rules below. Never the generic default of floating dots, sparkles, confetti or a
+       plain grid — that belongs to no subject and makes every lesson look identical.
+       Examples of the right instinct (do not copy these literally — derive your own from
+       THIS lesson's title):
+         cell biology → large soft overlapping membrane ovals, slowly breathing
+         astronomy    → wide faint orbital arcs, turning almost imperceptibly
+         chemistry    → a big soft hexagonal lattice, drifting a few pixels
+         calculus     → a family of broad faint curves, slowly reshaping
+         algorithms   → a large sparse graph of faint nodes and edges, gently settling
+         history      → warm aged-paper bands with a slow tonal shift
+         music        → long low-frequency waveform ribbons
+         geology      → broad sedimentary strata, drifting slowly
+         anatomy      → soft branching vessel curves, slowly pulsing wider and narrower
+         economics    → a wide faint area-chart silhouette, slowly rising and falling
+       If the subject genuinely suggests no imagery, fall back to a large slow gradient
+       in the lesson's palette — never to particles.
      - Continuously in motion; no frame is static.
      - Must look correct starting at frame 0 with no entrance animation. Use continuous
        functions like Math.sin(frame / k), never a one-shot interpolate ramping from 0.
