@@ -97,7 +97,99 @@ const TTS_CHUNK_MAX_CHARS = 180; // comfortably under the measured ~240-290 char
 // isolation. A single sentence longer than the limit (rare) falls back to a
 // word-level split for just that sentence, rather than sending it whole and
 // risking Kokoro truncating it mid-word.
-function splitIntoTtsChunks(text, maxChars = TTS_CHUNK_MAX_CHARS) {
+// ── Strip LaTeX before it reaches the voice ─────────────────────────────────
+// Scene plans now carry real LaTeX in visualDescription/mechanism so the code
+// generator can typeset it (see sceneService.js + the Tex component), and the
+// plan prompt tells the model to keep `narration` plain spoken English. It does
+// not always comply, and when LaTeX leaks into narration the TTS voice reads it
+// out literally — "dollar x", "backslash frac" — which is exactly as confusing
+// as it sounds.
+//
+// Prompt wording alone can't guarantee this, so narration is sanitised here,
+// at the one place where text becomes speech. Deterministic, applies to every
+// scene, and independent of which model wrote the plan.
+//
+// Goal is SPEAKABLE, not mathematically complete: turn the common notation into
+// the words a teacher would actually say, then drop any leftover markup rather
+// than voicing it.
+const SPOKEN_MATH = [
+  // delimiters first — $x$, $$x$$, \(x\), \[x\]
+  [/\$\$?/g, " "],
+  [/\\[()[\]]/g, " "],
+  // common commands → the words a person says
+  [/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, " $1 over $2 "],
+  [/\\d?frac\b/g, " over "],
+  [/\\sqrt\s*\{([^{}]*)\}/g, " the square root of $1 "],
+  [/\\sqrt\b/g, " square root "],
+  [/\\int(?:_\{?([^{}\s^]+)\}?)?(?:\^\{?([^{}\s]+)\}?)?/g, (_m, a, b) =>
+    a && b ? ` the integral from ${a} to ${b} of ` : " the integral of "],
+  [/\\sum(?:_\{?([^{}\s^]+)\}?)?(?:\^\{?([^{}\s]+)\}?)?/g, (_m, a, b) =>
+    a && b ? ` the sum from ${a} to ${b} of ` : " the sum of "],
+  [/\\lim(?:_\{?([^{}]+)\}?)?/g, " the limit "],
+  [/\\(?:left|right|,|;|:|!|quad|qquad|displaystyle|text|mathrm|mathbf)\b/g, " "],
+  [/\\to\b/g, " approaches "],
+  [/\\times\b/g, " times "],
+  [/\\cdot\b/g, " times "],
+  [/\\div\b/g, " divided by "],
+  [/\\pm\b/g, " plus or minus "],
+  [/\\leq\b|\\le\b/g, " less than or equal to "],
+  [/\\geq\b|\\ge\b/g, " greater than or equal to "],
+  [/\\neq\b|\\ne\b/g, " not equal to "],
+  [/\\approx\b/g, " approximately "],
+  [/\\infty\b/g, " infinity "],
+  [/\\partial\b/g, " partial "],
+  // Greek letters keep their names, which is what a teacher says anyway
+  [/\\(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|sigma|phi|omega|Delta|Sigma|Omega|Phi|Theta)\b/gi, " $1 "],
+  // exponents / subscripts
+  [/\^\s*\{?2\}?/g, " squared"],
+  [/\^\s*\{?3\}?/g, " cubed"],
+  [/\^\s*\{?([^{}\s]+)\}?/g, " to the power of $1"],
+  [/_\s*\{?([^{}\s]+)\}?/g, " sub $1"],
+  // anything still wearing markup: drop the markup, keep the words
+  [/\\[a-zA-Z]+/g, " "],
+  [/[{}\\]/g, " "],
+];
+
+function stripLatexForSpeech(text) {
+  if (!text || (!text.includes("\\") && !text.includes("$") && !/[\^_]/.test(text))) return text;
+  let out = text;
+  for (const [re, rep] of SPOKEN_MATH) out = out.replace(re, rep);
+  // Collapse the whitespace all those substitutions introduce, and tidy the
+  // spacing around punctuation so the voice doesn't pause oddly.
+  out = out.replace(/\s+/g, " ").replace(/\s+([,.!?;:])/g, "$1").trim();
+  if (out !== text) {
+    console.log(`  [tts] stripped LaTeX from narration for speech: ${JSON.stringify(text.slice(0, 70))} -> ${JSON.stringify(out.slice(0, 70))}`);
+  }
+  return out;
+}
+
+// Not every "." ends a sentence. The sentence split below treats one as a
+// boundary unconditionally, which mangles decimals: "the speed is 5.4 metres"
+// became the two "sentences" "the speed is 5." and "4 metres", and they were
+// then rejoined WITH A SPACE ("5. 4") — so the voice read "five", stopped with
+// full falling end-of-sentence intonation, and started again on "four". Real,
+// reported, and it happened on every decimal, not only at chunk boundaries.
+//
+// So the non-sentence dots are swapped for a sentinel before splitting and
+// restored afterwards. The sentinel contains no whitespace and no "."/"!"/"?",
+// so it survives both the sentence regex and the word-level splitting intact.
+const DOT_SENTINEL = "\u0000dot\u0000";
+const ABBREVIATIONS = ["e.g.", "i.e.", "etc.", "vs.", "approx.", "Dr.", "Mr.", "Mrs.", "Ms.", "Prof.", "St.", "No."];
+
+function protectNonSentenceDots(text) {
+  let out = text.replace(/(\d)\.(?=\d)/g, `$1${DOT_SENTINEL}`); // 5.4, 3.14159, 1.2.3
+  for (const abbr of ABBREVIATIONS) {
+    out = out.split(abbr).join(abbr.replace(/\./g, DOT_SENTINEL));
+    const lower = abbr.toLowerCase();
+    if (lower !== abbr) out = out.split(lower).join(lower.replace(/\./g, DOT_SENTINEL));
+  }
+  return out;
+}
+
+const restoreDots = (text) => text.split(DOT_SENTINEL).join(".");
+
+function splitIntoTtsChunks(rawText, maxChars = TTS_CHUNK_MAX_CHARS) {
+  const text = protectNonSentenceDots(rawText);
   const sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
   const chunks = [];
   let current = "";
@@ -136,7 +228,9 @@ function splitIntoTtsChunks(text, maxChars = TTS_CHUNK_MAX_CHARS) {
   }
   if (current) chunks.push(current.trim());
 
-  return chunks;
+  // Put the real dots back before any of this reaches the TTS engine — a
+  // sentinel that leaked through would be voiced as garbage.
+  return chunks.map(restoreDots);
 }
 
 // Generates one narration chunk's audio — a single TTS call, no retry of its
@@ -185,7 +279,7 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
 
       // "af_nova" is Kokoro's American Female "Nova" voice, the closest
       // equivalent to the previous OpenAI "nova" voice.
-      const chunks = splitIntoTtsChunks(scene.narration);
+      const chunks = splitIntoTtsChunks(stripLatexForSpeech(scene.narration));
       // Chunks are independent TTS calls — fire them in parallel (order of
       // the REQUESTS doesn't matter, only the order they're concatenated in
       // afterward, which this preserves via .map's index-preserving results).

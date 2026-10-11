@@ -92,6 +92,12 @@ Rules:
   read aloud or displayed literally: "narration" must stay plain spoken English ("the integral
   from zero to one of x squared d x" — write what the voice should SAY), and "onScreenText" must
   stay a plain short headline with no LaTeX markup in it.
+  To be explicit about narration, because this has gone wrong and real listeners heard it: a
+  text-to-speech voice reads the characters you write. "$" is pronounced "dollar" and "\\frac"
+  is pronounced "backslash frac". So narration contains NO "$", NO backslash commands, NO "^"
+  or "_", and no braces — write "x squared", "d y by d x", "the square root of n", "alpha",
+  "approaches infinity". Say it out loud in your head: if it would sound wrong spoken by a
+  teacher, it is wrong.
 - The first scene is an intro, the last scene is a summary.
 - All content specific to the topic, never generic.
 - IMPORTANT: Output strictly valid JSON. No trailing commas. Escape any double quotes inside strings. No text before or after the JSON.
