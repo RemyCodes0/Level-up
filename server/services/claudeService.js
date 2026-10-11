@@ -1703,14 +1703,29 @@ const ZONES = {
 2. Backdrop — a component named EXACTLY \`Backdrop\` expressing one recurring visual idea
    tied to the subject. Mandatory contract:
      - Full-frame, position:"absolute", left/top 0, zIndex 0, pointerEvents:"none"
-     - Continuously in motion; no frame is static. Oscillation period 4-10 seconds.
+     - Continuously in motion; no frame is static.
      - Must look correct starting at frame 0 with no entrance animation. Use continuous
        functions like Math.sin(frame / k), never a one-shot interpolate ramping from 0.
-     - Opacity ceiling: under 0.03125 alpha anywhere it overlaps ZONES.stage, under 0.05
-       elsewhere (halved twice more per explicit request, down from an original
-       0.25/0.40 — the motif was competing with the actual diagram for attention at the
-       old ceiling). It sits behind content
-       and must never compete with it.
+     - Opacity ceiling: under 0.25 alpha anywhere it overlaps ZONES.stage, under 0.40
+       elsewhere. The backdrop is meant to be SEEN — it carries the lesson's visual
+       identity — so do not render it so faint it disappears.
+     - PEACEFUL, ALWAYS. The reason to keep it subtle is not low opacity, it is calm
+       motion. It must never pull the eye away from the diagram. Hard rules:
+         * SLOW. Oscillation period 12-20 seconds. Nothing in the backdrop completes a
+           visible cycle in under 10 seconds.
+         * FEW AND LARGE. A handful of big, soft forms (roughly 3-8) — gradients, wide
+           arcs, broad waves, slow gentle orbits. NEVER a dense field of dozens of small
+           particles, dots, sparks or streaks: density reads as noise no matter how
+           transparent it is.
+         * SMALL AMPLITUDE. Elements drift within a few percent of the frame. Nothing
+           travels across the screen, sweeps through ZONES.stage, or visibly enters and
+           exits.
+         * SOFT. Blurred or low-contrast edges against the base colour. No hard-edged
+           shapes, no high-saturation accents, no outlines.
+         * NO FLICKER. No strobing, no rapid opacity pulsing, no colour cycling, no
+           twinkle, no fast rotation. Opacity and hue change slowly if at all.
+       The test: if a viewer reading the diagram would notice the background moving, it
+       is too strong — slow it down or soften it, do NOT simply fade it out.
 
 3. HELPERS — all three, always, fully implemented:
      Label({ children, size })           — text in PALETTE.text with a textShadow for legibility
@@ -1755,6 +1770,13 @@ Pick exactly one motion character and hold it for the whole file:
              Math, algorithms, engineering, economics.
   kinetic  — energetic, period 4-5s, overlapping frequencies, visible momentum.
              Physics, chemistry, sports science, current events.
+
+TONE APPLIES TO THE DIAGRAM, NOT THE BACKDROP. The tone above sets the character of the
+scene's actual teaching content — the thing the viewer is supposed to watch. The Backdrop
+stays peaceful regardless of which tone you pick, under its own rules in section 2: a
+"kinetic" physics lesson still gets a slow, soft, low-amplitude background behind an
+energetic diagram. An energetic backdrop competes with the very content the tone is
+meant to energise.
 
 Response = code only, first character "i".
 `;
