@@ -16,6 +16,7 @@ const {
   describeError,
   isNonRetryable,
   backoffDelay,
+  escapeStrayBackslashes,
 } = require("./claudeService");
 const { recordAiUsage } = require("./aiUsageService");
 
@@ -34,7 +35,21 @@ function safeParseJson(text) {
   // Remove trailing commas before } or ] which break JSON.parse
   clean = clean.replace(/,(\s*[}\]])/g, "$1");
 
-  return JSON.parse(clean);
+  try {
+    return JSON.parse(clean);
+  } catch (err) {
+    // Raw LaTeX inside a JSON string is the one malformation this prompt
+    // actually provokes — it asks for `\int`/`\frac` in visualDescription and
+    // mechanism, and a single backslash is an invalid JSON escape. Observed
+    // killing whole lessons ("Bad escaped character in JSON at position …",
+    // three attempts in a row, on a kinematics course). Repair and retry
+    // once; a still-broken document throws the original error.
+    try {
+      return JSON.parse(escapeStrayBackslashes(clean));
+    } catch {
+      throw err;
+    }
+  }
 }
 
 const SCENE_PLAN_SYSTEM_PROMPT =
@@ -76,6 +91,11 @@ Return ONLY valid JSON, no markdown, exactly this structure:
 }
 
 Rules:
+- JSON ESCAPING, AND THIS IS THE RULE THAT BREAKS PLANS: your output is parsed by a strict
+  JSON parser, and a backslash inside a JSON string must be written as TWO backslashes.
+  LaTeX is the only place this comes up, and it is why a plan gets thrown away. Write
+  "\\\\int_0^1 x^2\\\\,dx", not "\\int_0^1 x^2\\,dx" — the second one is an invalid
+  escape and the entire plan is discarded, failing the lesson.
 - Create EXACTLY 10 scenes — not 9, not 11. This is a hard requirement, not a target.
 - Each scene's narration should take 15-22 seconds to speak naturally — AT LEAST 35 words, ideally 40-55, at this project's TTS voice's real speaking pace (~150-165 words/minute). NEVER fewer than 32 words under any circumstance, even for a scene that feels simple to write. EVERY scene needs this, including the intro and the summary — a narration that's just a restated headline (a handful of words) is too short and gets cut off mid-thought when the scene switches, regardless of how it feels while writing it.
 - HIT THAT WORD COUNT WITH MORE SHORT SENTENCES, NEVER BY CRAMMING: a scene covers ONE idea — the mechanism given below, said plainly. Do not pack multiple facts, sub-points, or asides into a scene's narration just to reach the floor; a narration with several dense clauses in one breath reads as rushed and hard to follow out loud, even if it fits the word count. If the lesson has more to say than one scene comfortably holds at a natural pace, that's what MORE scenes are for — split it, don't densify it.
@@ -86,7 +106,7 @@ Rules:
 - Cover the lesson's title, description, and all key points across the scenes.
 - MATH IS WRITTEN AS LaTeX in visualDescription and mechanism (before/after/driver): the code
   generator typesets those through a real LaTeX renderer, so give it the actual markup —
-  "\\int_0^1 x^2\\,dx", "\\frac{dy}{dx}", "\\sqrt{n}", "\\sum_{i=1}^{n} a_i", "\\alpha" — not
+  "\\\\int_0^1 x^2\\\\,dx", "\\\\frac{dy}{dx}", "\\\\sqrt{n}", "\\\\sum_{i=1}^{n} a_i", "\\\\alpha" — not
   prose like "the integral from 0 to 1 of x squared" and not pseudo-code like "x^2" or "sqrt(x)".
   TWO EXCEPTIONS, both because they are SPOKEN or rendered as plain text, where LaTeX would be
   read aloud or displayed literally: "narration" must stay plain spoken English ("the integral

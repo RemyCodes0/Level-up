@@ -176,7 +176,7 @@ async function webhookHandler(req, res) {
 async function creditsHandler(req, res) {
   try {
     const user = await User.findById(req.user._id).select(
-      "courseCredits signupBonusCredits signupBonusExpiresAt"
+      "courseCredits signupBonusCredits signupBonusExpiresAt feedbackCreditGranted"
     );
     if (!user) return res.status(404).json({ error: "User not found" });
 
@@ -191,13 +191,23 @@ async function creditsHandler(req, res) {
     // they could still generate for free — stale/wrong under the new model.
     const canGenerate = spendableBalance > 0;
 
-    console.log(`[credits] Returning: ${JSON.stringify({ courseCredits: credits, canGenerate, spendableBalance })}`);
+    // feedbackCreditGranted is what hides the "+20" badge on the feedback
+    // button once that one-time reward has been claimed (see feedbackController
+    // — it only ever grants once). The frontend has always read this field;
+    // this endpoint simply never sent it, so `!credits.feedbackCreditGranted`
+    // was `!undefined` and the badge promised a reward that wouldn't come.
+    const feedbackCreditGranted = !!user.feedbackCreditGranted;
+
+    console.log(
+      `[credits] Returning: ${JSON.stringify({ courseCredits: credits, canGenerate, spendableBalance, feedbackCreditGranted })}`
+    );
     res.json({
       courseCredits: credits,
       canGenerate,
       spendableBalance,
       signupBonusCredits: Math.max(user.signupBonusCredits || 0, 0),
       signupBonusExpiresAt: user.signupBonusExpiresAt,
+      feedbackCreditGranted,
     });
   } catch (err) {
     console.error("[credits] Error:", err);

@@ -4,6 +4,8 @@ const {
   generateCourseHandler,
   getCourseStatusHandler,
   listCoursesHandler,
+  getCourseLineageHandler,
+  regenerateQuizHandler,
   getShowcaseCoursesHandler,
   retryLessonHandler,
   retrySceneHandler,
@@ -81,6 +83,8 @@ router.post("/:courseId/unlock", protect, unlockRemainingLessonsHandler);
 router.get("/status/:courseId", protect, getCourseStatusHandler);
 router.get("/list", protect, listCoursesHandler);
 router.get("/:courseId/next-suggestions", protect, getNextSuggestionsHandler);
+router.get("/:courseId/lineage", protect, getCourseLineageHandler);
+router.post("/:courseId/quiz/regenerate", protect, regenerateQuizHandler);
 router.delete("/:courseId", protect, deleteCourseHandler);
 
 module.exports = router;

@@ -819,6 +819,26 @@ const limitLessonCodeCall = createLimiter(LESSON_CODE_MAX_CONCURRENT);
 const DEEPSEEK_MAX_CONCURRENT = Number(process.env.DEEPSEEK_MAX_CONCURRENT) || 100;
 const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 
+// Which model writes the post-course quiz. This used to be hardcoded to
+// DeepSeek, which made it the LAST call in the course path still on a
+// provider the course plan and scene plan were both deliberately moved OFF
+// for being slow (see GEMINI_COURSE_PLAN_PROVIDER / GEMINI_SCENE_PLAN_PROVIDER
+// above: DeepSeek was reproduced live crawling at ~22 chars/sec on this
+// account). Quiz generation is the very last step before a course goes
+// `ready`, so its latency is the wait the user actually sees — and queueing
+// on a loaded backend is what makes that wait grow the more courses are
+// generated at once.
+//
+// Default is Gemini, the same model the other two JSON calls already use.
+// Set QUIZ_MODEL=deepseek to put it back on the old one.
+const QUIZ_PROVIDERS = {
+  gemini: GEMINI_COURSE_PLAN_PROVIDER,
+  deepseek: DEEPSEEK_QUIZ_PROVIDER,
+};
+const QUIZ_MODEL_KEY = QUIZ_PROVIDERS[process.env.QUIZ_MODEL] ? process.env.QUIZ_MODEL : "gemini";
+const QUIZ_PROVIDER = QUIZ_PROVIDERS[QUIZ_MODEL_KEY];
+
+console.log(`[codegen] quiz → ${QUIZ_PROVIDER.model} (set QUIZ_MODEL=gemini | deepseek to switch)`);
 console.log(
   `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini | geminilite | glmflash | oxalpha | gemini36 | deepseek41 | glm53 | gpt56luna to switch)`
 );
@@ -971,6 +991,38 @@ function extractJsonObjectFrom(text, start) {
 //   2. On failure, apply a trailing-comma repair and try once more.
 //   3. On failure, advance past this "{" and try the next candidate — recovers
 //      the case where prose before the JSON itself contains braces.
+// Last-resort repair for the one malformation these models actually produce:
+// raw LaTeX inside a JSON string. `\int`, `\alpha`, `\,` are not valid JSON
+// escapes, so JSON.parse dies with "Bad escaped character" and the whole
+// lesson fails — observed three attempts in a row on a kinematics course,
+// which cost the user their credits for nothing.
+//
+// Each backslash run is CLASSIFIED rather than blindly doubled, because
+// blindly doubling corrupts `\n`/`\t` and leaving them alone corrupts
+// `\tfrac`/`\beta` (whose second character happens to be a valid escape
+// letter):
+//   \ + 2 or more letters  → a LaTeX command  → escape it
+//   \uXXXX                 → a unicode escape → keep
+//   \" \\ \/ \b \f \n \r \t  → a control escape → keep
+//   anything else           → invalid JSON     → escape it
+//
+// The one case this gets wrong is a genuine newline followed by letters
+// ("line\nthen"), which becomes a literal. That's only reachable after a
+// pristine parse has already failed — i.e. the document contains LaTeX
+// anyway — so the trade favours the LaTeX reading.
+function escapeStrayBackslashes(json) {
+  return json.replace(
+    /\\(?:([a-zA-Z]{2,})|(u[0-9a-fA-F]{4})|(["\\/bfnrt])|([\s\S]))/g,
+    (match, latexWord, unicodeEscape, controlEscape, other) => {
+      if (latexWord) return "\\\\" + latexWord;
+      if (unicodeEscape || controlEscape) return match;
+      return "\\\\" + other;
+    }
+  );
+}
+
+const stripTrailingCommas = (json) => json.replace(/,(\s*[}\]])/g, "$1");
+
 function safeParseJson(text) {
   let searchFrom = 0;
   let lastErr = null;
@@ -985,16 +1037,25 @@ function safeParseJson(text) {
       continue;
     }
 
-    try {
-      return JSON.parse(candidate);
-    } catch (pristineErr) {
+    // Pristine first, then each repair, then both — a document can have a
+    // trailing comma AND raw LaTeX, and neither repair alone would save it.
+    const attemptsInOrder = [
+      (c) => c,
+      stripTrailingCommas,
+      escapeStrayBackslashes,
+      (c) => escapeStrayBackslashes(stripTrailingCommas(c)),
+    ];
+    let parsed = null;
+    for (const repair of attemptsInOrder) {
       try {
-        return JSON.parse(candidate.replace(/,(\s*[}\]])/g, "$1"));
-      } catch (repairedErr) {
-        lastErr = repairedErr;
-        searchFrom = braceAt + 1;
+        parsed = { value: JSON.parse(repair(candidate)) };
+        break;
+      } catch (err) {
+        lastErr = err;
       }
     }
+    if (parsed) return parsed.value;
+    searchFrom = braceAt + 1;
   }
 
   throw contentError(
@@ -1017,20 +1078,43 @@ function safeParseJson(text) {
 // content-error retry — only the attempt that actually succeeds gets logged
 // (a rejected attempt's tokens were still spent, but attributing per-retry
 // cost isn't worth the complexity this would add for 3 low-volume call sites).
-async function generateJson({ label, maxAttempts, maxTokens, buildMessages, validate, provider = SCENE_PLAN_PROVIDER, limiter = limitZaiCall, onUsage = null }) {
-  return withRetries(label, maxAttempts, async ({ feedback }) => {
-    const response = await limiter(() =>
-      provider.client.chat.completions.create({
-        model: provider.model,
-        ...provider.extraParams,
-        max_tokens: maxTokens,
-        // Real per-call $ cost in the response's usage.cost — see the
-        // identical field on streamOpenAiCompatible's request for the full
-        // reasoning. Every provider generateJson is called with routes
-        // through OpenRouter.
-        usage: { include: true },
-        messages: buildMessages(feedback),
-      })
+// `timeoutMs` overrides the client's own 300s ceiling for one call. That
+// ceiling is right for long code generations but far too generous for a short
+// structured call: a provider that stalls (which this project has already seen
+// from DeepSeek on the scene-plan call — see GEMINI_SCENE_PLAN_PROVIDER's
+// comment) would otherwise burn 5 minutes PER ATTEMPT before failing, leaving
+// the course sitting in `generating` for a quarter of an hour.
+async function generateJson({ label, maxAttempts, maxTokens, buildMessages, validate, provider = SCENE_PLAN_PROVIDER, limiter = limitZaiCall, onUsage = null, timeoutMs = null }) {
+  return withRetries(label, maxAttempts, async ({ attempt, feedback }) => {
+    // Queue time and model time are reported separately: a call that waits on
+    // the concurrency limiter and a call served slowly by the provider look
+    // identical from the outside, and only one of them is fixable here.
+    const queuedAt = Date.now();
+    let startedAt = queuedAt;
+    const response = await limiter(() => {
+      startedAt = Date.now();
+      return provider.client.chat.completions.create(
+        {
+          model: provider.model,
+          ...provider.extraParams,
+          max_tokens: maxTokens,
+          // Real per-call $ cost in the response's usage.cost — see the
+          // identical field on streamOpenAiCompatible's request for the full
+          // reasoning. Every provider generateJson is called with routes
+          // through OpenRouter.
+          usage: { include: true },
+          messages: buildMessages(feedback),
+        },
+        timeoutMs ? { timeout: timeoutMs } : undefined
+      );
+    });
+    const waitedMs = startedAt - queuedAt;
+    const modelMs = Date.now() - startedAt;
+    console.log(
+      `  [${label}] attempt ${attempt}/${maxAttempts} on ${provider.model}: ` +
+        `${(modelMs / 1000).toFixed(1)}s model` +
+        (waitedMs > 250 ? ` + ${(waitedMs / 1000).toFixed(1)}s queued` : "") +
+        (response.usage ? ` · ${response.usage.completion_tokens ?? "?"} out tokens` : "")
     );
 
     const choice = response.choices?.[0];
@@ -1043,7 +1127,10 @@ async function generateJson({ label, maxAttempts, maxTokens, buildMessages, vali
     // mixed into `message.content` — no extra stripping needed here.
     const text = choice?.message?.content || "";
     const parsed = safeParseJson(text);
-    const result = validate(parsed, text);
+    // `attempt` is passed so a validator can be strict early and settle for a
+    // usable near-miss on the last try instead of throwing the work away —
+    // see generateCourseQuiz. Validators that don't care simply ignore it.
+    const result = validate(parsed, text, attempt, maxAttempts);
     if (onUsage && response.usage) onUsage(response.usage);
     return result;
   }, { keyEnv: provider.keyEnv });
@@ -1086,11 +1173,43 @@ function validateCoursePlan(plan, expectedLessonCount = 6) {
 // above, which used to validate a `questions` array too); this is that same
 // shape-validation logic, now standalone since quiz generation is its own
 // call.
-function validateQuizQuestions(questions, expectedMcqCount) {
+// Repairs what can be repaired BEFORE validation, so a fixable imperfection
+// never costs the whole quiz:
+//   · duplicate/reworded questions are dropped rather than failing the batch.
+//     A 1-lesson course (the quick_explainer tier — and so every default
+//     follow-up) is asked for 10 questions from one narration, which makes
+//     near-duplicates the most likely imperfection there is; rejecting the
+//     batch over one repeat guaranteed the course shipped with no quiz.
+//   · ids are renumbered 1..n. Grading maps answers by id (quizController's
+//     scoreAnswers), so duplicate ids would silently collapse answers
+//     together and mis-score the attempt.
+// Count is NOT repaired here — too few questions is a real miss worth
+// retrying, which is what the floor in validateQuizQuestions is for.
+function normalizeQuizQuestions(questions, expectedMcqCount) {
+  if (!Array.isArray(questions)) return questions;
+  const seen = new Set();
+  const unique = questions.filter((q) => {
+    if (typeof q?.question !== "string") return true; // let validation report it
+    const norm = q.question.trim().toLowerCase().replace(/\s+/g, " ");
+    if (seen.has(norm)) return false;
+    seen.add(norm);
+    return true;
+  });
+  return unique.slice(0, expectedMcqCount).map((q, i) => ({ ...q, id: i + 1 }));
+}
+
+// `minCount` is the number of questions that makes a usable quiz, which is
+// not always `expectedMcqCount`: a model asked for 10 questions about a single
+// lesson that returns 9 usable ones used to fail this check on all three
+// attempts and ship the course with NO quiz at all.
+function validateQuizQuestions(questions, expectedMcqCount, minCount = expectedMcqCount) {
   const errors = [];
 
-  if (!Array.isArray(questions) || questions.length !== expectedMcqCount) {
-    errors.push(`Expected ${expectedMcqCount} questions, got ${questions?.length ?? "none"}`);
+  if (!Array.isArray(questions) || questions.length < minCount) {
+    errors.push(
+      `Expected ${expectedMcqCount} questions (at least ${minCount} usable, after dropping any repeats), got ${questions?.length ?? "none"}` +
+        (Array.isArray(questions) ? ` — write ${Math.max(expectedMcqCount - questions.length, 1)} more, each testing a different idea` : "")
+    );
     return { ok: false, errors };
   }
 
@@ -1305,7 +1424,11 @@ async function generateCourseQuiz(topic, lessons, mcqCount = 20, maxAttempts = 3
   const lessonContext = lessons
     .map((l, i) => {
       const narration = (l.narrationScript || "").slice(0, MAX_NARRATION_CHARS_PER_LESSON);
-      return `LESSON ${i + 1}: ${l.title}\n${narration || "(no narration available — this lesson may have failed to generate; write questions for it from its title alone, or skip it in favor of the other lessons if that reads better)"}`;
+      const missing =
+        lessons.length === 1
+          ? "(no narration available — this lesson failed to generate; write questions from its title alone)"
+          : "(no narration available — this lesson may have failed to generate; write questions for it from its title alone, or skip it in favor of the other lessons if that reads better)";
+      return `LESSON ${i + 1}: ${l.title}\n${narration || missing}`;
     })
     .join("\n\n");
 
@@ -1321,6 +1444,16 @@ async function generateCourseQuiz(topic, lessons, mcqCount = 20, maxAttempts = 3
     }
   ]
 }`;
+
+  // A single-lesson course (the quick_explainer tier — and so every follow-up
+  // generated from a results page by default) has to source all of its
+  // questions from one narration. "Distribute across all 1 lessons, weighted
+  // toward lessons with more content" is meaningless there, and left the model
+  // either short of the count or repeating the lesson's headline point.
+  const distributionRule =
+    lessons.length === 1
+      ? `All ${mcqCount} questions come from this one lesson. Draw each from a DIFFERENT concept, mechanism, or step in its narration. If the narration covers fewer than ${mcqCount} distinct ideas, go deeper rather than repeating yourself: ask what a principle predicts in an unseen situation, what breaks if one condition changes, why one approach is chosen over another, or how two ideas in the lesson relate. Never ${mcqCount} rewordings of the lesson's headline point.`
+      : `Distribute questions across all ${lessons.length} lessons (roughly evenly, weighted toward lessons with more content).`;
 
   const basePrompt = `
 You are an expert educational assessment designer. Below is the FULL narrated content of every lesson in a course called "${topic}" — the actual script spoken in each lesson's video, not just an outline.
@@ -1343,7 +1476,11 @@ GOOD (tests whether the concept was actually understood):
 - "Which of the following best describes what [concept] means?"
 - "What is the underlying reason [phenomenon] occurs, according to this lesson?"
 
-Distribute questions across all ${lessons.length} lessons (roughly evenly, weighted toward lessons with more content). Each question's "topic" field must be the EXACT title of the lesson it's drawn from (copy it character-for-character from "LESSON N: <title>" above), so results can be grouped back to the right lesson.
+${distributionRule}
+
+NEVER write two questions that test the same fact, or that are reworded versions of each other — each question must stand on a different idea from the narration.
+
+Each question's "topic" field must be the EXACT title of the lesson it's drawn from (copy it character-for-character from "LESSON N: <title>" above), so results can be grouped back to the right lesson.
 
 Return ONLY valid JSON, no markdown, exactly this structure:
 ${jsonSchema}
@@ -1358,23 +1495,48 @@ Rules:
   const result = await generateJson({
     label: `quiz`,
     maxAttempts,
-    provider: DEEPSEEK_QUIZ_PROVIDER,
+    provider: QUIZ_PROVIDER,
     limiter: limitDeepSeekCall,
-    maxTokens: Math.min(40000, 8000 + mcqCount * 250),
+    // Gemini runs with reasoning effort "low", and reasoning tokens are drawn
+    // from this SAME budget before a single question is written — the exact
+    // trap generateCoursePlan's own comment describes (its floor had to go
+    // 3000 → 12000 for it). Too small a budget here doesn't fail cleanly, it
+    // truncates mid-JSON, which costs a full retry and makes the quiz SLOWER,
+    // so the floor is raised whenever the provider reasons at all.
+    maxTokens: QUIZ_PROVIDER.extraParams?.reasoning?.enabled === false
+      ? Math.min(40000, 8000 + mcqCount * 250)
+      : Math.min(40000, 16000 + mcqCount * 300),
+    // One structured, non-streamed call that normally lands in well under a
+    // minute. Capped so three attempts can't hold a course in `generating`
+    // for 15 minutes when the provider stalls — failing fast hands the user
+    // the "Build the quiz" retry instead of an indefinite spinner.
+    timeoutMs: 90 * 1000,
     buildMessages: (feedback) => [{ role: "user", content: basePrompt + feedbackSuffix(feedback) }],
-    validate: (parsed, raw) => {
-      const { ok, errors } = validateQuizQuestions(parsed?.questions, mcqCount);
+    validate: (parsed, raw, attempt, totalAttempts) => {
+      // Hold out for the full count while there are retries left; on the last
+      // one, a quiz that's a couple of questions short still beats no quiz
+      // (a quiz-generation failure is swallowed by processCourse, so the
+      // course would otherwise land with an empty assessment).
+      const lastChance = attempt >= totalAttempts;
+      const minCount = lastChance ? Math.max(4, Math.ceil(mcqCount * 0.6)) : mcqCount;
+      const normalized = normalizeQuizQuestions(parsed?.questions, mcqCount);
+      const { ok, errors } = validateQuizQuestions(normalized, mcqCount, minCount);
       if (!ok) {
+        const dropped = Array.isArray(parsed?.questions) && Array.isArray(normalized)
+          ? parsed.questions.length - normalized.length
+          : 0;
         throw contentError(
-          `Quiz generation failed shape validation: ${errors.join("; ")}. Raw response (first 500 chars): ${raw.slice(0, 500)}`
+          `Quiz generation failed shape validation on attempt ${attempt}/${totalAttempts}: ${errors.join("; ")}` +
+            (dropped > 0 ? ` (${dropped} repeated question${dropped === 1 ? "" : "s"} dropped before checking)` : "") +
+            `. Raw response (first 500 chars): ${raw.slice(0, 500)}`
         );
       }
-      return parsed.questions;
+      return normalized;
     },
     onUsage: (usage) => recordAiUsage({
       kind: "course-quiz",
-      provider: DEEPSEEK_QUIZ_PROVIDER.providerName,
-      model: DEEPSEEK_QUIZ_PROVIDER.model,
+      provider: QUIZ_PROVIDER.providerName,
+      model: QUIZ_PROVIDER.model,
       userId,
       courseId,
       promptTokens: usage.prompt_tokens,
@@ -4768,6 +4930,11 @@ module.exports = {
   describeError,
   isNonRetryable,
   backoffDelay,
+  // Shared so every place that parses model JSON gets the same LaTeX repair.
+  // There are three such parsers (sceneService, codeCriticService,
+  // levelAssessmentController) and fixing only this file's left the scene
+  // plan still dying on `\int` — the bug that made this export necessary.
+  escapeStrayBackslashes,
   // Post-hoc single-scene patching (courseController.js's retry-scene route)
   // — fixes a real crash a user already hit, without regenerating the whole
   // lesson. See the comment above patchSceneFromRuntimeError.

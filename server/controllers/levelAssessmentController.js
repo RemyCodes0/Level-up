@@ -13,6 +13,7 @@ const {
   determineLevel,
   MAX_QUESTIONS,
 } = require("../services/levelAssessmentService");
+const { escapeStrayBackslashes } = require("../services/claudeService");
 
 // Same defensive JSON parsing used elsewhere — the model occasionally wraps
 // its JSON in stray text or markdown fences.
@@ -22,7 +23,17 @@ function safeParseJson(text) {
   const last = clean.lastIndexOf("}");
   if (first !== -1 && last !== -1) clean = clean.slice(first, last + 1);
   clean = clean.replace(/,(\s*[}\]])/g, "$1");
-  return JSON.parse(clean);
+  try {
+    return JSON.parse(clean);
+  } catch (err) {
+    // Same shared repair the scene plan needs: a stray backslash (LaTeX in a
+    // maths topic) is an invalid JSON escape and would kill the question.
+    try {
+      return JSON.parse(escapeStrayBackslashes(clean));
+    } catch {
+      throw err;
+    }
+  }
 }
 
 // POST /api/assessment/next-question  (SSE response)

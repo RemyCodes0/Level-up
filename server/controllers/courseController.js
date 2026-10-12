@@ -628,11 +628,64 @@ async function processCourse(
     // (see AiTutor.tsx), so a course landing without a quiz degrades
     // gracefully instead of erroring the user's whole course out.
     try {
-      const builtCourse = await Course.findById(courseId).select("lessons.title lessons.narrationScript");
-      const questions = await generateCourseQuiz(topic, builtCourse.lessons, mcqCount, undefined, { userId, courseId });
-      await Course.findByIdAndUpdate(courseId, { questions });
+      const builtCourse = await Course.findById(courseId).select("lessons.title lessons.narrationScript lessons.status");
+
+      // Every lesson failed — the user paid for a course and got nothing. Mark
+      // it failed and refund, instead of reporting "ready" over an empty shell
+      // (which is what a kinematics course did when its only lesson died at
+      // the scene-plan stage: status "ready", no content, no refund).
+      const anyLessonReady = builtCourse.lessons.some((l) => l.status === "ready");
+      if (!anyLessonReady && builtCourse.lessons.length > 0) {
+        console.error(`[${courseId}] Every lesson failed — marking the course failed and refunding.`);
+        const failed = await Course.findByIdAndUpdate(courseId, { status: "failed" });
+        if (failed && !failed.isFreeTrialCourse && failed.creditCost > 0) {
+          try {
+            await grantCredits(failed.userId, failed.creditCost, "refund", { courseId, reason: "all_lessons_failed" });
+            console.log(`[${courseId}] Refunded ${failed.creditCost} credits to ${failed.userId}.`);
+          } catch (refundErr) {
+            console.error(`[${courseId}] Refund failed:`, refundErr.message);
+          }
+        }
+        return;
+      }
+
+      // Logged up front because a quiz failure is otherwise invisible until a
+      // user opens the course and finds no assessment — and these inputs (how
+      // much narration exists vs. how many questions are being asked for) are
+      // what decide whether the ask was realistic at all.
+      const narrationChars = builtCourse.lessons.reduce((n, l) => n + (l.narrationScript || "").length, 0);
+      const withNarration = builtCourse.lessons.filter((l) => (l.narrationScript || "").trim()).length;
+      console.log(
+        `[${courseId}] Generating quiz: ${mcqCount} questions from ${builtCourse.lessons.length} lesson(s), ` +
+          `${withNarration} with narration (${narrationChars} chars total).`
+      );
+
+      // With no narration there is nothing to write questions ABOUT, and the
+      // model will invent them from the course title — a quiz testing content
+      // the learner was never taught. Better no quiz than a fabricated one;
+      // the UI offers a rebuild once real lessons exist.
+      if (withNarration === 0) {
+        console.warn(`[${courseId}] Skipping quiz — no lesson produced any narration to build questions from.`);
+      } else {
+        const quizStart = Date.now();
+        const questions = await generateCourseQuiz(topic, builtCourse.lessons, mcqCount, undefined, { userId, courseId });
+        await Course.findByIdAndUpdate(courseId, { questions });
+        console.log(`[${courseId}] Quiz stage took ${((Date.now() - quizStart) / 1000).toFixed(1)}s.`);
+        if (questions.length < mcqCount) {
+          console.warn(
+            `[${courseId}] Quiz saved with ${questions.length}/${mcqCount} questions — the model could not produce ` +
+              `${mcqCount} distinct ones from this much content.`
+          );
+        } else {
+          console.log(`[${courseId}] Quiz saved with ${questions.length} questions.`);
+        }
+      }
     } catch (quizErr) {
-      console.error(`[${courseId}] Quiz generation failed (course still usable without it):`, quizErr.message);
+      console.error(
+        `[${courseId}] Quiz generation failed after all attempts — course still usable without it. ` +
+          `Asked for ${mcqCount} questions. Reason:`,
+        quizErr.message
+      );
     }
 
     await Course.findByIdAndUpdate(courseId, { status: "ready" });
@@ -939,6 +992,137 @@ async function listCoursesHandler(req, res) {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to list courses" });
+  }
+}
+
+// ── Re-run quiz generation for a course that landed without one ─────────────
+// processCourse deliberately swallows a quiz failure so the lessons still
+// ship (see its own comment), which left the course permanently showing "your
+// assessment is being prepared" with nothing preparing it. This makes that
+// state recoverable by the owner instead of terminal.
+//
+// Awaited rather than backgrounded: it's an explicit, user-triggered retry
+// with a spinner on the other end, and there's no progress to stream. Capped
+// at 2 attempts so the request can't outlive a typical proxy timeout.
+const QUIZ_RETRY_ATTEMPTS = 2;
+
+async function regenerateQuizHandler(req, res) {
+  try {
+    const course = await Course.findOne({ _id: req.params.courseId, userId: req.user._id })
+      .select("topic mcqCount status lessons.title lessons.narrationScript lessons.status");
+    if (!course) {
+      res.status(404).json({ error: "Course not found" });
+      return;
+    }
+
+    // Refuse only while there's still a LESSON building. A course whose
+    // lessons have all settled but whose status is still `generating` has
+    // exactly one step left — this one — and that's precisely the state a
+    // stalled quiz call leaves behind, so it has to be retryable rather than
+    // a dead end. Worst case the original attempt is still in flight and both
+    // write `questions`; the later write wins and neither is wrong.
+    const lessonsStillBuilding = (course.lessons || []).some(
+      (l) => l.status !== "ready" && l.status !== "failed"
+    );
+    if (course.status === "generating" && lessonsStillBuilding) {
+      res.status(409).json({ error: "course_generating", message: "This course is still building its lessons — the quiz comes last." });
+      return;
+    }
+
+    const usableLessons = (course.lessons || []).filter((l) => (l.narrationScript || "").trim());
+    if (usableLessons.length === 0) {
+      res.status(422).json({
+        error: "no_lesson_content",
+        message: "None of this course's lessons generated successfully, so there's nothing to build a quiz from.",
+      });
+      return;
+    }
+
+    const mcqCount = course.mcqCount || 20;
+    console.log(`[${req.params.courseId}] Quiz retry requested: ${mcqCount} questions from ${usableLessons.length} lesson(s).`);
+    const questions = await generateCourseQuiz(course.topic, course.lessons, mcqCount, QUIZ_RETRY_ATTEMPTS, {
+      userId: req.user._id,
+      courseId: req.params.courseId,
+    });
+    // Also lands the course, so a stalled quiz can't leave it "generating"
+    // forever once the user has rebuilt the missing piece themselves.
+    await Course.findByIdAndUpdate(req.params.courseId, { questions, status: "ready" });
+    console.log(`[${req.params.courseId}] Quiz retry succeeded with ${questions.length} questions.`);
+    res.json({ questions });
+  } catch (err) {
+    console.error(`[${req.params.courseId}] Quiz retry failed:`, err.message);
+    res.status(502).json({
+      error: "quiz_generation_failed",
+      message: "Couldn't build the quiz this time. Trying again usually works.",
+    });
+  }
+}
+
+// ── Learning-loop lineage for one course ─────────────────────────────────────
+// The client builds the "path" view (previous course above, follow-ups below,
+// one syllabus across all of them) from its own loaded history — which only
+// holds the first page of courses, so a parent or child outside that page was
+// invisible until a reload happened to bring it in. This resolves both
+// directions explicitly, scoped to the caller's own courses.
+//
+// Uses the same lesson-code-free projection as the list endpoint: the client
+// fetches a course's full document (code included) only when it actually
+// plays one of its lessons, exactly as it already does when opening a course
+// from the sidebar.
+const MAX_LINEAGE_DEPTH = 10;
+// Total descendants returned, not per level: the client lists the WHOLE chain
+// under a course (not just its direct children), so a deep thread has to come
+// back in one response or the sidebar would silently stop partway down.
+const MAX_LINEAGE_DESCENDANTS = 40;
+
+async function getCourseLineageHandler(req, res) {
+  try {
+    const course = await Course.findOne({ _id: req.params.courseId, userId: req.user._id }).select("parentCourseId");
+    if (!course) {
+      res.status(404).json({ error: "Course not found" });
+      return;
+    }
+
+    // Walk up. Depth-capped and cycle-guarded: parentCourseId is validated on
+    // write, but a chain this walks must terminate on whatever is in the DB.
+    const ancestors = [];
+    const seen = new Set([String(course._id)]);
+    let cursor = course.parentCourseId;
+    while (cursor && ancestors.length < MAX_LINEAGE_DEPTH && !seen.has(String(cursor))) {
+      seen.add(String(cursor));
+      const ancestor = await Course.findOne({ _id: cursor, userId: req.user._id }).select(COURSE_LIST_EXCLUDED_FIELDS);
+      if (!ancestor) break; // deleted parent — the chain simply stops here
+      ancestors.unshift(ancestor);
+      cursor = ancestor.parentCourseId;
+    }
+
+    // Walk down breadth-first, collecting every descendant rather than only
+    // direct children — "show me everything generated under this course" is
+    // one view, and a grandchild is as much a part of it as a child. Bounded
+    // by a total count and guarded against revisiting a node.
+    const descendants = [];
+    const queue = [String(course._id)];
+    const visited = new Set(queue);
+    while (queue.length > 0 && descendants.length < MAX_LINEAGE_DESCENDANTS) {
+      const batch = await Course.find({ parentCourseId: { $in: queue.splice(0, queue.length) }, userId: req.user._id })
+        .select(COURSE_LIST_EXCLUDED_FIELDS)
+        .sort({ createdAt: 1 })
+        .limit(MAX_LINEAGE_DESCENDANTS - descendants.length);
+      if (batch.length === 0) break;
+      for (const child of batch) {
+        const id = String(child._id);
+        if (visited.has(id)) continue; // cycle guard — a parent pointer is client-supplied
+        visited.add(id);
+        descendants.push(child);
+        queue.push(id);
+      }
+    }
+
+    // `children` kept alongside for anything still reading the old shape.
+    res.json({ ancestors, descendants, children: descendants });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to load course lineage" });
   }
 }
 
@@ -1414,6 +1598,8 @@ module.exports = {
   generateCourseHandler,
   getCourseStatusHandler,
   listCoursesHandler,
+  getCourseLineageHandler,
+  regenerateQuizHandler,
   deleteCourseHandler,
   getShowcaseCoursesHandler,
   retryLessonHandler,

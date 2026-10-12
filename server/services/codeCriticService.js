@@ -66,7 +66,7 @@ async function reviewGeneratedCode(code, lesson) {
     return { ok: true, skipped: true };
   }
 
-  const { LESSON_CODE_PROVIDER, streamCodeCompletion, limitZaiCall } = require("./claudeService");
+  const { LESSON_CODE_PROVIDER, streamCodeCompletion, limitZaiCall, escapeStrayBackslashes } = require("./claudeService");
 
   try {
     const { text, stopReason } = await streamCodeCompletion({
@@ -87,13 +87,20 @@ async function reviewGeneratedCode(code, lesson) {
     let parsed;
     try {
       parsed = JSON.parse(clean);
-    } catch (parseErr) {
-      // The critic's OWN output was malformed — this is a critic bug, not a
-      // code-quality signal. Log it distinctly from a real "ok: true" result
-      // so you can actually tell, from the logs, whether the critic is
-      // silently failing at scale vs genuinely approving lessons.
-      console.warn(`  [critic] Response wasn't valid JSON, treating as skipped: ${parseErr.message}. Raw response: ${text.slice(0, 200)}`);
-      return { ok: true, skipped: true, parseFailed: true };
+    } catch (pristineErr) {
+      // Retry with the shared backslash repair before giving up: the critic
+      // quotes generated code back at us, and a stray `\int`/`\n` in a JSON
+      // string is an invalid escape that would otherwise skip the review.
+      try {
+        parsed = JSON.parse(escapeStrayBackslashes(clean));
+      } catch {
+        // The critic's OWN output was malformed — this is a critic bug, not a
+        // code-quality signal. Log it distinctly from a real "ok: true" result
+        // so you can actually tell, from the logs, whether the critic is
+        // silently failing at scale vs genuinely approving lessons.
+        console.warn(`  [critic] Response wasn't valid JSON, treating as skipped: ${pristineErr.message}. Raw response: ${text.slice(0, 200)}`);
+        return { ok: true, skipped: true, parseFailed: true };
+      }
     }
 
     // Basic shape validation — if the model returned valid JSON but not in

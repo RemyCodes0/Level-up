@@ -209,6 +209,9 @@ export interface CreditsBalance {
   spendableBalance: number;
   signupBonusCredits: number;
   signupBonusExpiresAt: string | null;
+  // True once the one-time feedback reward has been claimed — what hides the
+  // "+20" badge on the feedback button.
+  feedbackCreditGranted: boolean;
 }
 
 export async function getCreditsBalance(): Promise<CreditsBalance> {
@@ -362,6 +365,33 @@ export async function getNextSuggestions(courseId: string): Promise<NextCourseSu
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Failed to load suggestions");
   return data.suggestions;
+}
+
+// ── Re-run quiz generation for a course that landed without one ─────────────
+// Slow by nature (it's a full LLM call), so callers should show a spinner.
+export async function regenerateQuiz(courseId: string): Promise<QuestionFromAPI[]> {
+  const res = await fetch(`${BASE_URL}/api/course/${courseId}/quiz/regenerate`, {
+    method: "POST",
+    headers: { ...authHeaders() },
+  });
+  handleUnauthorized(res);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || data.error || "Failed to rebuild the quiz");
+  return data.questions;
+}
+
+// ── Learning-loop lineage: ancestors + direct follow-ups of one course ──────
+// Lesson code is NOT included (same projection as the list endpoint) — call
+// getCourseStatus for a course whose lesson you're about to play.
+export async function getCourseLineage(
+  courseId: string
+): Promise<{ ancestors: CourseFromAPI[]; descendants: CourseFromAPI[] }> {
+  const res = await fetch(`${BASE_URL}/api/course/${courseId}/lineage`, {
+    headers: { ...authHeaders() },
+  });
+  handleUnauthorized(res);
+  if (!res.ok) throw new Error("Failed to load course lineage");
+  return res.json();
 }
 
 // ── Publish / unpublish a course to the public gallery (owner-only) ─────────

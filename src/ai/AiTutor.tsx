@@ -18,6 +18,8 @@ import {
   getCourseStatus,
   getNextSuggestions,
   getPricingConfig,
+  getCourseLineage,
+  regenerateQuiz,
 } from "../api/CourseApi";
 import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, SceneMetaItem, CourseTier } from "../api/CourseApi";
 import { getProgress, markLessonWatched, logPosition } from "../api/ProgressApi";
@@ -28,7 +30,6 @@ import { DynamicPlayer, PlayerErrorBoundary } from "../remotion/DynamicPlayer";
 import type { LessonCrashInfo } from "../remotion/DynamicPlayer";
 import { useCompilation } from "../remotion/useCompilation";
 import { ReferralCard } from "../components/ReferralCard";
-import { DownloadLessonButton } from "../components/DownloadLessonButton";
 import { FeedbackModal } from "../feedback/FeedBackModel";
 import { ShareModal } from "../components/ShareModal";
 import { PublishModal } from "../components/PublishModal";
@@ -46,10 +47,6 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
-
-// Client-side (WebCodecs) landscape export — the only download format now.
-// Add VITE_ENABLE_WEB_DOWNLOAD=true to your local .env to enable.
-const WEB_DOWNLOAD_ENABLED = import.meta.env.VITE_ENABLE_WEB_DOWNLOAD === "true";
 
 // No payment processor is live yet — the paywall points to the WhatsApp community.
 const WHATSAPP_COMMUNITY_URL = "https://chat.whatsapp.com/CyuV45KQ9Au3awigE39jBC";
@@ -94,6 +91,14 @@ interface HistoryEntry {
   // can be drawn in the library rail). null for a composer-started course.
   parentCourseId?: string | null;
   followUpKind?: "repair" | "extend" | null;
+  // The course's own status. NOT derivable from lessonStatuses: the quiz is
+  // written after every lesson finishes, so "all lessons ready" and "course
+  // finished" are different states, and the gap between them is exactly when
+  // the quiz is being generated.
+  status?: "generating" | "ready" | "failed";
+  // Questions this course's tier promised — the quiz count to show before any
+  // question exists (the old hardcoded 20 was wrong for every other tier).
+  mcqCount?: number;
   // Credits this course cost, from its own tier snapshot — shown on a
   // follow-up card so the spend stays visible after the fact.
   creditCost?: number;
@@ -1203,7 +1208,59 @@ function CourseContentSkeleton() {
 // Quiz
 // ─────────────────────────────────────────────────────────────────────────────
 
-function QuizStage({ questions, onSubmit, timeAllocationMinutes = 30 }: { questions: MCQQuestion[]; onSubmit: (answers: QuizAnswer[]) => void; timeAllocationMinutes?: number }) {
+/** Shown when a finished course has no quiz — recoverable, not a dead end. */
+function QuizMissing({ onRegenerate, stalled = false }: { onRegenerate?: () => Promise<void>; stalled?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const retry = async () => {
+    if (!onRegenerate) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onRegenerate();
+    } catch (err) {
+      setError((err as Error)?.message || "Couldn't rebuild the quiz.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={cx(SURFACE, "flex flex-col items-center px-6 py-16 text-center")}>
+      <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FFB547]/10 ring-1 ring-[#FFB547]/25">
+        <ClipboardList className="h-5 w-5 text-[#FFB547]" />
+      </span>
+      <p className="lu-serif text-3xl leading-tight text-white">
+        {stalled ? "Your quiz is taking too long" : "This quiz didn't get written"}
+      </p>
+      <p className="mt-2 max-w-md text-sm leading-relaxed text-[#8A8FA3]">
+        {stalled
+          ? "Your lessons are done, but the assessment step has been running far longer than it should. Rebuilding it usually takes under a minute, and costs you nothing."
+          : "Your lessons are fine — only the assessment failed to generate, which happens occasionally. Rebuilding it costs you nothing."}
+      </p>
+      {onRegenerate && (
+        <button onClick={retry} disabled={busy} className={cx(BTN_PRIMARY, "mt-6")}>
+          {busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Writing your quiz…</> : <><RotateCcw className="h-4 w-4" /> Build the quiz</>}
+        </button>
+      )}
+      {busy && <p className="mt-2 text-[11px] text-[#555A6E]">This takes up to a minute.</p>}
+      {error && <p className="mt-3 text-[12px] text-[#FF8A95]">{error}</p>}
+    </div>
+  );
+}
+
+function QuizStage({ questions, onSubmit, timeAllocationMinutes = 30, courseStatus, lessonsBuilt = false, onRegenerate }: {
+  questions: MCQQuestion[];
+  onSubmit: (answers: QuizAnswer[]) => void;
+  timeAllocationMinutes?: number;
+  /** The COURSE's status — not the lessons'. The quiz is written after the
+   *  last lesson, so these differ for the whole duration of quiz generation. */
+  courseStatus?: "generating" | "ready" | "failed";
+  /** True when every lesson has finished, which is when the quiz is being written. */
+  lessonsBuilt?: boolean;
+  onRegenerate?: () => Promise<void>;
+}) {
   const [answers, setAnswers] = useState<QuizAnswer[]>([]);
   const [currentQ, setCurrentQ] = useState(0);
   const [timeLeft, setTimeLeft] = useState(timeAllocationMinutes * 60);
@@ -1222,6 +1279,17 @@ function QuizStage({ questions, onSubmit, timeAllocationMinutes = 30 }: { questi
       return [...prev, { questionId: qId, selected: opt }];
     });
   };
+
+  // Quiz generation is the last step and normally lands in well under a
+  // minute. Past that the wait stops being normal — most likely a stalled
+  // provider call — so the rebuild is offered rather than spinning forever.
+  const [slowQuiz, setSlowQuiz] = useState(false);
+  useEffect(() => {
+    const waitingOnQuiz = courseStatus === "generating" && lessonsBuilt && !questions?.length;
+    if (!waitingOnQuiz) { setSlowQuiz(false); return; }
+    const t = setTimeout(() => setSlowQuiz(true), 90_000);
+    return () => clearTimeout(t);
+  }, [courseStatus, lessonsBuilt, questions?.length]);
 
   // Keyboard: A–H / 1–8 answer, ←/→ move.
   useEffect(() => {
@@ -1244,12 +1312,26 @@ function QuizStage({ questions, onSubmit, timeAllocationMinutes = 30 }: { questi
   }, [questions, currentQ, submitted]);
 
   if (!questions || questions.length === 0) {
-    return (
-      <div className={cx(SURFACE, "flex flex-col items-center py-20 text-center")}>
-        <Loader2 className="mb-3 h-7 w-7 animate-spin text-[#8B7CFF]" />
-        <p className="lu-serif text-2xl text-white">Your assessment is being prepared…</p>
-      </div>
-    );
+    // A quiz failure doesn't fail the course (processCourse swallows it so the
+    // lessons still ship), so "being prepared" was shown forever on a course
+    // that had finished with nothing preparing it. Once the course has
+    // settled, say so and offer the retry.
+    if (courseStatus === "generating" && !slowQuiz) {
+      return (
+        <div className={cx(SURFACE, "flex flex-col items-center px-6 py-20 text-center")}>
+          <Loader2 className="mb-3 h-7 w-7 animate-spin text-[#8B7CFF]" />
+          <p className="lu-serif text-2xl text-white">
+            {lessonsBuilt ? "Writing your quiz…" : "Your assessment is being prepared…"}
+          </p>
+          <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-[#8A8FA3]">
+            {lessonsBuilt
+              ? "Every lesson is done. The questions come last, written from what they actually say — this is the final step."
+              : "The quiz is written last, from what the lessons actually say."}
+          </p>
+        </div>
+      );
+    }
+    return <QuizMissing onRegenerate={onRegenerate} stalled={courseStatus === "generating"} />;
   }
 
   const answered = (id: number) => answers.find((a) => a.questionId === id);
@@ -1664,45 +1746,11 @@ function GrowthPath({ points }: { points: GrowthPoint[] }) {
   );
 }
 
-/** before → after on one measure, with the gap drawn to scale. */
-function DeltaBar({ label, before, after }: { label: string; before: number; after: number }) {
-  const delta = after - before;
-  const up = delta >= 0;
-  const lo = Math.min(before, after);
-  const span = Math.abs(delta);
-  return (
-    <div>
-      <div className="mb-1.5 flex items-baseline justify-between gap-3">
-        <span className="min-w-0 truncate text-[13px] font-medium text-[#E3E5EE]">{label}</span>
-        <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs tabular-nums">
-          <span className="text-[#8A8FA3]">{before}%</span>
-          <ArrowRight className="h-3 w-3 text-[#4A4F63]" />
-          <span className="font-semibold" style={{ color: up ? C.mint : C.rose }}>{after}%</span>
-        </span>
-      </div>
-      <div className="relative h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
-        {/* The shared base, then the change stacked on top in its own colour. */}
-        <div className="absolute inset-y-0 left-0 rounded-full bg-white/[0.14]" style={{ width: `${lo}%` }} />
-        <div
-          className="absolute inset-y-0 rounded-full transition-all duration-1000"
-          style={{ left: `${lo}%`, width: `${span}%`, background: up ? C.mint : C.rose, opacity: 0.9 }}
-        />
-        <span className="absolute top-0 h-full w-px bg-white/25" style={{ left: `${PASS_MARK}%` }} aria-hidden="true" />
-      </div>
-      <p className="mt-1 text-[11px]" style={{ color: up ? C.mint : C.rose }}>
-        {up ? "+" : ""}{delta} points{up && after >= PASS_MARK && before < PASS_MARK ? " — now past the pass mark" : ""}
-      </p>
-    </div>
-  );
-}
-
 function GrowthComparison({
-  lineage, currentPct, currentTopic, followUpKind,
+  lineage, currentPct,
 }: {
   lineage: HistoryEntry[];
   currentPct: number;
-  currentTopic: string;
-  followUpKind?: "repair" | "extend" | null;
 }) {
   // lineage is root → current; the course right before this one is its parent.
   const parent = lineage.length >= 2 ? lineage[lineage.length - 2] : null;
@@ -1720,15 +1768,6 @@ function GrowthComparison({
   if (!parent) return null;
 
   const parentPct = parentAttempt?.pct ?? parent.quizScore;
-  // For a gap-repair course, the honest "before" is how the parent's quiz
-  // scored THAT topic — not the parent's overall score. The topic string is
-  // the parent's lesson title (generateCourseQuiz copies it verbatim), which
-  // is exactly what the follow-up was named after.
-  const key = currentTopic.trim().toLowerCase();
-  const focused = parentAttempt?.topicBreakdown.find((t) => t.topic.trim().toLowerCase() === key) ?? null;
-
-  // Nothing to compare against yet.
-  if (parentPct === null && !focused) return null;
 
   // flatMap rather than map+filter: dropping the unscored courses this way
   // keeps the element type exact without a type predicate.
@@ -1738,6 +1777,10 @@ function GrowthComparison({
     if (pct === null || pct === undefined) return [];
     return [{ label: cleanName(e.fileName), pct, kind: e.followUpKind }];
   });
+
+  // The chart is the whole panel now, and a chart needs two points — one
+  // graded course is nothing to compare, so the panel stays away entirely.
+  if (scored.length < 2) return null;
 
   const overallDelta = parentPct !== null && parentPct !== undefined ? currentPct - parentPct : null;
 
@@ -1749,16 +1792,10 @@ function GrowthComparison({
         aria-hidden="true"
       />
 
-      <div className="relative flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
-          <p className={EYEBROW}>Your progress</p>
-          <h3 className="lu-serif mt-1.5 text-3xl leading-tight text-white">
-            {followUpKind === "repair" ? "Did the gap close?" : "How far you've come"}
-          </h3>
-          <p className="mt-1.5 text-[13px] text-[#8A8FA3]">
-            Measured against “{cleanName(parent.fileName)}”, the course this one came from.
-          </p>
-        </div>
+      {/* Chart first, the courses it plots underneath it — no prose. The
+          numbers carry the comparison on their own. */}
+      <div className="relative flex flex-wrap items-center justify-between gap-3">
+        <p className={EYEBROW}>Your progress</p>
         {overallDelta !== null && (
           <span
             className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold"
@@ -1774,52 +1811,22 @@ function GrowthComparison({
         )}
       </div>
 
-      <div className="relative mt-6 grid gap-6 lg:grid-cols-[1fr_1fr]">
-        <div className="space-y-5">
-          {focused && (
-            <DeltaBar
-              label={`“${cleanName(currentTopic)}” — the topic you came to fix`}
-              before={focused.pct}
-              after={currentPct}
-            />
-          )}
-          {overallDelta !== null && (
-            <DeltaBar label="Overall quiz score" before={parentPct!} after={currentPct} />
-          )}
-
-          <p className="rounded-xl bg-white/[0.03] px-4 py-3 text-[12px] leading-relaxed text-[#B9BCCB] ring-1 ring-inset ring-white/[0.05]">
-            {focused && currentPct >= PASS_MARK && focused.pct < PASS_MARK ? (
-              <>You scored <span className="font-semibold text-[#FF8A95]">{focused.pct}%</span> on this
-              topic in the parent course and <span className="font-semibold text-[#3DDC97]">{currentPct}%</span> after
-              the follow-up. That gap is closed — pick the next one below.</>
-            ) : focused ? (
-              <>This topic went from <span className="font-semibold text-white">{focused.pct}%</span> to{" "}
-              <span className="font-semibold text-white">{currentPct}%</span>. Still under the {PASS_MARK}% mark, so
-              another pass on it is worth more than moving on.</>
-            ) : (
-              <>Each course in this path builds on the one before it. Keep the chain going and this chart keeps
-              growing with you.</>
-            )}
-          </p>
+      <div className="relative mt-4">
+        <div className="mx-auto max-w-xl">
+          <p className={cx(EYEBROW, "mb-2")}>Learning path · {scored.length} courses</p>
+          <GrowthPath points={scored} />
+          <ol className="mt-3 space-y-1.5">
+            {scored.map((p, i) => (
+              <li key={`${p.label}-${i}`} className="flex items-center gap-2 text-[12px]">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-white/[0.06] font-mono text-[9px] text-[#8A8FA3]">
+                  {i + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[#D6D8E2]">{p.label}</span>
+                <span className="shrink-0 font-mono tabular-nums" style={{ color: bandFor(p.pct).color }}>{p.pct}%</span>
+              </li>
+            ))}
+          </ol>
         </div>
-
-        {scored.length >= 2 && (
-          <div>
-            <p className={cx(EYEBROW, "mb-2")}>Learning path · {scored.length} courses</p>
-            <GrowthPath points={scored} />
-            <ol className="mt-3 space-y-1.5">
-              {scored.map((p, i) => (
-                <li key={`${p.label}-${i}`} className="flex items-center gap-2 text-[12px]">
-                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-white/[0.06] font-mono text-[9px] text-[#8A8FA3]">
-                    {i + 1}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-[#D6D8E2]">{p.label}</span>
-                  <span className="shrink-0 font-mono tabular-nums" style={{ color: bandFor(p.pct).color }}>{p.pct}%</span>
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -1895,21 +1902,49 @@ function ContinueLearning({
       .finally(() => setLoadingSuggestions(false));
   };
 
+  // Fetched on arrival rather than behind a button when there's no weak topic
+  // to offer instead — otherwise someone who aced the quiz lands on an empty
+  // "what next" section, which is the opposite of an obvious next step.
+  useEffect(() => {
+    if (weakTopics.length === 0) loadSuggestions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseId, weakTopics.length]);
+
+  // The one action the page is steering toward: shore up the weakest topic
+  // if there is one, otherwise the first suggestion.
+  const recommendedId = items[0]?.id ?? null;
+
+  const headline =
+    weakTopics.length > 0
+      ? `${weakTopics.length} topic${weakTopics.length === 1 ? "" : "s"} let you down — fix ${weakTopics.length === 1 ? "it" : "one"} next`
+      : "You're ready for the next level";
+
   return (
-    <div className={cx(SURFACE, "relative overflow-hidden p-5 sm:p-7")}>
+    <div className="relative overflow-hidden rounded-2xl bg-[#11131A] p-5 ring-2 ring-[#8B7CFF]/40 shadow-[0_30px_80px_-40px_rgba(139,124,255,0.65)] sm:p-7">
       <div
-        className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full opacity-20 blur-3xl"
+        className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full opacity-30 blur-3xl"
         style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }}
         aria-hidden="true"
       />
+      <div
+        className="pointer-events-none absolute -bottom-28 -left-20 h-64 w-64 rounded-full opacity-20 blur-3xl"
+        style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)` }}
+        aria-hidden="true"
+      />
 
-      <div className="relative flex flex-wrap items-end justify-between gap-3">
+      <div className="relative flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className={EYEBROW}>Keep going</p>
-          <h3 className="lu-serif mt-1.5 text-3xl leading-tight text-white sm:text-4xl">Turn this into your next course</h3>
-          <p className="mt-1.5 max-w-xl text-[13px] leading-relaxed text-[#8A8FA3]">
-            Your results pick the starting point — close a gap you just found, or push past what this course covered.
-            No second assessment: we already know your level from this quiz.
+          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[#B4A9FF]">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inset-0 animate-ping rounded-full bg-[#8B7CFF]" />
+              <span className="relative h-1.5 w-1.5 rounded-full bg-[#8B7CFF]" />
+            </span>
+            Your next step
+          </p>
+          <h3 className="lu-serif mt-2 text-3xl leading-[1.1] text-white sm:text-[40px]">{headline}</h3>
+          <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-[#B9BCCB]">
+            One click starts a new course, built from these results and pitched at your level —
+            no second assessment. It builds right below this page while you keep reading.
           </p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-[#E3E5EE] ring-1 ring-white/[0.08]">
@@ -1960,14 +1995,24 @@ function ContinueLearning({
       <div className="relative mt-6 space-y-2.5">
         {items.map((item) => {
           const isConfirming = confirming === item.id;
+          const isRecommended = item.id === recommendedId;
           return (
             <div
               key={item.id}
               className={cx(
                 "rounded-2xl p-4 transition-colors",
-                isConfirming ? "bg-[#8B7CFF]/[0.08] ring-1 ring-[#8B7CFF]/40" : "bg-white/[0.025] ring-1 ring-white/[0.06]"
+                isConfirming
+                  ? "bg-[#8B7CFF]/[0.08] ring-1 ring-[#8B7CFF]/40"
+                  : isRecommended
+                  ? "bg-white/[0.05] ring-1 ring-white/[0.14]"
+                  : "bg-white/[0.025] ring-1 ring-white/[0.06]"
               )}
             >
+              {isRecommended && (
+                <p className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[#B4A9FF]">
+                  <Sparkles className="h-3 w-3" /> Recommended for you
+                </p>
+              )}
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <span
@@ -2008,8 +2053,13 @@ function ContinueLearning({
                     </>
                   ) : (
                     <>
-                      <button onClick={() => setConfirming(item.id)} className={cx(BTN_SOFT, "h-9 whitespace-nowrap")}>
-                        <Sparkles className="h-3.5 w-3.5 text-[#B4A9FF]" /> Generate · {cost} credits
+                      <button
+                        onClick={() => setConfirming(item.id)}
+                        className={cx(isRecommended ? BTN_PRIMARY : BTN_SOFT, "h-10 whitespace-nowrap")}
+                      >
+                        {isRecommended
+                          ? <>Start this course · {cost} credits <ArrowRight className="h-3.5 w-3.5" /></>
+                          : <><Sparkles className="h-3.5 w-3.5 text-[#B4A9FF]" /> Generate · {cost} credits</>}
                       </button>
                       <span className="text-center text-[10px] text-[#4A4F63]">leaves you {balance - cost}</span>
                     </>
@@ -2140,6 +2190,7 @@ function ResultsStage({
   const balance = Math.max(credits?.spendableBalance ?? credits?.courseCredits ?? 0, 0);
   const watchedCount = lessons.filter((l) => l.completed).length;
 
+
   return (
     <div className="space-y-5">
       {/* ── Headline ─────────────────────────────────────────────────────── */}
@@ -2187,6 +2238,12 @@ function ResultsStage({
           <KpiTile label="Lessons watched" value={`${watchedCount}/${lessons.length}`} sub={watchedCount < lessons.length ? "unwatched lessons hurt your score" : "full course covered"} />
         </div>
       </div>
+
+      {/* ── How this course compares to the one before it ────────────────── */}
+      <GrowthComparison
+        lineage={lineage}
+        currentPct={pct}
+      />
 
       {/* ── Charts ───────────────────────────────────────────────────────── */}
       {attempts && attempts.length >= 2 && <AttemptTrend attempts={attempts} />}
@@ -2332,14 +2389,7 @@ function ResultsStage({
         </div>
       )}
 
-      {/* ── Growth, then the next loop ───────────────────────────────────── */}
-      <GrowthComparison
-        lineage={lineage}
-        currentPct={pct}
-        currentTopic={lineage[lineage.length - 1]?.fileName ?? ""}
-        followUpKind={lineage[lineage.length - 1]?.followUpKind}
-      />
-
+      {/* ── The next loop, after the full result ─────────────────────────── */}
       <ContinueLearning
         weakTopics={weaknesses}
         pct={pct}
@@ -2364,6 +2414,7 @@ function ResultsStage({
         </div>
         <button onClick={onFeedback} className={cx(BTN_SOFT, "h-9 shrink-0")}>Share feedback</button>
       </div>
+
     </div>
   );
 }
@@ -2486,6 +2537,16 @@ function StartingOverlay({ label }: { label: string }) {
 // Follow-up thread — the courses this course led to
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Learning path — the chain of courses one results page led to
+//
+// A chain is ONE page and ONE syllabus. The course the user opened renders its
+// full stage in the middle; everything it came from renders as a player card
+// above it, and everything it led to renders as a player card below. Opening a
+// follow-up therefore never strands it on its own — whichever link you open,
+// the course before it is still sitting above.
+// ─────────────────────────────────────────────────────────────────────────────
+
 const FOLLOW_UP_TONE = {
   repair: { color: C.rose, label: "Gap closed", Icon: TrendingDown },
   extend: { color: C.iris, label: "Went further", Icon: TrendingUp },
@@ -2496,246 +2557,90 @@ function followUpTone(kind?: "repair" | "extend" | null) {
 }
 
 /**
- * Rendered directly under whatever course section is open, so starting a
- * follow-up from the results never navigates away: the new course builds
- * below the one it came from and the user scrolls down to watch it.
+ * Where you are in the thread, always on screen.
  *
- * Reads entirely from `history` rather than its own copy of the course, which
- * is what lets it survive leaving and re-opening the parent (and a reload —
- * parentCourseId is persisted). The background watcher that already keeps the
- * rail's "Generating" state fresh is the only thing polling.
+ * Everything else in this column is drawn RELATIVE to the open course — the
+ * course above it, the ones building from it — so opening the fourth course of
+ * eight made the first three disappear and nothing said which one you were on.
+ * This is the one element that shows the whole chain regardless of which link
+ * is open, marks the current one, and jumps to any other.
+ *
+ * Sticky, because "which topic am I on" is a question you ask halfway down a
+ * lesson, not at the top of the page.
  */
-function FollowUpThread({
-  parentTopic, parentTopicScores, followUps, onOpen, scrollToId, onScrolled,
-  selectedLessonFor, onSelectLesson,
+function PathBreadcrumb({
+  steps, activeId, onOpen,
 }: {
-  parentTopic: string;
-  // The parent's graded per-topic scores, when its quiz has been taken — the
-  // "before" half of a repair follow-up's result.
-  parentTopicScores?: { topic: string; pct: number }[] | null;
-  followUps: HistoryEntry[];
+  steps: HistoryEntry[];
+  activeId: string | null;
   onOpen: (entry: HistoryEntry) => void;
-  scrollToId: string | null;
-  onScrolled: () => void;
-  /** Which lesson of a given follow-up the player is on. */
-  selectedLessonFor: (courseId: string) => number;
-  onSelectLesson: (courseId: string, lesson: number) => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const activeRef = useRef<HTMLButtonElement>(null);
+  const activeIndex = steps.findIndex((s) => s.id === activeId);
 
-  // One-shot scroll when a brand-new follow-up appears: the whole point of
-  // generating in place is that the user sees it start, and the panel is
-  // below the fold on every realistic viewport.
+  // Keep the current step visible when the strip is wider than the viewport —
+  // scrolls the strip only, never the page.
   useEffect(() => {
-    if (!scrollToId || !ref.current) return;
-    ref.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    onScrolled();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scrollToId]);
+    activeRef.current?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [activeId]);
 
-  if (followUps.length === 0) return null;
+  if (steps.length < 2) return null;
 
   return (
-    <div ref={ref} className="mt-5 scroll-mt-4">
-      {/* Lineage seam — makes "this came from the course above" visual rather
-          than something the copy has to explain. */}
-      <div className="flex items-center gap-3 px-1">
-        <span className="h-px flex-1 bg-gradient-to-r from-transparent via-white/[0.1] to-white/[0.1]" />
-        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#6E7389]">
-          <CornerDownRight className="h-3.5 w-3.5" />
-          {followUps.length === 1 ? "What this led to" : `${followUps.length} courses this led to`}
-        </span>
-        <span className="h-px flex-1 bg-gradient-to-l from-transparent via-white/[0.1] to-white/[0.1]" />
+    <div className="sticky top-0 z-20 -mx-4 mb-6 border-b border-white/[0.06] bg-[#0A0B10]/92 px-4 py-2.5 backdrop-blur-xl sm:-mx-8 sm:px-8">
+      <div className="flex items-baseline gap-2">
+        <span className={EYEBROW}>Your path</span>
+        {activeIndex >= 0 && (
+          <span className="text-[11px] tabular-nums text-[#6E7389]">
+            step {activeIndex + 1} of {steps.length}
+          </span>
+        )}
       </div>
 
-      <div className="mt-4 space-y-4">
-        {followUps.map((child) => (
-          <FollowUpCard
-            key={child.id}
-            parentTopic={parentTopic}
-            parentTopicScores={parentTopicScores}
-            entry={child}
-            onOpen={() => onOpen(child)}
-            selectedLesson={selectedLessonFor(child.id)}
-            onSelectLesson={(i) => onSelectLesson(child.id, i)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function FollowUpCard({ parentTopic, parentTopicScores, entry, onOpen, selectedLesson, onSelectLesson }: {
-  parentTopic: string;
-  parentTopicScores?: { topic: string; pct: number }[] | null;
-  entry: HistoryEntry;
-  onOpen: () => void;
-  selectedLesson: number;
-  onSelectLesson: (lesson: number) => void;
-}) {
-  // The history list carries no quiz score (only the course that's actually
-  // open gets one computed), so a finished follow-up's result is fetched here
-  // — that score is the whole point of showing the card after the fact.
-  const [fetchedPct, setFetchedPct] = useState<number | null>(null);
-  const tone = followUpTone(entry.followUpKind);
-  const statuses = entry.lessonStatuses ?? [];
-  const readyCount = statuses.filter((s) => s === "ready").length;
-  const failedCount = statuses.filter((s) => s === "failed").length;
-  const generating = statuses.length === 0 || statuses.some((s) => s === "generating");
-  const isPlayable = (i: number) => statuses[i] === "ready" && !!entry.lessons[i]?.code;
-  const firstPlayableIndex = entry.lessons.findIndex((_, i) => isPlayable(i));
-  // Fall back to the first playable lesson if the selected one isn't ready yet
-  // (e.g. the right-hand nav pointed at a lesson that has since been reset).
-  const playingIndex = isPlayable(selectedLesson) ? selectedLesson : firstPlayableIndex;
-  const playing = playingIndex >= 0 ? entry.lessons[playingIndex] : null;
-  // A repair follow-up is named after the parent lesson it targets, and the
-  // parent's quiz scored that same title — so the two line up directly.
-  const key = entry.fileName.trim().toLowerCase();
-  const before =
-    entry.followUpKind === "repair"
-      ? parentTopicScores?.find((t) => t.topic.trim().toLowerCase() === key)?.pct ?? null
-      : null;
-  const scored = entry.quizScore ?? fetchedPct;
-
-  const allReady = statuses.length > 0 && statuses.every((st) => st === "ready");
-  useEffect(() => {
-    if (!allReady || entry.quizScore !== null) return;
-    let alive = true;
-    getLatestAttempt(entry.id)
-      .then((a) => { if (alive && a) setFetchedPct(a.pct); })
-      .catch(() => { /* no attempt yet — the card simply shows no score */ });
-    return () => { alive = false; };
-  }, [entry.id, allReady, entry.quizScore]);
-
-  return (
-    <div className={cx(SURFACE, "relative overflow-hidden")}>
-      <span className="absolute inset-x-0 top-0 h-px" style={{ background: `linear-gradient(90deg, transparent, ${tone.color}66, transparent)` }} aria-hidden="true" />
-
-      <div className="flex flex-wrap items-start justify-between gap-3 p-5">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em]"
-              style={{ color: tone.color, background: `${tone.color}14` }}
-            >
-              <tone.Icon className="h-3 w-3" /> {tone.label}
-            </span>
-            {generating ? (
-              <span className="flex items-center gap-1.5 text-[11px] text-[#FFB08A]"><RecDot /> Generating</span>
-            ) : failedCount > 0 ? (
-              <span className="text-[11px] text-[#FF8A95]">{failedCount} lesson{failedCount === 1 ? "" : "s"} failed</span>
-            ) : (
-              <span className="flex items-center gap-1 text-[11px] text-[#3DDC97]"><CheckCircle2 className="h-3 w-3" /> Ready to watch</span>
-            )}
-            {typeof entry.creditCost === "number" && entry.creditCost > 0 && (
-              <span className="flex items-center gap-1 text-[11px] text-[#6E7389]">
-                <Zap className="h-3 w-3 text-[#FFB547]" /> {entry.creditCost} credits
-              </span>
-            )}
-            {scored !== null && (
-              <span className="font-mono text-[11px] text-[#3DDC97]">Quiz {scored}%</span>
-            )}
-          </div>
-
-          <p className="lu-serif mt-2 text-2xl leading-tight text-white sm:text-3xl">{cleanName(entry.fileName)}</p>
-          <p className="mt-1 truncate text-[11px] text-[#6E7389]">
-            Continued from “{cleanName(parentTopic)}”
-          </p>
-
-          {before !== null && scored !== null && (
-            <p className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-white/[0.03] px-2.5 py-1.5 text-[11px] ring-1 ring-inset ring-white/[0.06]">
-              <span className="text-[#6E7389]">On this topic</span>
-              <span className="font-mono text-[#FF8A95]">{before}%</span>
-              <ArrowRight className="h-3 w-3 text-[#4A4F63]" />
-              <span className="font-mono font-semibold" style={{ color: scored >= before ? C.mint : C.rose }}>{scored}%</span>
-              <span className="font-semibold" style={{ color: scored >= before ? C.mint : C.rose }}>
-                ({scored >= before ? "+" : ""}{scored - before})
-              </span>
-            </p>
-          )}
-        </div>
-
-        <div className="flex shrink-0 flex-col items-stretch gap-1.5">
-          <button onClick={onOpen} className={cx(BTN_SOFT, "h-9 whitespace-nowrap")}>
-            {generating ? "Open while it builds" : <>Open its quiz <ArrowRight className="h-3.5 w-3.5" /></>}
-          </button>
-          {!generating && <span className="text-center text-[10px] text-[#4A4F63]">playing below</span>}
-        </div>
-      </div>
-
-      {/* While it builds: the same filmstrip the main stage uses, so the two
-          generations on this page animate identically. */}
-      {generating && (
-        <div className="px-5 pb-5">
-          {/* The filmstrip only while there's nothing to watch yet — once a
-              lesson lands, the player below replaces it and the bar keeps
-              reporting the rest. */}
-          {firstPlayableIndex < 0 && (
-            <div className="overflow-hidden rounded-2xl ring-1 ring-white/[0.07]">
-              {entry.lessons[0]?.sceneProgress?.length
-                ? <SceneTimeline sceneProgress={entry.lessons[0].sceneProgress!} />
-                : <GeneratingStage />}
-            </div>
-          )}
-          {statuses.length > 0 && (
-            <div className={cx("flex items-center gap-2", firstPlayableIndex < 0 && "mt-3")}>
-              <div className="flex flex-1 gap-1" aria-hidden="true">
-                {statuses.map((st, i) => (
+      <div className="lu-scroll mt-1.5 flex items-center gap-1 overflow-x-auto pb-1">
+        {steps.map((step, i) => {
+          const isActive = step.id === activeId;
+          const statuses = step.lessonStatuses ?? [];
+          const building = statuses.length === 0 || statuses.some((s) => s === "generating");
+          return (
+            <div key={step.id} className="flex shrink-0 items-center gap-1">
+              {i > 0 && <ChevronRight className="h-3 w-3 shrink-0 text-[#3E4253]" aria-hidden="true" />}
+              <button
+                ref={isActive ? activeRef : undefined}
+                onClick={() => !isActive && onOpen(step)}
+                aria-current={isActive ? "step" : undefined}
+                title={cleanName(step.fileName)}
+                className={cx(
+                  "flex max-w-[190px] shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+                  isActive
+                    ? "cursor-default bg-[#8B7CFF] text-[#0A0B10]"
+                    : "bg-white/[0.04] text-[#B9BCCB] ring-1 ring-inset ring-white/[0.06] hover:bg-white/[0.09] hover:text-white"
+                )}
+              >
+                <span
+                  className={cx(
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded font-mono text-[9px] font-bold",
+                    isActive ? "bg-[#0A0B10]/25 text-[#0A0B10]" : "bg-white/[0.07] text-[#8A8FA3]"
+                  )}
+                >
+                  {i + 1}
+                </span>
+                <span className="truncate text-[12px] font-medium">{cleanName(step.fileName)}</span>
+                {building ? (
+                  <Loader2 className={cx("h-3 w-3 shrink-0 animate-spin", isActive ? "text-[#0A0B10]" : "text-[#FFB08A]")} />
+                ) : step.quizScore !== null ? (
                   <span
-                    key={i}
-                    className={cx(
-                      "h-1.5 flex-1 rounded-full transition-colors duration-500",
-                      st === "ready" ? "bg-[#3DDC97]" : st === "failed" ? "bg-[#FF5C6C]" : st === "generating" ? "bg-[#8B7CFF]/40" : "bg-white/[0.08]"
-                    )}
-                  />
-                ))}
-              </div>
-              <span className="shrink-0 text-[11px] tabular-nums text-[#6E7389]">{readyCount}/{statuses.length} lessons</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Plays in place as soon as there's something to play — the new course
-          sits directly under the one it came from, no navigation needed. */}
-      {playing?.code && (
-        <div className="px-5 pb-5">
-          {statuses.length > 1 && (
-            <div className="mb-3 flex flex-wrap items-center gap-1.5">
-              {entry.lessons.map((l, i) => {
-                const playableHere = isPlayable(i);
-                const current = i === playingIndex;
-                return (
-                  <button
-                    key={l.id}
-                    disabled={!playableHere}
-                    onClick={() => onSelectLesson(i)}
-                    title={l.title}
-                    className={cx(
-                      "flex h-7 min-w-7 items-center justify-center rounded-lg px-2 font-mono text-[11px] font-semibold transition-colors",
-                      current
-                        ? "bg-[#8B7CFF] text-[#0A0B10]"
-                        : playableHere
-                        ? "bg-white/[0.05] text-[#B9BCCB] ring-1 ring-inset ring-white/[0.08] hover:bg-white/[0.1] hover:text-white"
-                        : "cursor-not-allowed bg-white/[0.02] text-[#3E4253]"
-                    )}
+                    className="shrink-0 font-mono text-[10px]"
+                    style={{ color: isActive ? "#0A0B10" : bandFor(step.quizScore).color }}
                   >
-                    {statuses[i] === "generating" ? <Loader2 className="h-3 w-3 animate-spin" /> : pad2(i + 1)}
-                  </button>
-                );
-              })}
+                    {step.quizScore}%
+                  </span>
+                ) : null}
+              </button>
             </div>
-          )}
-          <div className="overflow-hidden rounded-2xl ring-1 ring-white/[0.08]">
-            <PlayerErrorBoundary resetKey={playing.code}>
-              <DynamicPlayer code={playing.code} durationInFrames={playing.totalFrames ?? 3600} scenes={playing.scenes} />
-            </PlayerErrorBoundary>
-          </div>
-          <p className="mt-2 text-[12px] text-[#D6D8E2]">
-            <span className="font-mono text-[11px] text-[#6E7389]">{pad2(playingIndex + 1)}</span> {playing.title}
-          </p>
-        </div>
-      )}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -3087,129 +2992,243 @@ function LibraryRail({ history, activeId, onSelect, onNew, onDelete, collapsed, 
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Syllabus (course outline)
-// ─────────────────────────────────────────────────────────────────────────────
-
 /**
- * A follow-up course as a continuation of the open course's syllabus. Drawn as
- * a branch off the same rail the lesson list uses, so the two generations read
- * as one path instead of two unrelated courses that happen to be open.
- *
- * Selecting a lesson here drives the inline player further down the page — it
- * does not switch courses, which is the whole point of the connection.
+ * One lesson row. Shared by every course in the path so a lesson looks and
+ * behaves the same whether it belongs to the course whose stage is open or to
+ * one playing in a card above/below it — the whole point of having a single
+ * syllabus instead of one per course.
  */
-function FollowUpSyllabus({ entry, selectedLesson, onSelectLesson }: {
-  entry: HistoryEntry;
-  selectedLesson: number | null;
-  onSelectLesson: (lesson: number) => void;
+function SyllabusLessonRow({
+  lesson, index, status, isActive, progress, compact, onSelect,
+}: {
+  lesson: Lesson;
+  index: number;
+  status: LessonStatus | undefined;
+  isActive: boolean;
+  progress?: number;
+  compact?: boolean;
+  onSelect: () => void;
 }) {
-  const statuses = entry.lessonStatuses ?? [];
-  const tone = followUpTone(entry.followUpKind);
-  const readyCount = statuses.filter((st) => st === "ready").length;
-  const generating = statuses.length === 0 || statuses.some((st) => st === "generating");
+  const locked = status === "locked";
+  const playable = status === "ready";
+  const size = compact ? "h-7 w-7" : "h-8 w-8";
 
   return (
-    <div className="mt-6">
-      <div className="mb-2 flex items-center gap-2 px-2">
-        <CornerDownRight className="h-3.5 w-3.5 shrink-0" style={{ color: tone.color }} />
-        <p className={cx(EYEBROW, "min-w-0 truncate")}>
-          {entry.followUpKind === "repair" ? "Gap you went back for" : "Where you went next"}
-        </p>
-      </div>
-
-      <div className="px-2">
-        <p className="truncate text-[13px] font-medium text-white">{cleanName(entry.fileName)}</p>
-        <p className="mt-0.5 text-[11px] text-[#6E7389]">
-          {generating
-            ? statuses.length === 0 ? "Planning lessons…" : `Building · ${readyCount}/${statuses.length} ready`
-            : `${statuses.length} lesson${statuses.length === 1 ? "" : "s"} · plays below`}
-        </p>
-      </div>
-
-      <ol className="relative mt-2 ml-[18px] border-l border-white/[0.08] pl-1.5">
-        {entry.lessons.map((lesson, i) => {
-          const status = statuses[i];
-          const playable = status === "ready" && !!lesson.code;
-          const isActive = selectedLesson !== null && selectedLesson === i && playable;
-          return (
-            <li key={lesson.id}>
-              <button
-                disabled={!playable}
-                onClick={() => playable && onSelectLesson(i)}
-                className={cx(
-                  "relative flex w-full items-start gap-2.5 rounded-xl px-2 py-2 text-left transition-colors",
-                  isActive ? "bg-[#8B7CFF]/[0.1]" : playable ? "hover:bg-white/[0.04]" : "cursor-not-allowed opacity-55"
-                )}
-              >
-                <span className="absolute -left-1.5 top-1/2 h-px w-1.5 bg-white/[0.09]" aria-hidden="true" />
-                <span className="relative z-10 shrink-0 pt-0.5">
-                  {status === "ready" ? (
-                    isActive ? (
-                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#8B7CFF] shadow-[0_0_16px_-3px_rgba(139,124,255,0.9)]">
-                        <Play className="ml-0.5 h-2.5 w-2.5 fill-[#0A0B10] text-[#0A0B10]" />
-                      </span>
-                    ) : (
-                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#0C0D13] font-mono text-[10px] text-[#8A8FA3] ring-1 ring-white/[0.12]">
-                        {pad2(i + 1)}
-                      </span>
-                    )
-                  ) : status === "failed" ? (
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#FF5C6C]/10 ring-1 ring-[#FF5C6C]/30">
-                      <XCircle className="h-3 w-3 text-[#FF5C6C]" />
-                    </span>
-                  ) : (
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#0C0D13] ring-1 ring-white/[0.1]">
-                      <Loader2 className="h-3 w-3 animate-spin text-[#FFB08A]" />
-                    </span>
-                  )}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className={cx("line-clamp-2 text-[12px] leading-snug", isActive ? "font-semibold text-white" : status === "failed" ? "text-[#FF8A95]" : "text-[#C9CCD8]")}>
-                    {lesson.title}
-                  </span>
-                  <span className="mt-0.5 block text-[10px]">
-                    {status === "ready" ? (
-                      lessonDuration(lesson) ? (
-                        <span className="flex items-center gap-1 text-[#6E7389]"><Clock className="h-2.5 w-2.5" /> {lessonDuration(lesson)}</span>
-                      ) : null
-                    ) : status === "failed" ? (
-                      <span className="text-[#FF8A95]">Generation failed</span>
-                    ) : (
-                      <span className="text-[#FFB08A]">Generating…</span>
-                    )}
-                  </span>
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
-    </div>
+    <li>
+      <button
+        disabled={locked || status === "generating"}
+        onClick={() => { if (playable) onSelect(); }}
+        className={cx(
+          "relative flex w-full items-start gap-3 rounded-xl px-2 py-2.5 text-left transition-colors",
+          isActive ? "bg-[#8B7CFF]/[0.1]" : locked || status === "generating" ? "cursor-not-allowed opacity-60" : "hover:bg-white/[0.04]"
+        )}
+      >
+        <span className="relative z-10 shrink-0">
+          {lesson.completed && playable ? (
+            <span className={cx("flex items-center justify-center rounded-full bg-[#3DDC97]/15 ring-1 ring-[#3DDC97]/40", size)}>
+              <Check className="h-3.5 w-3.5 text-[#3DDC97]" strokeWidth={3} />
+            </span>
+          ) : locked ? (
+            <span className={cx("flex items-center justify-center rounded-full bg-[#FFB547]/10 ring-1 ring-[#FFB547]/30", size)}>
+              <Lock className="h-3.5 w-3.5 text-[#FFB547]" />
+            </span>
+          ) : status === "failed" ? (
+            <span className={cx("flex items-center justify-center rounded-full bg-[#FF5C6C]/10 ring-1 ring-[#FF5C6C]/30", size)}>
+              <XCircle className="h-3.5 w-3.5 text-[#FF5C6C]" />
+            </span>
+          ) : status === "generating" ? (
+            <span className="block rounded-full bg-[#0C0D13]">
+              <Ring value={progress ?? 0} size={compact ? 28 : 32} stroke={2.5} color={C.ember}>
+                <span className="font-mono text-[9px] font-semibold text-[#FFB08A]">{Math.round(progress ?? 0)}</span>
+              </Ring>
+            </span>
+          ) : isActive ? (
+            <span className={cx("flex items-center justify-center rounded-full bg-[#8B7CFF] shadow-[0_0_20px_-2px_rgba(139,124,255,0.8)]", size)}>
+              <Play className="ml-0.5 h-3 w-3 fill-[#0A0B10] text-[#0A0B10]" />
+            </span>
+          ) : (
+            <span className={cx("flex items-center justify-center rounded-full bg-[#0C0D13] font-mono text-[11px] text-[#8A8FA3] ring-1 ring-white/[0.12]", size)}>
+              {pad2(index + 1)}
+            </span>
+          )}
+        </span>
+        <span className="min-w-0 flex-1 pt-0.5">
+          <span className={cx("line-clamp-2 leading-snug", compact ? "text-[12px]" : "text-[13px]", isActive ? "font-semibold text-white" : status === "failed" ? "text-[#FF8A95]" : "text-[#D6D8E2]")}>
+            {lesson.title}
+          </span>
+          <span className="mt-1 block text-[11px]">
+            {locked ? (
+              <span className="text-[#FFB547]">Contact us to unlock</span>
+            ) : status === "generating" ? (
+              <span className="text-[#FFB08A]">Generating…</span>
+            ) : status === "failed" ? (
+              <span className="text-[#FF8A95]">Generation failed</span>
+            ) : lessonDuration(lesson) ? (
+              <span className="flex items-center gap-1 text-[#6E7389]"><Clock className="h-3 w-3" /> {lessonDuration(lesson)}</span>
+            ) : null}
+          </span>
+        </span>
+      </button>
+    </li>
   );
 }
 
+/**
+ * The whole learning path in one panel: every course in the chain, in order,
+ * with all of its lessons clickable from the same place. Previously each
+ * course carried its own syllabus, so two generations in the same path were
+ * two unrelated navigations.
+ *
+ * A lesson of the open course drives the main stage; a lesson of any other
+ * course drives that course's inline player (above the stage if it came
+ * before, below if it came after). Either way the user never leaves the page.
+ */
 function SyllabusPanel({
   open, isMobile, onClose, loading, lessons, lessonStatuses, lessonProgresses, activeSection, activeLesson,
   allLessonsReady, quizDone, quizCount, quizScore, onSelectLesson, onSelectQuiz, onSelectResults,
-  followUps, followUpSelection, onSelectFollowUpLesson,
+  activeTopic, pathBefore, pathAfter, onSelectPathLesson, onOpenCourse,
 }: {
   open: boolean; isMobile: boolean; onClose: () => void; loading: boolean;
   lessons: Lesson[]; lessonStatuses: LessonStatus[]; lessonProgresses: number[];
   activeSection: CourseSection; activeLesson: number; allLessonsReady: boolean; quizDone: boolean;
   quizCount: number; quizScore: number | null;
   onSelectLesson: (i: number) => void; onSelectQuiz: () => void; onSelectResults: () => void;
-  // Courses generated from this one's results. Listed as a continuation of the
-  // same syllabus rather than a separate library item, because that's how the
-  // page plays them — in one scroll, under the course they came from.
-  followUps: HistoryEntry[];
-  followUpSelection: { courseId: string; lesson: number } | null;
-  onSelectFollowUpLesson: (courseId: string, lesson: number) => void;
+  /** Title of the course whose stage is open. */
+  activeTopic: string;
+  /** Courses before it in the chain, oldest first; and the ones after it. */
+  pathBefore: HistoryEntry[];
+  pathAfter: HistoryEntry[];
+  onSelectPathLesson: (courseId: string, lesson: number) => void;
+  /** Opens another course of the path, optionally straight to a section. */
+  onOpenCourse: (entry: HistoryEntry, section?: CourseSection) => void;
 }) {
+  const hasPath = pathBefore.length > 0 || pathAfter.length > 0;
+
+  // In a deep thread the "next" courses are no longer all children of the open
+  // one — a grandchild listed flat under its grandparent reads as a sibling
+  // unless it names where it actually came from.
+  // Same numbering the breadcrumb uses, so "step 4 of 8" up there and the
+  // chips in here refer to the same thing.
+  const stepOf = (entry: HistoryEntry) => {
+    const before = pathBefore.findIndex((c) => c.id === entry.id);
+    if (before >= 0) return before + 1;
+    const after = pathAfter.findIndex((c) => c.id === entry.id);
+    if (after >= 0) return pathBefore.length + 2 + after;
+    return null;
+  };
+  const activeStep = pathBefore.length + 1;
+  const totalSteps = pathBefore.length + 1 + pathAfter.length;
+
+  const parentNameOf = (entry: HistoryEntry) => {
+    if (!entry.parentCourseId) return null;
+    const direct = [...pathBefore, ...pathAfter].find((c) => c.id === entry.parentCourseId);
+    return direct ? cleanName(direct.fileName) : null;
+  };
+
+  const courseBlock = (entry: HistoryEntry, relation: "previous" | "next") => {
+    const statuses = entry.lessonStatuses ?? [];
+    const tone = followUpTone(entry.followUpKind);
+    const readyCount = statuses.filter((st) => st === "ready").length;
+    const generating = statuses.length === 0 || statuses.some((st) => st === "generating");
+
+    return (
+      <div key={entry.id} className="mt-5">
+        <div className="mb-1.5 flex items-center gap-1.5 px-2">
+          <CornerDownRight
+            className={cx("h-3.5 w-3.5 shrink-0", relation === "previous" && "rotate-180")}
+            style={relation === "next" ? { color: tone.color } : { color: "#6E7389" }}
+          />
+          <p className={cx(EYEBROW, "min-w-0 truncate text-[10px]")}>
+            {relation === "previous"
+              ? "Came before"
+              : entry.followUpKind === "repair" ? "Gap you went back for" : "Where you went next"}
+          </p>
+        </div>
+
+        <button onClick={() => onOpenCourse(entry)} className="w-full px-2 text-left">
+          <p className="flex items-center gap-1.5 text-[13px] font-medium text-white">
+            {stepOf(entry) !== null && (
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-white/[0.07] font-mono text-[9px] font-bold text-[#8A8FA3]">
+                {stepOf(entry)}
+              </span>
+            )}
+            <span className="truncate hover:underline">{cleanName(entry.fileName)}</span>
+          </p>
+          <p className="mt-0.5 text-[11px] text-[#6E7389]">
+            {generating
+              ? statuses.length === 0 ? "Planning lessons…" : `Building · ${readyCount}/${statuses.length} ready`
+              : `${statuses.length} lesson${statuses.length === 1 ? "" : "s"}${entry.quizScore !== null ? ` · quiz ${entry.quizScore}%` : ""}`}
+          </p>
+          {relation === "next" && parentNameOf(entry) && (
+            <p className="mt-0.5 flex items-center gap-1 truncate text-[10px] text-[#555A6E]">
+              <CornerDownRight className="h-2.5 w-2.5 shrink-0" /> from {parentNameOf(entry)}
+            </p>
+          )}
+        </button>
+
+        <ol className="relative ml-[18px] mt-1 border-l border-white/[0.08] pl-1">
+          {entry.lessons.map((lesson, i) => (
+            <div key={lesson.id} className="relative">
+              <span className="absolute -left-1 top-1/2 h-px w-1 bg-white/[0.09]" aria-hidden="true" />
+              <SyllabusLessonRow
+                lesson={lesson}
+                index={i}
+                status={statuses[i]}
+                isActive={false}
+                compact
+                onSelect={() => onSelectPathLesson(entry.id, i)}
+              />
+            </div>
+          ))}
+
+          {/* This course's own assessment, on the same rail as its lessons —
+              a quiz lives where the lessons it tests live, rather than behind
+              a button on the card further down the page. Opening it is the
+              one thing that does switch the stage, since a quiz can't be
+              taken inline. */}
+          <div className="relative">
+            <span className="absolute -left-1 top-1/2 h-px w-1 bg-white/[0.09]" aria-hidden="true" />
+            <button
+              disabled={generating}
+              onClick={() => onOpenCourse(entry, entry.quizDone ? "results" : "quiz")}
+              className={cx(
+                "flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors",
+                generating ? "cursor-not-allowed opacity-50" : "hover:bg-white/[0.04]"
+              )}
+            >
+              <span className={cx("flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-1", entry.quizDone ? "bg-[#3DDC97]/10 ring-[#3DDC97]/30" : "bg-white/[0.03] ring-white/[0.1]")}>
+                {entry.quizDone
+                  ? <Trophy className="h-3.5 w-3.5 text-[#FFB547]" />
+                  : <ClipboardList className={cx("h-3.5 w-3.5", generating ? "text-[#6E7389]" : "text-[#B9BCCB]")} />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12px] font-medium text-white">
+                  {entry.quizDone ? "Results" : "Final quiz"}
+                </span>
+                <span className="block text-[10px] text-[#6E7389]">
+                  {generating
+                    ? "After its lessons"
+                    : entry.quizScore !== null
+                    ? `Readiness ${entry.quizScore}%`
+                    : entry.questions.length > 0
+                    ? `${entry.questions.length} question${entry.questions.length === 1 ? "" : "s"}`
+                    : entry.mcqCount
+                    ? `${entry.mcqCount} questions`
+                    : "Questions coming"}
+                </span>
+              </span>
+              {generating ? <Lock className="h-3 w-3 shrink-0 text-[#555A6E]" /> : <ArrowRight className="h-3 w-3 shrink-0 text-[#6E7389]" />}
+            </button>
+          </div>
+        </ol>
+      </div>
+    );
+  };
+
   const body = (
     <aside className={cx("flex h-full min-h-0 flex-col border-l border-white/[0.06] bg-[#0C0D13] text-[#ECEDF2]", isMobile ? "w-[86vw] max-w-[320px]" : "w-[320px]")}>
       <div className="flex items-center justify-between px-5 pb-2 pt-5">
-        <p className={EYEBROW}>Syllabus</p>
+        <p className={EYEBROW}>{hasPath ? "Learning path" : "Syllabus"}</p>
         {isMobile && (
           <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-[#8A8FA3] hover:bg-white/[0.06] hover:text-white" aria-label="Close syllabus">
             <X className="h-4 w-4" />
@@ -3218,6 +3237,24 @@ function SyllabusPanel({
       </div>
 
       <nav className="lu-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+        {pathBefore.map((entry) => courseBlock(entry, "previous"))}
+
+        {hasPath && (
+          <div className="mb-1.5 mt-5 flex items-center gap-1.5 px-2">
+            <Play className="h-3 w-3 shrink-0 fill-[#B4A9FF] text-[#B4A9FF]" />
+            <p className={cx(EYEBROW, "min-w-0 flex-1 truncate text-[10px] text-[#B4A9FF]")}>Open now</p>
+            <span className="shrink-0 text-[10px] tabular-nums text-[#6E7389]">step {activeStep} of {totalSteps}</span>
+          </div>
+        )}
+        {hasPath && (
+          <p className="mb-1 flex items-center gap-1.5 px-2 text-[13px] font-medium text-white">
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-[#8B7CFF] font-mono text-[9px] font-bold text-[#0A0B10]">
+              {activeStep}
+            </span>
+            <span className="truncate">{cleanName(activeTopic)}</span>
+          </p>
+        )}
+
         {loading ? (
           <div className="space-y-3 px-2 pt-2" aria-hidden="true">
             {Array.from({ length: lessons.length || 6 }).map((_, i) => (
@@ -3230,60 +3267,17 @@ function SyllabusPanel({
         ) : (
           <ol className="relative">
             <span className="absolute bottom-6 left-[23.5px] top-6 w-px bg-white/[0.07]" aria-hidden="true" />
-            {lessons.map((lesson, i) => {
-              const status = lessonStatuses[i];
-              const isActive = activeSection === "video" && activeLesson === i;
-              const locked = status === "locked";
-              const progress = lessonProgresses[i] ?? 0;
-              return (
-                <li key={lesson.id}>
-                  <button
-                    disabled={locked}
-                    onClick={() => !locked && onSelectLesson(i)}
-                    className={cx(
-                      "relative flex w-full items-start gap-3 rounded-xl px-2 py-2.5 text-left transition-colors",
-                      isActive ? "bg-[#8B7CFF]/[0.1]" : locked ? "cursor-not-allowed opacity-60" : "hover:bg-white/[0.04]"
-                    )}
-                  >
-                    <span className="relative z-10 shrink-0">
-                      {lesson.completed ? (
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#3DDC97]/15 ring-1 ring-[#3DDC97]/40"><Check className="h-3.5 w-3.5 text-[#3DDC97]" strokeWidth={3} /></span>
-                      ) : locked ? (
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#FFB547]/10 ring-1 ring-[#FFB547]/30"><Lock className="h-3.5 w-3.5 text-[#FFB547]" /></span>
-                      ) : status === "failed" ? (
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#FF5C6C]/10 ring-1 ring-[#FF5C6C]/30"><XCircle className="h-3.5 w-3.5 text-[#FF5C6C]" /></span>
-                      ) : status === "generating" ? (
-                        <span className="block rounded-full bg-[#0C0D13]">
-                          <Ring value={progress} size={32} stroke={2.5} color={C.ember}>
-                            <span className="font-mono text-[9px] font-semibold text-[#FFB08A]">{Math.round(progress)}</span>
-                          </Ring>
-                        </span>
-                      ) : isActive ? (
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#8B7CFF] shadow-[0_0_20px_-2px_rgba(139,124,255,0.8)]"><Play className="ml-0.5 h-3 w-3 fill-[#0A0B10] text-[#0A0B10]" /></span>
-                      ) : (
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#0C0D13] font-mono text-[11px] text-[#8A8FA3] ring-1 ring-white/[0.12]">{pad2(i + 1)}</span>
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1 pt-0.5">
-                      <span className={cx("line-clamp-2 text-[13px] leading-snug", isActive ? "font-semibold text-white" : status === "failed" ? "text-[#FF8A95]" : "text-[#D6D8E2]")}>
-                        {lesson.title}
-                      </span>
-                      <span className="mt-1 block text-[11px]">
-                        {locked ? (
-                          <span className="text-[#FFB547]">Contact us to unlock</span>
-                        ) : status === "generating" ? (
-                          <span className="text-[#FFB08A]">Generating…</span>
-                        ) : status === "failed" ? (
-                          <span className="text-[#FF8A95]">Generation failed</span>
-                        ) : lessonDuration(lesson) ? (
-                          <span className="flex items-center gap-1 text-[#6E7389]"><Clock className="h-3 w-3" /> {lessonDuration(lesson)}</span>
-                        ) : null}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
+            {lessons.map((lesson, i) => (
+              <SyllabusLessonRow
+                key={lesson.id}
+                lesson={lesson}
+                index={i}
+                status={lessonStatuses[i]}
+                isActive={activeSection === "video" && activeLesson === i}
+                progress={lessonProgresses[i] ?? 0}
+                onSelect={() => onSelectLesson(i)}
+              />
+            ))}
           </ol>
         )}
 
@@ -3302,7 +3296,9 @@ function SyllabusPanel({
             </span>
             <span className="min-w-0 flex-1">
               <span className="block text-[13px] font-medium text-white">Final quiz</span>
-              <span className="block text-[11px] text-[#6E7389]">{quizCount || 20} questions</span>
+              <span className="block text-[11px] text-[#6E7389]">
+                {quizCount > 0 ? `${quizCount} question${quizCount === 1 ? "" : "s"}` : "Questions coming"}
+              </span>
             </span>
             {!allLessonsReady && <Lock className="h-3 w-3 text-[#555A6E]" />}
           </button>
@@ -3325,14 +3321,7 @@ function SyllabusPanel({
           </button>
         </div>
 
-        {followUps.map((child) => (
-          <FollowUpSyllabus
-            key={child.id}
-            entry={child}
-            selectedLesson={followUpSelection?.courseId === child.id ? followUpSelection.lesson : null}
-            onSelectLesson={(i) => onSelectFollowUpLesson(child.id, i)}
-          />
-        ))}
+        {pathAfter.map((entry) => courseBlock(entry, "next"))}
       </nav>
     </aside>
   );
@@ -3420,18 +3409,9 @@ export default function AILearningPage() {
   const [startingFollowUp, setStartingFollowUp] = useState(false);
   const startingFollowUpRef = useRef(false);
   const [startingFollowUpLabel, setStartingFollowUpLabel] = useState("");
-  // Which lesson of which follow-up the inline player is on. Shared with the
-  // syllabus panel so one nav drives both generations.
-  const [followUpSelection, setFollowUpSelection] = useState<{ courseId: string; lesson: number } | null>(null);
-  // Follow-ups already seen playable, so a course that finished in an earlier
-  // session doesn't yank the view around on open — only a completion that
-  // happens while the user is sitting here does.
-  const followUpSeenPlayableRef = useRef<Set<string>>(new Set());
-  const followUpSeededRef = useRef(false);
+
   const [followUpError, setFollowUpError] = useState<string | null>(null);
-  // Set to a brand-new follow-up's id so its panel scrolls itself into view
-  // once, then cleared.
-  const [scrollToFollowUpId, setScrollToFollowUpId] = useState<string | null>(null);
+
   const [failureBanner, setFailureBanner] = useState<{ lessonIndex: number; title: string; error: string | null } | null>(null);
   const seenFailuresRef = useRef<Set<number>>(new Set());
 
@@ -3500,6 +3480,9 @@ export default function AILearningPage() {
     setLessons((prev) => prev.map((l, i) => mergeLesson(l, course.lessons[i])));
     if (course.lessons.length > 0) setLessonStatuses(course.lessons.map((l) => mapStatus(l?.status)));
     if (course.questions?.length) setQuizQuestions(course.questions);
+    // The course-level status drives the quiz section's "still being written"
+    // vs "it failed" split, so it has to track the poll, not just the lessons.
+    setHistory((prev) => prev.map((e) => (e.id === course._id ? { ...e, status: course.status } : e)));
   };
 
   // Keeps a course's SIDEBAR ENTRY up to date after the user has moved off it.
@@ -3525,6 +3508,7 @@ export default function AILearningPage() {
         // "Generating" line for the first half-minute of every new course.
         lessonStatuses: statuses.length ? statuses : e.lessonStatuses,
         questions: course.questions?.length ? course.questions : e.questions,
+        status: course.status,
       }));
       // Done — stop holding the handle so a later revisit can watch it again.
       // Keyed off the course's own status, not "are any lessons generating":
@@ -3573,6 +3557,8 @@ export default function AILearningPage() {
       parentCourseId: c.parentCourseId ?? null,
       followUpKind: c.followUpKind ?? null,
       creditCost: c.creditCost,
+      status: c.status,
+      mcqCount: c.mcqCount,
     };
   };
 
@@ -3804,15 +3790,15 @@ export default function AILearningPage() {
     }
   };
 
-  // Results → next course, generated IN PLACE: the open course keeps its
-  // scroll position and its results, and the new one builds in a panel below
-  // it (see FollowUpThread) so both are on screen at once. Deliberately not
-  // runGeneration, which takes over the whole stage and would throw away the
-  // results page the user just acted on.
+  // Results → next course. The new course becomes the open one, so the page
+  // lands on its build-in-progress stage with the path breadcrumb showing it
+  // as the newest step. Staying on the parent's results instead left the
+  // thing the user just paid for below the fold.
   //
-  // No level assessment either — the quiz we just graded is a better signal
-  // than the chat. Credits are spent server-side by checkCredits on this
-  // request; nothing here deducts anything locally.
+  // Still not runGeneration: that path resets the stage from scratch and runs
+  // the level-assessment chat. Here the quiz we just graded IS the level
+  // signal, so generation starts immediately. Credits are spent server-side
+  // by checkCredits on this request; nothing here deducts anything locally.
   const startFollowUpCourse = async (
     topic: string, tierKey: string, level: Level, kind: "repair" | "extend"
   ) => {
@@ -3841,19 +3827,22 @@ export default function AILearningPage() {
       const placeholder = buildMockLessons(lessonCount).map((l) => ({
         ...l, completed: false, videoUrl: null, code: null, totalFrames: null,
       }));
-      setHistory((prev) => [{
+      const newCourse: HistoryEntry = {
         id: courseId, fileName: topic, createdAt: new Date(),
         completedLessons: 0, quizScore: null,
         lessons: placeholder, lessonStatuses: placeholder.map(() => "generating" as LessonStatus),
         quizAnswers: [], quizDone: false, questions: [],
         parentCourseId: parentId, followUpKind: kind,
         creditCost: tier?.creditCost,
+        status: "generating", mcqCount: tier?.mcqCount,
         timeAllocationMinutes: tier?.timeAllocationMinutes ?? 30,
-      }, ...prev]);
-      // The same watcher that keeps the rail's "Generating" state fresh also
-      // feeds the inline panel — one poll per course, no second mechanism.
-      watchCourseInBackground(courseId);
-      setScrollToFollowUpId(courseId);
+      };
+      setHistory((prev) => [newCourse, ...prev]);
+      // Open it. restoreEntry hands the course we're leaving to a background
+      // watcher, points the URL at the new one, and — because its status is
+      // "generating" — starts the foreground poll that drives the build
+      // progress on screen. No background watcher needed here as well.
+      restoreEntry(newCourse);
     } catch (err) {
       console.error(err);
       // startCourseGeneration attaches the HTTP status so a 402 (out of
@@ -3890,8 +3879,16 @@ export default function AILearningPage() {
     setLessonStatuses(entry.lessonStatuses ?? entry.lessons.map(() => "ready"));
     setQuizAnswers(entry.quizAnswers); setQuizDone(entry.quizDone); setQuizQuestions(entry.questions ?? []);
     setServerQuizResult(entry.serverQuizResult ?? null);
-    setActiveSection(entry.quizDone ? "results" : "video"); setActiveLesson(0); setPhase("course");
-    if (entry.lessonStatuses?.some((s) => s === "generating")) {
+    // Always the videos, even for a course whose quiz is long done: opening a
+    // course from the library means "show me what's in it", and landing on a
+    // score hides every lesson behind a back-click. Results stay one click
+    // away in the syllabus, for whoever actually wants them.
+    setActiveSection("video"); setActiveLesson(0); setPhase("course");
+    // "Every lesson is ready" is NOT "the course is finished": the quiz is
+    // written after the last lesson, so a course can sit in `generating` with
+    // nothing left to show in the lesson list. Polling only on lesson state
+    // meant the quiz never arrived without a reload.
+    if (entry.status === "generating" || entry.lessonStatuses?.some((s) => s === "generating")) {
       pollCancelRef.current = pollCourse(entry.id, applyCourseUpdate);
     } else if (entry.lessons.some((l) => l.code == null)) {
       // The list endpoint omits heavy lesson code — fetch it once, on open.
@@ -3939,26 +3936,29 @@ export default function AILearningPage() {
   const courseProgress = lessons.length ? (completedCount / lessons.length) * 100 : 0;
   const generatingCount = lessonStatuses.filter((s) => s === "generating").length;
   const activeEntry = history.find((e) => e.id === activeHistoryId);
-  // Courses spawned from the open one, oldest first so the thread reads in
-  // the order it happened. Memoised because the auto-show effect below keys
-  // off it — a fresh array every render would re-run that effect constantly.
-  const followUpChildren = useMemo(
-    () => (activeHistoryId
-      ? history
-          .filter((e) => e.parentCourseId === activeHistoryId)
-          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
-      : []),
-    [history, activeHistoryId]
-  );
-
-  // Switching courses resets the inline player and re-arms the auto-show for
-  // whatever the newly-opened course has spawned. Declared before the
-  // auto-show effect below so it runs first on an activeHistoryId change.
-  useEffect(() => {
-    setFollowUpSelection(null);
-    followUpSeenPlayableRef.current = new Set();
-    followUpSeededRef.current = false;
-  }, [activeHistoryId]);
+  // EVERYTHING generated under the open course — children, grandchildren, the
+  // whole thread — in depth-first reading order, so one view and one syllabus
+  // cover the entire branch rather than stopping at the first generation.
+  // Memoised because the auto-show effect below keys off it; a fresh array
+  // every render would re-run that effect constantly.
+  const followUpChildren = useMemo(() => {
+    if (!activeHistoryId) return [];
+    const out: HistoryEntry[] = [];
+    const visited = new Set<string>([activeHistoryId]);
+    const walk = (parentId: string) => {
+      const kids = history
+        .filter((e) => e.parentCourseId === parentId)
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      for (const kid of kids) {
+        if (visited.has(kid.id)) continue; // cycle guard
+        visited.add(kid.id);
+        out.push(kid);
+        walk(kid.id);
+      }
+    };
+    walk(activeHistoryId);
+    return out;
+  }, [history, activeHistoryId]);
 
   // The chain of courses that led here, root first and the open course last —
   // what the results page charts as a learning path. `seen` guards against a
@@ -3977,38 +3977,66 @@ export default function AILearningPage() {
     return out;
   }, [history, activeHistoryId]);
 
-  const firstPlayableLesson = (entry: HistoryEntry) =>
-    entry.lessons.findIndex((l, i) => entry.lessonStatuses?.[i] === "ready" && !!l.code);
-
-  // Point the inline player at a follow-up lesson and make sure the layout is
-  // the one the user asked for: the course they came from playing on top, the
-  // new one playing underneath.
-  const selectFollowUpLesson = (courseId: string, lesson: number) => {
-    setFollowUpSelection({ courseId, lesson });
-    setActiveSection("video");
-    setScrollToFollowUpId(courseId);
-  };
-
-  // A follow-up finishing its first lesson opens itself — the point of
-  // generating in place is that nothing has to be clicked to see the result.
+  // The sidebar only holds the first page of courses, so a parent or child
+  // outside it used to be invisible until a reload happened to pull it in —
+  // which is why the previous course wouldn't appear above a follow-up. Ask
+  // the server for both directions whenever the open course changes.
   useEffect(() => {
-    const playable = followUpChildren.filter((c) => firstPlayableLesson(c) >= 0);
-    if (!followUpSeededRef.current) {
-      // First look at this course: adopt whatever was already finished without
-      // moving the view.
-      playable.forEach((c) => followUpSeenPlayableRef.current.add(c.id));
-      followUpSeededRef.current = true;
-      return;
-    }
-    const justLanded = playable.find((c) => !followUpSeenPlayableRef.current.has(c.id));
-    if (!justLanded) return;
-    // Never interrupt a quiz in progress — switching sections would throw
-    // away the answers in flight. Deliberately NOT marked as seen here, so
-    // the auto-show happens as soon as they're off the quiz.
-    if (activeSection === "quiz") return;
-    followUpSeenPlayableRef.current.add(justLanded.id);
-    selectFollowUpLesson(justLanded.id, firstPlayableLesson(justLanded));
-  }, [followUpChildren, activeSection]);
+    if (!activeHistoryId) return;
+    let alive = true;
+    getCourseLineage(activeHistoryId)
+      .then(({ ancestors, descendants }) => {
+        if (!alive) return;
+        const incoming = [...ancestors, ...descendants];
+        if (incoming.length === 0) return;
+        setHistory((prev) => {
+          const known = new Set(prev.map((e) => e.id));
+          // Existing entries win: they may already hold polled lesson code
+          // and live sceneProgress that this lighter payload lacks. Only the
+          // lineage fields are refreshed on them.
+          const merged = prev.map((e) => {
+            const fresh = incoming.find((c) => c._id === e.id);
+            return fresh
+              ? { ...e, parentCourseId: fresh.parentCourseId ?? null, followUpKind: fresh.followUpKind ?? null }
+              : e;
+          });
+          const added = incoming.filter((c) => !known.has(c._id)).map(mapCourseToEntry);
+          return [...merged, ...added].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        });
+        // A follow-up still building from an earlier session gets picked up
+        // here, so its card and the rail report live progress.
+        descendants
+          .filter((c) => c.status === "generating")
+          .forEach((c) => watchCourseInBackground(c._id));
+      })
+      .catch((err) => console.error("Failed to load course lineage:", err));
+    return () => { alive = false; };
+  }, [activeHistoryId]);
+
+  // Courses the open one continues from, oldest first — rendered above the
+  // stage. The open course itself is the last link of the chain.
+  const pathBefore = lineageChain.slice(0, -1);
+
+  // The whole thread in reading order, the open course included — what the
+  // breadcrumb walks. Built from the two halves that already exist, so it
+  // stays correct however the user got here.
+  const pathSteps: HistoryEntry[] = activeEntry
+    ? [...pathBefore, activeEntry, ...followUpChildren]
+    : [];
+
+  // Picking any lesson of any course in the path OPENS that course on that
+  // lesson. It used to play inline in a card stacked above or below the stage,
+  // which meant the column held several courses at once and the page changed
+  // shape depending on which one you came from. One course on screen at a
+  // time, chosen from the syllabus, is simpler to hold in your head — and
+  // restoreEntry already fetches the lesson code it needs.
+  const selectPathLesson = (courseId: string, lesson: number) => {
+    const entry = history.find((e) => e.id === courseId);
+    if (!entry) return;
+    restoreEntry(entry);
+    setActiveSection("video");
+    setActiveLesson(lesson);
+  };
 
   const handleNew = () => {
     if (isMobile) setHistorySidebarCollapsed(true);
@@ -4057,13 +4085,6 @@ export default function AILearningPage() {
         <ChevronLeft className="h-4 w-4" /><span className="hidden sm:inline">Previous</span>
       </button>
       <div className="flex items-center gap-2">
-        {WEB_DOWNLOAD_ENABLED && activeHistoryId && lessonStatuses[activeLesson] === "ready" && lessons[activeLesson]?.code && (
-          <DownloadLessonButton
-            lessonTitle={lessons[activeLesson]?.title}
-            code={lessons[activeLesson].code as string}
-            durationInFrames={lessons[activeLesson].totalFrames ?? 3600}
-          />
-        )}
         {activeLesson < lessons.length - 1 ? (
           lessonStatuses[activeLesson + 1] === "locked" ? (
             <button
@@ -4197,7 +4218,7 @@ export default function AILearningPage() {
                 <p className="flex items-center gap-1.5 text-[11px] text-[#6E7389]">
                   {!courseDetailsLoading && generatingCount > 0
                     ? <><RecDot /> <span className="text-[#FFB08A]">{generatingCount} lesson{generatingCount !== 1 ? "s" : ""} generating</span></>
-                    : <><Sparkles className="h-3 w-3 text-[#B4A9FF]" /> AI course · {lessons.length} lessons</>}
+                    : <><Sparkles className="h-3 w-3 text-[#B4A9FF]" /> AI course · {lessons.length} lesson{lessons.length === 1 ? "" : "s"}</>}
                 </p>
                 {courseDetailsLoading
                   ? <Shimmer className="mt-1 h-4 w-48" />
@@ -4245,6 +4266,12 @@ export default function AILearningPage() {
                     </div>
                   )}
 
+                  {/* Where you are in the thread — the only element here that
+                      shows the WHOLE chain rather than the open course's
+                      neighbours, so nothing silently disappears when you move
+                      along it. */}
+                  <PathBreadcrumb steps={pathSteps} activeId={activeHistoryId} onOpen={restoreEntry} />
+
                   {courseDetailsLoading && <CourseContentSkeleton />}
 
                   {!courseDetailsLoading && activeSection === "video" && currentLesson && (
@@ -4265,7 +4292,23 @@ export default function AILearningPage() {
                   )}
 
                   {!courseDetailsLoading && activeSection === "quiz" && (
-                    <QuizStage questions={quizQuestions} timeAllocationMinutes={activeCourseQuizMinutes} onSubmit={handleQuizSubmit} />
+                    <QuizStage
+                      questions={quizQuestions}
+                      timeAllocationMinutes={activeCourseQuizMinutes}
+                      onSubmit={handleQuizSubmit}
+                      courseStatus={activeEntry?.status}
+                      lessonsBuilt={allLessonsReady}
+                      onRegenerate={activeHistoryId ? async () => {
+                        const questions = await regenerateQuiz(activeHistoryId);
+                        setQuizQuestions(questions);
+                        // The endpoint also flips the course to `ready`, so
+                        // mirror that here rather than waiting for a poll
+                        // that may already have stopped.
+                        setHistory((prev) => prev.map((e) =>
+                          e.id === activeHistoryId ? { ...e, questions, status: "ready" as const } : e
+                        ));
+                      } : undefined}
+                    />
                   )}
 
                   {!courseDetailsLoading && activeSection === "results" && (
@@ -4295,18 +4338,6 @@ export default function AILearningPage() {
                   {/* Everything this course led to, below whatever section is
                       open — so a follow-up started from the results builds
                       here instead of replacing the page. */}
-                  <FollowUpThread
-                    parentTopic={fileName}
-                    parentTopicScores={serverQuizResult?.topicBreakdown ?? null}
-                    followUps={followUpChildren}
-                    onOpen={restoreEntry}
-                    scrollToId={scrollToFollowUpId}
-                    onScrolled={() => setScrollToFollowUpId(null)}
-                    selectedLessonFor={(id) =>
-                      followUpSelection?.courseId === id ? followUpSelection.lesson : 0
-                    }
-                    onSelectLesson={selectFollowUpLesson}
-                  />
                 </div>
               </main>
 
@@ -4322,12 +4353,21 @@ export default function AILearningPage() {
                 activeLesson={activeLesson}
                 allLessonsReady={allLessonsReady}
                 quizDone={quizDone}
-                quizCount={quizQuestions.length}
+                quizCount={quizQuestions.length || activeEntry?.mcqCount || 0}
                 quizScore={serverQuizResult?.pct ?? activeEntry?.quizScore ?? null}
-                followUps={followUpChildren}
-                followUpSelection={followUpSelection}
-                onSelectFollowUpLesson={(courseId, lesson) => {
-                  selectFollowUpLesson(courseId, lesson);
+                activeTopic={fileName}
+                pathBefore={pathBefore}
+                pathAfter={followUpChildren}
+                onSelectPathLesson={(courseId, lesson) => {
+                  selectPathLesson(courseId, lesson);
+                  if (isMobile) setCourseSidebarOpen(false);
+                }}
+                onOpenCourse={(entry, section) => {
+                  restoreEntry(entry);
+                  // restoreEntry picks a section of its own (video, or results
+                  // if its quiz is done); an explicit one wins — this runs
+                  // after, so its state update is the one that lands.
+                  if (section) setActiveSection(section);
                   if (isMobile) setCourseSidebarOpen(false);
                 }}
                 onSelectLesson={(i) => {
