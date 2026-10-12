@@ -21,7 +21,7 @@ import {
 } from "../api/CourseApi";
 import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, SceneMetaItem, CourseTier } from "../api/CourseApi";
 import { getProgress, markLessonWatched, logPosition } from "../api/ProgressApi";
-import { submitQuiz as submitQuizApi, getLatestAttempt } from "../api/QuizApi";
+import { submitQuiz as submitQuizApi, getLatestAttempt, getAttemptHistory } from "../api/QuizApi";
 import type { QuizResult } from "../api/QuizApi";
 import { LevelAssessmentChat } from "../components/LevelAssessmentChat";
 import { DynamicPlayer, PlayerErrorBoundary } from "../remotion/DynamicPlayer";
@@ -1350,10 +1350,501 @@ function readinessTone(pct: number) {
   return { color: C.rose, label: "Needs Practice" };
 }
 
+// ── Shared scales ───────────────────────────────────────────────────────────
+// 70% is the line everything in the results view is measured against: it's
+// the same threshold the strengths/needs-review split has always used, now
+// drawn explicitly on every chart so a bar's length means something.
+const PASS_MARK = 70;
+
+const MASTERY_BANDS = [
+  { min: 85, label: "Mastered", color: C.mint },
+  { min: 70, label: "Solid", color: C.iris },
+  { min: 50, label: "Shaky", color: C.amber },
+  { min: 0, label: "Weak", color: C.rose },
+];
+
+function bandFor(pct: number) {
+  return MASTERY_BANDS.find((b) => pct >= b.min) ?? MASTERY_BANDS[MASTERY_BANDS.length - 1];
+}
+
+/** Level to pitch a follow-up course at, inferred from how the quiz went. */
+function levelFromPct(pct: number): Level {
+  if (pct >= 80) return "advanced";
+  if (pct >= 55) return "intermediate";
+  return "beginner";
+}
+
+function KpiTile({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
+  return (
+    <div className="rounded-xl bg-white/[0.03] px-4 py-3 ring-1 ring-inset ring-white/[0.06]">
+      <p className={EYEBROW}>{label}</p>
+      <p className="mt-1.5 text-2xl font-semibold leading-none tabular-nums" style={{ color: color ?? "#FFFFFF" }}>{value}</p>
+      {sub && <p className="mt-1 text-[11px] leading-snug text-[#6E7389]">{sub}</p>}
+    </div>
+  );
+}
+
+// ── Score-over-attempts chart ───────────────────────────────────────────────
+// Every retake is stored as its own QuizAttempt (see the model's comment), so
+// a real trend line is available the moment someone sits the quiz twice — it
+// just was never drawn. Hidden entirely for a single attempt, where a
+// one-point "line" would say nothing.
+function AttemptTrend({ attempts }: { attempts: { pct: number; submittedAt: string }[] }) {
+  const W = 340, H = 150, L = 30, R = 12, T = 12, B = 24;
+  const plotW = W - L - R, plotH = H - T - B;
+  const x = (i: number) => L + (attempts.length === 1 ? plotW / 2 : (i / (attempts.length - 1)) * plotW);
+  const y = (pct: number) => T + plotH - (Math.min(Math.max(pct, 0), 100) / 100) * plotH;
+
+  const line = attempts.map((a, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(a.pct).toFixed(1)}`).join(" ");
+  const area = `${line} L${x(attempts.length - 1).toFixed(1)},${(T + plotH).toFixed(1)} L${x(0).toFixed(1)},${(T + plotH).toFixed(1)} Z`;
+  const first = attempts[0].pct;
+  const last = attempts[attempts.length - 1].pct;
+  const delta = last - first;
+
+  return (
+    <div className={cx(SURFACE, "p-5 sm:p-6")}>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className={EYEBROW}>Score across attempts</p>
+        <p className="text-[11px] tabular-nums text-[#6E7389]">
+          {attempts.length} attempts ·{" "}
+          <span style={{ color: delta >= 0 ? C.mint : C.rose }}>
+            {delta > 0 ? "+" : ""}{delta}% since the first
+          </span>
+        </p>
+      </div>
+
+      <svg viewBox={`0 0 ${W} ${H}`} className="mt-4 w-full" role="img" aria-label={`Quiz score across ${attempts.length} attempts`}>
+        <defs>
+          <linearGradient id="lu-trend-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={C.iris} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={C.iris} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {[0, 50, 100].map((g) => (
+          <g key={g}>
+            <line x1={L} y1={y(g)} x2={W - R} y2={y(g)} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+            <text x={L - 6} y={y(g) + 3} textAnchor="end" fontSize="8" fill="#4A4F63">{g}</text>
+          </g>
+        ))}
+
+        {/* Pass mark — the same 70% used everywhere else on this page. */}
+        <line x1={L} y1={y(PASS_MARK)} x2={W - R} y2={y(PASS_MARK)} stroke={C.mint} strokeOpacity="0.45" strokeWidth="1" strokeDasharray="3 3" />
+        <text x={W - R} y={y(PASS_MARK) - 4} textAnchor="end" fontSize="8" fill={C.mint} fillOpacity="0.7">pass {PASS_MARK}%</text>
+
+        <path d={area} fill="url(#lu-trend-fill)" />
+        <path d={line} fill="none" stroke={C.iris} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+
+        {attempts.map((a, i) => {
+          const isLast = i === attempts.length - 1;
+          return (
+            <g key={i}>
+              <circle cx={x(i)} cy={y(a.pct)} r={isLast ? 4.5 : 3} fill={isLast ? C.iris : "#0A0B10"} stroke={C.iris} strokeWidth="1.6" />
+              {(isLast || i === 0 || attempts.length <= 6) && (
+                <text x={x(i)} y={H - 8} textAnchor="middle" fontSize="8" fill="#6E7389">#{i + 1}</text>
+              )}
+              {isLast && (
+                <text x={x(i)} y={y(a.pct) - 9} textAnchor="end" fontSize="9" fontWeight="600" fill="#ECEDF2">{a.pct}%</text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ── Mastery radar ───────────────────────────────────────────────────────────
+// Axes are numbered rather than labelled: topics are full lesson titles (the
+// quiz generator copies them character-for-character), which never fit around
+// a radar. The numbers key into the topic list below, which uses the same
+// index.
+function MasteryRadar({ topics }: { topics: { topic: string; pct: number }[] }) {
+  const size = 230, c = size / 2, rMax = 78;
+  const n = topics.length;
+  const pointAt = (i: number, r: number) => {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    return [c + Math.cos(a) * r, c + Math.sin(a) * r] as const;
+  };
+  const poly = (r: number) => Array.from({ length: n }, (_, i) => pointAt(i, r).map((v) => v.toFixed(1)).join(",")).join(" ");
+  const dataPoly = topics.map((t, i) => pointAt(i, (Math.min(Math.max(t.pct, 0), 100) / 100) * rMax).map((v) => v.toFixed(1)).join(",")).join(" ");
+
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} className="w-full max-w-[230px]" role="img" aria-label="Accuracy by topic">
+      {[0.25, 0.5, 0.75, 1].map((f) => (
+        <polygon key={f} points={poly(rMax * f)} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="1" />
+      ))}
+      <polygon points={poly(rMax * (PASS_MARK / 100))} fill="none" stroke={C.mint} strokeOpacity="0.35" strokeWidth="1" strokeDasharray="3 3" />
+      {topics.map((_, i) => {
+        const [px, py] = pointAt(i, rMax);
+        return <line key={i} x1={c} y1={c} x2={px} y2={py} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />;
+      })}
+      <polygon points={dataPoly} fill={C.iris} fillOpacity="0.2" stroke={C.iris} strokeWidth="2" strokeLinejoin="round" />
+      {topics.map((t, i) => {
+        const [px, py] = pointAt(i, (Math.min(Math.max(t.pct, 0), 100) / 100) * rMax);
+        return <circle key={i} cx={px} cy={py} r="3" fill={bandFor(t.pct).color} />;
+      })}
+      {topics.map((_, i) => {
+        const [px, py] = pointAt(i, rMax + 13);
+        return (
+          <text key={i} x={px} y={py + 3} textAnchor="middle" fontSize="9" fontWeight="600" fill="#8A8FA3">
+            {i + 1}
+          </text>
+        );
+      })}
+      <title>{topics.map((t, i) => `${i + 1}. ${t.topic}: ${t.pct}%`).join("\n")}</title>
+    </svg>
+  );
+}
+
+/** Band distribution as a donut — how many topics sit in each mastery band. */
+function MasteryDonut({ topics }: { topics: { pct: number }[] }) {
+  const size = 132, r = 52, stroke = 13;
+  const circ = 2 * Math.PI * r;
+  const counts = MASTERY_BANDS.map((b) => ({
+    ...b,
+    count: topics.filter((t) => bandFor(t.pct).label === b.label).length,
+  })).filter((b) => b.count > 0);
+  const total = topics.length || 1;
+
+  let offset = 0;
+  return (
+    <div className="flex items-center gap-4">
+      <div className="relative shrink-0" style={{ width: size, height: size }}>
+        <svg viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={stroke} />
+          {counts.map((b) => {
+            const len = (b.count / total) * circ;
+            const el = (
+              <circle
+                key={b.label}
+                cx={size / 2}
+                cy={size / 2}
+                r={r}
+                fill="none"
+                stroke={b.color}
+                strokeWidth={stroke}
+                strokeDasharray={`${len} ${circ - len}`}
+                strokeDashoffset={-offset}
+              />
+            );
+            offset += len;
+            return el;
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-xl font-semibold leading-none text-white tabular-nums">{topics.length}</span>
+          <span className="mt-0.5 text-[10px] text-[#6E7389]">topics</span>
+        </div>
+      </div>
+      <ul className="min-w-0 flex-1 space-y-1.5">
+        {MASTERY_BANDS.map((b) => {
+          const count = topics.filter((t) => bandFor(t.pct).label === b.label).length;
+          return (
+            <li key={b.label} className="flex items-center gap-2 text-[12px]">
+              <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: b.color, opacity: count ? 1 : 0.25 }} />
+              <span className={cx("min-w-0 flex-1 truncate", count ? "text-[#D6D8E2]" : "text-[#4A4F63]")}>{b.label}</span>
+              <span className={cx("shrink-0 tabular-nums", count ? "text-white" : "text-[#4A4F63]")}>{count}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// ── Per-question map ────────────────────────────────────────────────────────
+type QuestionOutcome = { id: number; n: number; topic: string; status: "correct" | "wrong" | "skipped" };
+
+function QuestionMap({ outcomes }: { outcomes: QuestionOutcome[] }) {
+  const style = {
+    correct: { bg: `${C.mint}1F`, ring: `${C.mint}59`, fg: C.mint },
+    wrong: { bg: `${C.rose}1F`, ring: `${C.rose}59`, fg: "#FF8A95" },
+    skipped: { bg: "rgba(255,255,255,0.03)", ring: "rgba(255,255,255,0.1)", fg: "#6E7389" },
+  };
+  const counts = {
+    correct: outcomes.filter((o) => o.status === "correct").length,
+    wrong: outcomes.filter((o) => o.status === "wrong").length,
+    skipped: outcomes.filter((o) => o.status === "skipped").length,
+  };
+
+  return (
+    <div className={cx(SURFACE, "p-5 sm:p-7")}>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <p className={EYEBROW}>Question by question</p>
+        <div className="flex items-center gap-3 text-[11px]">
+          <span className="flex items-center gap-1.5 text-[#8A8FA3]">
+            <span className="h-2 w-2 rounded-full" style={{ background: C.mint }} /> {counts.correct} right
+          </span>
+          <span className="flex items-center gap-1.5 text-[#8A8FA3]">
+            <span className="h-2 w-2 rounded-full" style={{ background: C.rose }} /> {counts.wrong} wrong
+          </span>
+          {counts.skipped > 0 && (
+            <span className="flex items-center gap-1.5 text-[#8A8FA3]">
+              <span className="h-2 w-2 rounded-full bg-white/20" /> {counts.skipped} skipped
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-1.5">
+        {outcomes.map((o) => {
+          const s = style[o.status];
+          return (
+            <span
+              key={o.id}
+              title={`Q${o.n} · ${o.topic} · ${o.status}`}
+              className="flex h-8 w-8 items-center justify-center rounded-lg font-mono text-[11px] font-semibold ring-1 ring-inset"
+              style={{ background: s.bg, color: s.fg, boxShadow: `inset 0 0 0 1px ${s.ring}` }}
+            >
+              {o.n}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── The learning loop ───────────────────────────────────────────────────────
+type FollowUp = { id: string; topic: string; reason: string; kind: "repair" | "extend"; level: Level };
+
+/**
+ * Turns a finished quiz into the start of the next course. Two kinds of
+ * follow-up, both priced from the same live PricingConfig tiers the composer
+ * uses (never a hardcoded number), and both spending through the normal
+ * generation path so checkCredits stays the single place credits leave an
+ * account:
+ *   · "repair"  — a weak topic, re-taught from the ground up (level forced to
+ *                 beginner: they already saw the intermediate pass and it
+ *                 didn't land).
+ *   · "extend"  — an AI-suggested next topic, pitched at the level their score
+ *                 implies, so no second assessment chat is needed.
+ */
+function ContinueLearning({
+  weakTopics, pct, courseId, tiers, balance, onGenerate, onRequestTopUp,
+}: {
+  weakTopics: { topic: string; pct: number }[];
+  pct: number;
+  courseId?: string | null;
+  tiers: CourseTier[] | null;
+  balance: number;
+  onGenerate: (topic: string, tierKey: string, level: Level) => void;
+  onRequestTopUp: () => void;
+}) {
+  const [suggestions, setSuggestions] = useState<NextCourseSuggestion[] | null>(null);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [tierKey, setTierKey] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  // Default to the cheapest tier — a follow-up should read as a small,
+  // obvious next step, not the most expensive thing on the page.
+  useEffect(() => {
+    if (!tierKey && tiers && tiers.length > 0) {
+      setTierKey([...tiers].sort((a, b) => a.creditCost - b.creditCost)[0].key);
+    }
+  }, [tiers, tierKey]);
+
+  const tier = tiers?.find((t) => t.key === tierKey) ?? null;
+  const cost = tier?.creditCost ?? 0;
+  const affordable = !!tier && balance >= cost;
+
+  const items: FollowUp[] = [
+    ...weakTopics.slice(0, 2).map((w) => ({
+      id: `repair:${w.topic}`,
+      topic: w.topic,
+      reason: `You scored ${w.pct}% here. A fresh course re-teaches it from the basics, from a different angle.`,
+      kind: "repair" as const,
+      level: "beginner" as Level,
+    })),
+    ...(suggestions ?? []).slice(0, 3).map((s) => ({
+      id: `extend:${s.topic}`,
+      topic: s.topic,
+      reason: s.reason,
+      kind: "extend" as const,
+      level: levelFromPct(pct),
+    })),
+  ];
+
+  const loadSuggestions = () => {
+    if (!courseId || loadingSuggestions || suggestions) return;
+    setLoadingSuggestions(true);
+    getNextSuggestions(courseId)
+      .then(setSuggestions)
+      .catch(() => setSuggestions([]))
+      .finally(() => setLoadingSuggestions(false));
+  };
+
+  return (
+    <div className={cx(SURFACE, "relative overflow-hidden p-5 sm:p-7")}>
+      <div
+        className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full opacity-20 blur-3xl"
+        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }}
+        aria-hidden="true"
+      />
+
+      <div className="relative flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <p className={EYEBROW}>Keep going</p>
+          <h3 className="lu-serif mt-1.5 text-3xl leading-tight text-white sm:text-4xl">Turn this into your next course</h3>
+          <p className="mt-1.5 max-w-xl text-[13px] leading-relaxed text-[#8A8FA3]">
+            Your results pick the starting point — close a gap you just found, or push past what this course covered.
+            No second assessment: we already know your level from this quiz.
+          </p>
+        </div>
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-[#E3E5EE] ring-1 ring-white/[0.08]">
+          <Zap className="h-3.5 w-3.5 text-[#FFB547]" /> {balance} credit{balance !== 1 ? "s" : ""} left
+        </span>
+      </div>
+
+      {/* Depth / price selector — the cost of every button below. */}
+      <div className="relative mt-5">
+        <p className={cx(EYEBROW, "mb-2")}>Depth of the next course</p>
+        {!tiers ? (
+          <div className="flex gap-2">{[0, 1, 2].map((i) => <Shimmer key={i} className="h-16 flex-1 rounded-xl" delay={i * 0.12} />)}</div>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Depth of the next course">
+            {tiers.map((t) => {
+              const sel = t.key === tierKey;
+              const canAfford = balance >= t.creditCost;
+              return (
+                <button
+                  key={t.key}
+                  role="radio"
+                  aria-checked={sel}
+                  onClick={() => { setTierKey(t.key); setConfirming(null); }}
+                  className={cx(
+                    "rounded-xl px-3.5 py-2.5 text-left transition-all duration-200",
+                    sel
+                      ? "bg-[#8B7CFF]/[0.12] ring-2 ring-[#8B7CFF]"
+                      : "bg-white/[0.03] ring-1 ring-white/[0.07] hover:bg-white/[0.06] hover:ring-white/[0.14]"
+                  )}
+                >
+                  <span className="flex items-baseline justify-between gap-2">
+                    <span className="truncate text-[13px] font-semibold text-white">{t.name}</span>
+                    <span className={cx("shrink-0 text-[11px] font-semibold tabular-nums", canAfford ? "text-[#FFB547]" : "text-[#6E7389]")}>
+                      {t.creditCost} cr
+                    </span>
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-[#8A8FA3]">
+                    {t.lessonCount} lesson{t.lessonCount !== 1 ? "s" : ""} · {t.mcqCount} questions
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Follow-up options */}
+      <div className="relative mt-6 space-y-2.5">
+        {items.map((item) => {
+          const isConfirming = confirming === item.id;
+          return (
+            <div
+              key={item.id}
+              className={cx(
+                "rounded-2xl p-4 transition-colors",
+                isConfirming ? "bg-[#8B7CFF]/[0.08] ring-1 ring-[#8B7CFF]/40" : "bg-white/[0.025] ring-1 ring-white/[0.06]"
+              )}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em]"
+                    style={
+                      item.kind === "repair"
+                        ? { color: C.rose, background: `${C.rose}14` }
+                        : { color: C.iris, background: `${C.iris}14` }
+                    }
+                  >
+                    {item.kind === "repair" ? <><TrendingDown className="h-3 w-3" /> Close this gap</> : <><TrendingUp className="h-3 w-3" /> Go further</>}
+                  </span>
+                  <p className="mt-1.5 text-[15px] font-semibold leading-snug text-white">{item.topic}</p>
+                  <p className="mt-1 text-[12px] leading-relaxed text-[#8A8FA3]">{item.reason}</p>
+                  <p className="mt-1.5 text-[11px] text-[#6E7389]">
+                    Taught at <span className="text-[#B9BCCB]">{item.level}</span> level
+                    {item.kind === "repair" ? " — back to first principles" : ` — matched to your ${pct}%`}
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 flex-col items-stretch gap-1.5">
+                  {!affordable ? (
+                    <button onClick={onRequestTopUp} className={cx(BTN_SOFT, "h-9 whitespace-nowrap")}>
+                      <Zap className="h-3.5 w-3.5 text-[#FFB547]" /> Need {cost - balance} more
+                    </button>
+                  ) : isConfirming ? (
+                    <>
+                      <button
+                        onClick={() => { setConfirming(null); onGenerate(item.topic, tierKey!, item.level); }}
+                        className={cx(BTN_PRIMARY, "h-9 whitespace-nowrap")}
+                      >
+                        <Check className="h-3.5 w-3.5" /> Spend {cost} credits
+                      </button>
+                      <button onClick={() => setConfirming(null)} className="text-[11px] text-[#6E7389] transition-colors hover:text-white">
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => setConfirming(item.id)} className={cx(BTN_SOFT, "h-9 whitespace-nowrap")}>
+                        <Sparkles className="h-3.5 w-3.5 text-[#B4A9FF]" /> Generate · {cost} credits
+                      </button>
+                      <span className="text-center text-[10px] text-[#4A4F63]">leaves you {balance - cost}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {isConfirming && (
+                <p className="mt-3 border-t border-white/[0.07] pt-3 text-[11px] leading-relaxed text-[#B9BCCB]">
+                  This spends <span className="font-semibold text-white">{cost} credits</span> and starts a new{" "}
+                  {tier?.lessonCount}-lesson course on “{item.topic}”. Your balance goes from {balance} to {balance - cost}.
+                </p>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Suggestions are one LLM call, so they're opt-in rather than
+            fetched for everyone who merely lands on this page. */}
+        {courseId && !suggestions && (
+          <button
+            onClick={loadSuggestions}
+            disabled={loadingSuggestions}
+            className="flex w-full items-center gap-3 rounded-2xl border border-dashed border-white/[0.1] px-4 py-4 text-left transition-colors hover:border-[#8B7CFF]/40 hover:bg-[#8B7CFF]/[0.04] disabled:opacity-60"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#8B7CFF]/15 ring-1 ring-[#8B7CFF]/30">
+              {loadingSuggestions ? <Loader2 className="h-4 w-4 animate-spin text-[#B4A9FF]" /> : <Sparkles className="h-4 w-4 text-[#B4A9FF]" />}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[14px] font-semibold text-white">
+                {loadingSuggestions ? "Reading your results…" : "Suggest what to learn next"}
+              </span>
+              <span className="block text-[12px] text-[#8A8FA3]">Free — picks topics from this course and your score</span>
+            </span>
+          </button>
+        )}
+
+        {suggestions?.length === 0 && items.length === 0 && (
+          <p className="rounded-2xl bg-white/[0.02] px-4 py-5 text-center text-[13px] text-[#6E7389]">
+            Couldn't load suggestions right now — you can always start a new course from the composer.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ResultsStage({
   answers, questions, serverResult, courseId, onFeedback,
+  lessons, lessonStatuses, onSelectLesson,
+  credits, courseTiers, onGenerateFollowUp, onRequestTopUp,
 }: {
   answers: QuizAnswer[]; questions: MCQQuestion[]; serverResult?: QuizResult | null; courseId?: string | null; onFeedback: () => void;
+  lessons: Lesson[]; lessonStatuses: LessonStatus[]; onSelectLesson: (i: number) => void;
+  credits: Credits | null; courseTiers: CourseTier[] | null;
+  onGenerateFollowUp: (topic: string, tierKey: string, level: Level) => void;
+  onRequestTopUp: () => void;
 }) {
   // Prefer the server-graded result; client computation only bridges the round-trip.
   const clientScore = answers.filter((a) => { const q = questions.find((q) => q.id === a.questionId); return q && q.correct === a.selected; }).length;
@@ -1372,16 +1863,53 @@ function ResultsStage({
   const total = serverResult?.total ?? questions.length;
   const pct = serverResult?.pct ?? clientPct;
   const topics = serverResult ? [...serverResult.topicBreakdown].sort((a, b) => b.pct - a.pct) : clientTopics;
-  const strengths = topics.filter((t) => t.pct >= 70);
-  const weaknesses = topics.filter((t) => t.pct < 70);
+  const strengths = topics.filter((t) => t.pct >= PASS_MARK);
+  const weaknesses = topics.filter((t) => t.pct < PASS_MARK);
   const tone = readinessTone(pct);
   const readinessLabel = serverResult?.readinessLabel ?? tone.label;
 
-  const [suggestions, setSuggestions] = useState<NextCourseSuggestion[] | null>(null);
-  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const improved = new Set(serverResult?.trend?.improvedTopics ?? []);
+  const regressed = new Set(serverResult?.trend?.regressedTopics ?? []);
+
+  // Quiz topics are the exact lesson titles (generateCourseQuiz copies them
+  // character-for-character so results group back to the right lesson), which
+  // is what makes "rewatch the lesson behind this gap" possible at all.
+  const lessonIndexFor = (topic: string) => {
+    const key = topic.trim().toLowerCase();
+    return lessons.findIndex((l) => l.title.trim().toLowerCase() === key);
+  };
+
+  // Correct/wrong/skipped per question. After a page reload `answers` is empty
+  // but the server result still names every missed question, so outcomes are
+  // reconstructed from that instead of silently showing everything unanswered.
+  const missedById = new Map((serverResult?.missedQuestions ?? []).map((m) => [m.questionId, m]));
+  const outcomes: QuestionOutcome[] = questions.map((q, i) => {
+    const ans = answers.find((a) => a.questionId === q.id);
+    let status: QuestionOutcome["status"];
+    if (ans) status = ans.selected === q.correct ? "correct" : "wrong";
+    else if (serverResult) {
+      const missed = missedById.get(q.id);
+      status = !missed ? "correct" : missed.yourAnswer === null ? "skipped" : "wrong";
+    } else status = "skipped";
+    return { id: q.id, n: i + 1, topic: q.topic, status };
+  });
+
+  const [attempts, setAttempts] = useState<{ pct: number; submittedAt: string }[] | null>(null);
+  useEffect(() => {
+    if (!courseId) return;
+    let alive = true;
+    getAttemptHistory(courseId)
+      .then((rows) => { if (alive) setAttempts(rows.map((r) => ({ pct: r.pct, submittedAt: r.submittedAt }))); })
+      .catch(() => { if (alive) setAttempts([]); });
+    return () => { alive = false; };
+  }, [courseId]);
+
+  const balance = Math.max(credits?.spendableBalance ?? credits?.courseCredits ?? 0, 0);
+  const watchedCount = lessons.filter((l) => l.completed).length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* ── Headline ─────────────────────────────────────────────────────── */}
       <div className={cx(SURFACE, "lu-rise relative overflow-hidden p-6 sm:p-9")}>
         <div className="pointer-events-none absolute -right-20 -top-20 h-72 w-72 rounded-full opacity-25 blur-3xl" style={{ background: tone.color }} />
         <div className="relative flex flex-col items-center gap-7 sm:flex-row sm:gap-10">
@@ -1390,7 +1918,7 @@ function ResultsStage({
               <p className="lu-serif text-6xl leading-none text-white">{pct}<span className="text-3xl text-[#6E7389]">%</span></p>
             </div>
           </Ring>
-          <div className="text-center sm:text-left">
+          <div className="min-w-0 text-center sm:text-left">
             <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1" style={{ color: tone.color, background: `${tone.color}14`, borderColor: tone.color, boxShadow: `inset 0 0 0 1px ${tone.color}40` }}>
               <Trophy className="h-3.5 w-3.5" /> {readinessLabel}
             </span>
@@ -1404,26 +1932,118 @@ function ResultsStage({
                 {serverResult.trend.delta > 0 ? "+" : ""}{serverResult.trend.delta}% vs. last attempt ({serverResult.trend.previousPct}%) · attempt #{serverResult.trend.attemptNumber}
               </p>
             )}
+            {serverResult?.roomComparison && (
+              <p className="mt-2 text-sm text-[#B9BCCB]">
+                {serverResult.roomComparison.aboveAverage ? "Above" : "Below"} your group's average of{" "}
+                <span className="font-semibold text-white">{serverResult.roomComparison.roomAveragePct}%</span>{" "}
+                <span className="text-[#6E7389]">({serverResult.roomComparison.membersReporting} members reporting)</span>
+              </p>
+            )}
           </div>
+        </div>
+
+        <div className="relative mt-7 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <KpiTile label="Correct" value={score} sub={`out of ${total} questions`} color={C.mint} />
+          <KpiTile label="Missed" value={total - score} sub={outcomes.some((o) => o.status === "skipped") ? `${outcomes.filter((o) => o.status === "skipped").length} left blank` : "all answered"} color={total - score > 0 ? C.rose : undefined} />
+          <KpiTile
+            label="Topics at pass"
+            value={`${strengths.length}/${topics.length}`}
+            sub={`${PASS_MARK}% or better`}
+            color={strengths.length === topics.length ? C.mint : undefined}
+          />
+          <KpiTile label="Lessons watched" value={`${watchedCount}/${lessons.length}`} sub={watchedCount < lessons.length ? "unwatched lessons hurt your score" : "full course covered"} />
         </div>
       </div>
 
-      <div className={cx(SURFACE, "p-5 sm:p-7")}>
-        <p className={EYEBROW}>Topic breakdown</p>
-        <div className="mt-5 space-y-4">
-          {topics.map(({ topic, pct: tPct, correct, total: tTotal }) => (
-            <div key={topic}>
-              <div className="mb-1.5 flex justify-between gap-2 text-sm">
-                <span className="truncate font-medium text-[#E3E5EE]">{topic}</span>
-                <span className="shrink-0 font-mono text-xs tabular-nums" style={{ color: tPct >= 70 ? C.mint : C.rose }}>{correct}/{tTotal} · {tPct}%</span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
-                <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${tPct}%`, background: tPct >= 70 ? C.mint : C.rose }} />
-              </div>
+      {/* ── Charts ───────────────────────────────────────────────────────── */}
+      {attempts && attempts.length >= 2 && <AttemptTrend attempts={attempts} />}
+
+      {topics.length > 0 && (
+        <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+          {topics.length >= 3 && (
+            <div className={cx(SURFACE, "flex flex-col items-center p-5 sm:p-6")}>
+              <p className={cx(EYEBROW, "self-start")}>Accuracy by topic</p>
+              <MasteryRadar topics={topics} />
+              <p className="mt-1 text-center text-[11px] text-[#6E7389]">
+                Numbers match the list below · dashed ring is the {PASS_MARK}% pass mark
+              </p>
             </div>
-          ))}
+          )}
+          <div className={cx(SURFACE, "p-5 sm:p-6")}>
+            <p className={cx(EYEBROW, "mb-4")}>Where you stand</p>
+            <MasteryDonut topics={topics} />
+            {(improved.size > 0 || regressed.size > 0) && (
+              <div className="mt-4 space-y-1.5 border-t border-white/[0.06] pt-4 text-[12px]">
+                {improved.size > 0 && (
+                  <p className="flex items-start gap-1.5 text-[#8A8FA3]">
+                    <TrendingUp className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: C.mint }} />
+                    <span>Improved since last attempt: <span className="text-[#D6D8E2]">{[...improved].join(", ")}</span></span>
+                  </p>
+                )}
+                {regressed.size > 0 && (
+                  <p className="flex items-start gap-1.5 text-[#8A8FA3]">
+                    <TrendingDown className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: C.rose }} />
+                    <span>Slipped since last attempt: <span className="text-[#D6D8E2]">{[...regressed].join(", ")}</span></span>
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Topic detail ─────────────────────────────────────────────────── */}
+      <div className={cx(SURFACE, "p-5 sm:p-7")}>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className={EYEBROW}>Topic breakdown</p>
+          <p className="text-[11px] text-[#6E7389]">Each topic is one lesson of this course</p>
+        </div>
+        <div className="mt-5 space-y-4">
+          {topics.map(({ topic, pct: tPct, correct, total: tTotal }, i) => {
+            const band = bandFor(tPct);
+            const li = lessonIndexFor(topic);
+            const canRewatch = li >= 0 && lessonStatuses[li] === "ready";
+            return (
+              <div key={topic}>
+                <div className="mb-1.5 flex items-center justify-between gap-3 text-sm">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-white/[0.06] font-mono text-[10px] text-[#8A8FA3]">{i + 1}</span>
+                    <span className="truncate font-medium text-[#E3E5EE]">{topic}</span>
+                    {improved.has(topic) && (
+                      <span className="shrink-0" title="Improved since last attempt">
+                        <TrendingUp className="h-3.5 w-3.5" style={{ color: C.mint }} />
+                      </span>
+                    )}
+                    {regressed.has(topic) && (
+                      <span className="shrink-0" title="Slipped since last attempt">
+                        <TrendingDown className="h-3.5 w-3.5" style={{ color: C.rose }} />
+                      </span>
+                    )}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <span className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold" style={{ color: band.color, background: `${band.color}14` }}>{band.label}</span>
+                    <span className="font-mono text-xs tabular-nums" style={{ color: band.color }}>{correct}/{tTotal} · {tPct}%</span>
+                  </span>
+                </div>
+                <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                  <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${tPct}%`, background: band.color }} />
+                  <span className="absolute top-0 h-full w-px bg-white/25" style={{ left: `${PASS_MARK}%` }} aria-hidden="true" />
+                </div>
+                {canRewatch && tPct < PASS_MARK && (
+                  <button
+                    onClick={() => onSelectLesson(li)}
+                    className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-[#B4A9FF] transition-colors hover:text-white"
+                  >
+                    <Play className="h-3 w-3" /> Rewatch lesson {li + 1}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
+
+      {outcomes.length > 0 && <QuestionMap outcomes={outcomes} />}
 
       <div className="grid gap-4 sm:grid-cols-2">
         {[
@@ -1452,65 +2072,55 @@ function ResultsStage({
         <div className={cx(SURFACE, "p-5 sm:p-7")}>
           <p className={EYEBROW}>Review missed questions · {serverResult.missedQuestions.length}</p>
           <div className="mt-4 space-y-3">
-            {serverResult.missedQuestions.map((m) => (
-              <div key={m.questionId} className="rounded-xl bg-white/[0.02] p-4 ring-1 ring-white/[0.06]">
-                <p className="text-sm font-medium leading-relaxed text-white">{m.question}</p>
-                <div className="mt-3 grid gap-1.5 text-xs sm:grid-cols-2">
-                  <p className="flex items-start gap-1.5 text-[#8A8FA3]"><X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#FF5C6C]" /><span>You: <span className="text-[#FF8A95]">{m.yourAnswer ?? "No answer"}</span></span></p>
-                  <p className="flex items-start gap-1.5 text-[#8A8FA3]"><Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#3DDC97]" /><span>Correct: <span className="text-[#7BE8B8]">{m.correctAnswer}</span></span></p>
+            {serverResult.missedQuestions.map((m) => {
+              const li = lessonIndexFor(m.topic);
+              return (
+                <div key={m.questionId} className="rounded-xl bg-white/[0.02] p-4 ring-1 ring-white/[0.06]">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className="rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[10px] text-[#8A8FA3]">{m.topic}</span>
+                    {li >= 0 && lessonStatuses[li] === "ready" && (
+                      <button
+                        onClick={() => onSelectLesson(li)}
+                        className="inline-flex items-center gap-1 text-[10px] font-medium text-[#B4A9FF] transition-colors hover:text-white"
+                      >
+                        <Play className="h-2.5 w-2.5" /> lesson {li + 1}
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-sm font-medium leading-relaxed text-white">{m.question}</p>
+                  <div className="mt-3 grid gap-1.5 text-xs sm:grid-cols-2">
+                    <p className="flex items-start gap-1.5 text-[#8A8FA3]"><X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#FF5C6C]" /><span>You: <span className="text-[#FF8A95]">{m.yourAnswer ?? "No answer"}</span></span></p>
+                    <p className="flex items-start gap-1.5 text-[#8A8FA3]"><Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#3DDC97]" /><span>Correct: <span className="text-[#7BE8B8]">{m.correctAnswer}</span></span></p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-[1.4fr_1fr]">
-        {courseId && (
-          <div className={cx(SURFACE, "relative overflow-hidden p-5")}>
-            <div className="pointer-events-none absolute -bottom-16 -left-10 h-40 w-40 rounded-full bg-[#8B7CFF]/20 blur-3xl" />
-            {!suggestions ? (
-              <button
-                onClick={() => {
-                  setLoadingSuggestions(true);
-                  getNextSuggestions(courseId).then(setSuggestions).catch(() => setSuggestions([])).finally(() => setLoadingSuggestions(false));
-                }}
-                disabled={loadingSuggestions}
-                className="relative flex h-full w-full flex-col items-start gap-2 text-left"
-              >
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#8B7CFF]/15 ring-1 ring-[#8B7CFF]/30">
-                  {loadingSuggestions ? <Loader2 className="h-4 w-4 animate-spin text-[#B4A9FF]" /> : <Sparkles className="h-4 w-4 text-[#B4A9FF]" />}
-                </span>
-                <span className="lu-serif text-2xl text-white">What should I learn next?</span>
-                <span className="text-xs text-[#8A8FA3]">Get suggestions based on this course and your score →</span>
-              </button>
-            ) : (
-              <div className="relative">
-                <p className="flex items-center gap-2 text-sm font-semibold text-white"><Sparkles className="h-4 w-4 text-[#B4A9FF]" /> Continue your journey</p>
-                {suggestions.length === 0 ? (
-                  <p className="mt-3 text-sm text-[#6E7389]">Couldn't load suggestions right now.</p>
-                ) : (
-                  <div className="mt-3 space-y-2">
-                    {suggestions.map((s, i) => (
-                      <div key={i} className="rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">
-                        <p className="text-sm font-medium text-white">{s.topic}</p>
-                        <p className="mt-0.5 text-xs text-[#8A8FA3]">{s.reason}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-        <div className={cx(SURFACE, "flex flex-col items-start gap-2 p-5")}>
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.05] ring-1 ring-white/[0.08]">
+      {/* ── The loop ─────────────────────────────────────────────────────── */}
+      <ContinueLearning
+        weakTopics={weaknesses}
+        pct={pct}
+        courseId={courseId}
+        tiers={courseTiers}
+        balance={balance}
+        onGenerate={onGenerateFollowUp}
+        onRequestTopUp={onRequestTopUp}
+      />
+
+      <div className={cx(SURFACE, "flex flex-col items-start gap-2 p-5 sm:flex-row sm:items-center sm:justify-between")}>
+        <div className="flex items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] ring-1 ring-white/[0.08]">
             <MessageSquare className="h-4 w-4 text-[#E3E5EE]" />
           </span>
-          <p className="lu-serif text-2xl text-white">How was this course?</p>
-          <p className="text-xs text-[#8A8FA3]">Your feedback shapes what we build next — takes a minute.</p>
-          <button onClick={onFeedback} className={cx(BTN_SOFT, "mt-auto h-9")}>Share feedback</button>
+          <div>
+            <p className="lu-serif text-2xl text-white">How was this course?</p>
+            <p className="text-xs text-[#8A8FA3]">Your feedback shapes what we build next — takes a minute.</p>
+          </div>
         </div>
+        <button onClick={onFeedback} className={cx(BTN_SOFT, "h-9 shrink-0")}>Share feedback</button>
       </div>
     </div>
   );
@@ -2401,6 +3011,15 @@ export default function AILearningPage() {
     }
   };
 
+  // Results → next course, without re-running the level assessment: the quiz
+  // we just graded is a better level signal than the chat would be. Credits
+  // are still spent server-side by checkCredits on the generation request —
+  // nothing here deducts anything locally.
+  const startFollowUpCourse = (topic: string, tierKey: string, level: Level) => {
+    setPendingGeneration(null);
+    runGeneration(topic, null, level, tierKey);
+  };
+
   const handleAssessmentDone = (level: Level) => {
     if (!pendingGeneration) { setPhase("upload"); return; }
     const { name, file, tier } = pendingGeneration;
@@ -2733,6 +3352,17 @@ export default function AILearningPage() {
                       serverResult={serverQuizResult}
                       courseId={activeHistoryId}
                       onFeedback={() => setShowFeedback(true)}
+                      lessons={lessons}
+                      lessonStatuses={lessonStatuses}
+                      onSelectLesson={(i) => {
+                        analytics.lessonViewed({ lesson: i + 1 });
+                        setActiveLesson(i);
+                        setActiveSection("video");
+                      }}
+                      credits={credits}
+                      courseTiers={courseTiers}
+                      onGenerateFollowUp={startFollowUpCourse}
+                      onRequestTopUp={() => setShowPaywall(true)}
                     />
                   )}
                 </div>

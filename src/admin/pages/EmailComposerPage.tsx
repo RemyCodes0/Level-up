@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { PageMeta } from "@/components/PageMeta";
+import { Page, PageHeader, Card } from "../components";
+import { INPUT, LABEL, BTN_SOFT, BTN_PRIMARY, EYEBROW, cx } from "../theme";
 
 type Mode = "individual" | "broadcast";
 type Counts = { all: number; unsubscribed: number };
@@ -135,171 +137,194 @@ export default function EmailComposerPage() {
   const progress = job ? (job.total ? ((job.sent + job.failed) / job.total) * 100 : 0) : 0;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <Page max="7xl">
       <PageMeta title="Admin — Compose Email | Level Up AI" noindex />
-      <div className="max-w-6xl mx-auto px-5 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-indigo-400/80">Admin</div>
-          <h1 className="text-3xl font-bold tracking-tight mt-1">Compose email</h1>
-          <p className="text-slate-400 text-sm mt-1.5">
-            Message one person, or broadcast to a segment of your users.
-          </p>
-        </div>
+      <PageHeader title="Compose email" sub="Message one person, or broadcast to every user who hasn't unsubscribed." />
 
-        <div className="grid lg:grid-cols-2 gap-6 items-start">
-          {/* ── Left: composer ─────────────────────────────────────────── */}
-          <div className="space-y-5">
-            {/* Mode segmented control */}
-            <div className="grid grid-cols-2 gap-1 rounded-2xl bg-slate-900 border border-slate-800 p-1">
-              {(["individual", "broadcast"] as Mode[]).map((m) => (
-                <button key={m} onClick={() => { setMode(m); setStatus(null); }}
-                  className={`rounded-xl py-2.5 text-sm font-semibold capitalize transition-all ${
-                    mode === m
-                      ? m === "broadcast"
-                        ? "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30"
-                        : "bg-indigo-500/15 text-indigo-300 ring-1 ring-indigo-500/30"
-                      : "text-slate-400 hover:text-slate-200"}`}>
-                  {m === "broadcast" ? "Broadcast" : "Individual"}
-                </button>
-              ))}
-            </div>
-
-            {/* Recipient */}
-            {mode === "individual" ? (
-              <div>
-                <label className="text-xs font-medium text-slate-400 mb-1.5 block">To</label>
-                <input type="email" value={to} onChange={(e) => setTo(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3.5 py-3 text-sm outline-none transition-colors focus:border-indigo-500/60 focus:bg-slate-900" />
-              </div>
-            ) : (
-              <div>
-                <label className="text-xs font-medium text-slate-400 mb-1.5 block">Audience</label>
-                <div className="rounded-xl border border-amber-500/50 bg-amber-500/10 px-3 py-3">
-                  <div className="text-lg font-bold tabular-nums text-amber-200">
-                    {counts ? counts.all.toLocaleString() : "—"}
-                  </div>
-                  <div className="text-[11px] text-slate-500">all users</div>
-                </div>
-                {counts && counts.unsubscribed > 0 && (
-                  <p className="text-[11px] text-slate-500 mt-2">
-                    {counts.unsubscribed.toLocaleString()} unsubscribed {counts.unsubscribed === 1 ? "user is" : "users are"} excluded automatically.
-                  </p>
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        {/* ── Left: composer ───────────────────────────────────────────── */}
+        <div className="space-y-5">
+          {/* Mode segmented control — full width, since it changes what the
+              whole left column means (one recipient vs. everyone). */}
+          <div className="grid grid-cols-2 gap-1 rounded-2xl bg-[#0C0D13] p-1 ring-1 ring-white/[0.07]">
+            {(["individual", "broadcast"] as Mode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => { setMode(m); setStatus(null); }}
+                className={cx(
+                  "rounded-xl py-2.5 text-[13px] font-semibold capitalize transition-all",
+                  mode === m
+                    ? m === "broadcast"
+                      ? "bg-[#FFB547]/15 text-[#FFB547] ring-1 ring-inset ring-[#FFB547]/30"
+                      : "bg-[#8B7CFF]/15 text-[#B4A9FF] ring-1 ring-inset ring-[#8B7CFF]/30"
+                    : "text-[#8A8FA3] hover:bg-white/[0.04] hover:text-white"
                 )}
-              </div>
-            )}
-
-            {/* Subject */}
-            <div>
-              <label className="text-xs font-medium text-slate-400 mb-1.5 block">Subject</label>
-              <input value={subject} onChange={(e) => setSubject(e.target.value)}
-                placeholder="What's this about?"
-                className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3.5 py-3 text-sm outline-none transition-colors focus:border-indigo-500/60" />
-            </div>
-
-            {/* Body */}
-            <div>
-              <div className="flex items-baseline justify-between mb-1.5">
-                <label className="text-xs font-medium text-slate-400">Body</label>
-                <span className="text-[11px] text-slate-600">Plain text or HTML · blank line = new paragraph · {"{{name}}"} → recipient's name</span>
-              </div>
-              <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12}
-                placeholder={"Hey {{name}},\n\nWe just shipped something new…"}
-                className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3.5 py-3 text-[13px] leading-relaxed outline-none transition-colors focus:border-indigo-500/60 font-mono resize-y" />
-            </div>
-
-            {/* Actions */}
-            <div className="flex flex-wrap items-center gap-2.5 pt-1">
-              <button onClick={() => send("test")} disabled={sending}
-                className="px-4 py-2.5 rounded-xl text-sm font-medium bg-slate-900 border border-slate-800 text-slate-200 hover:bg-slate-800 transition-colors disabled:opacity-40">
-                Send test to me
+              >
+                {m === "broadcast" ? "Broadcast" : "Individual"}
               </button>
-              {mode === "individual" ? (
-                <button onClick={() => send("individual")} disabled={sending}
-                  className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-indigo-500 text-white hover:bg-indigo-400 transition-colors disabled:opacity-40">
-                  {sending ? "Sending…" : "Send email"}
-                </button>
-              ) : (
-                <button onClick={() => send("broadcast")} disabled={sending || !audienceCount}
-                  className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 transition-colors disabled:opacity-40">
-                  {sending ? "Sending…" : `Broadcast to ${audienceCount?.toLocaleString() ?? "…"}`}
-                </button>
+            ))}
+          </div>
+
+          {/* Recipient */}
+          {mode === "individual" ? (
+            <div>
+              <label className={LABEL}>To</label>
+              <input
+                type="email"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                placeholder="name@example.com"
+                className={INPUT}
+              />
+            </div>
+          ) : (
+            <div>
+              <label className={LABEL}>Audience</label>
+              <div className="rounded-xl bg-[#FFB547]/[0.08] px-4 py-3.5 ring-1 ring-inset ring-[#FFB547]/30">
+                <div className="text-2xl font-semibold leading-none text-[#FFB547] tabular-nums">
+                  {counts ? counts.all.toLocaleString() : "—"}
+                </div>
+                <div className="mt-1.5 text-[11px] text-[#8A8FA3]">all users</div>
+              </div>
+              {counts && counts.unsubscribed > 0 && (
+                <p className="mt-2 text-[11px] text-[#6E7389]">
+                  {counts.unsubscribed.toLocaleString()} unsubscribed {counts.unsubscribed === 1 ? "user is" : "users are"} excluded automatically.
+                </p>
               )}
             </div>
+          )}
 
-            {/* Status */}
-            {status && (
-              <div className={`rounded-xl px-4 py-3 text-sm ${
-                status.type === "ok" ? "bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/20"
-                                     : "bg-red-500/10 text-red-300 ring-1 ring-red-500/20"}`}>
-                {status.msg}
-              </div>
-            )}
+          {/* Subject */}
+          <div>
+            <label className={LABEL}>Subject</label>
+            <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="What's this about?" className={INPUT} />
+          </div>
 
-            {/* Broadcast progress */}
-            {job && (
-              <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4">
-                <div className="flex justify-between items-center text-sm mb-2.5">
-                  <span className="font-semibold flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${
-                      job.status === "running" ? "bg-amber-400 animate-pulse" : job.status === "done" ? "bg-emerald-400" : "bg-red-400"}`} />
-                    {job.status === "running" ? "Sending" : job.status === "done" ? "Sent" : "Finished with errors"}
-                  </span>
-                  <span className="text-slate-500 tabular-nums">{(job.sent + job.failed).toLocaleString()} / {job.total.toLocaleString()}</span>
-                </div>
-                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                  <div className="h-1.5 bg-amber-400 transition-all duration-500" style={{ width: `${progress}%` }} />
-                </div>
-                <p className="text-[11px] text-slate-500 mt-2">
-                  {job.sent.toLocaleString()} delivered{job.failed > 0 ? ` · ${job.failed.toLocaleString()} failed` : ""}.
-                </p>
-                {job.failed > 0 && job.errors.length > 0 && (
-                  <details className="mt-2 text-[11px] text-slate-500">
-                    <summary className="cursor-pointer hover:text-slate-400">View sample errors</summary>
-                    <ul className="mt-1.5 space-y-1 font-mono">
-                      {job.errors.map((e, i) => <li key={i} className="truncate">{e.email} — {e.error}</li>)}
-                    </ul>
-                  </details>
-                )}
-              </div>
+          {/* Body */}
+          <div>
+            <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
+              <label className={cx(LABEL, "mb-0")}>Body</label>
+              <span className="text-[11px] text-[#4A4F63]">
+                Plain text or HTML · blank line = new paragraph · {"{{name}}"} → recipient's name
+              </span>
+            </div>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={12}
+              placeholder={"Hey {{name}},\n\nWe just shipped something new…"}
+              className={cx(INPUT, "resize-y font-mono text-[13px] leading-relaxed")}
+            />
+          </div>
+
+          {/* Actions */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button onClick={() => send("test")} disabled={sending} className={BTN_SOFT}>
+              Send test to me
+            </button>
+            {mode === "individual" ? (
+              <button onClick={() => send("individual")} disabled={sending} className={BTN_PRIMARY}>
+                {sending ? "Sending…" : "Send email"}
+              </button>
+            ) : (
+              <button
+                onClick={() => send("broadcast")}
+                disabled={sending || !audienceCount}
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl bg-[#FFB547] px-5 text-[13px] font-semibold text-[#0A0B10] shadow-[0_10px_30px_-10px_rgba(255,181,71,0.8)] transition-colors hover:bg-[#FFC670] disabled:pointer-events-none disabled:opacity-40"
+              >
+                {sending ? "Sending…" : `Broadcast to ${audienceCount?.toLocaleString() ?? "…"}`}
+              </button>
             )}
           </div>
 
-          {/* ── Right: live inbox preview ──────────────────────────────── */}
-          <div className="lg:sticky lg:top-8">
-            <div className="text-xs font-medium text-slate-400 mb-2 flex items-center gap-2">
-              Preview
-              <span className="text-slate-600">— exactly what recipients see</span>
+          {/* Status */}
+          {status && (
+            <div
+              className={cx(
+                "rounded-xl px-4 py-3 text-[13px] ring-1 ring-inset",
+                status.type === "ok"
+                  ? "bg-[#3DDC97]/10 text-[#3DDC97] ring-[#3DDC97]/25"
+                  : "bg-[#FF5C6C]/10 text-[#FF8A95] ring-[#FF5C6C]/25"
+              )}
+            >
+              {status.msg}
             </div>
-            <div className="rounded-2xl bg-white shadow-2xl shadow-black/40 overflow-hidden ring-1 ring-black/5">
-              {/* Inbox chrome */}
-              <div className="bg-slate-100 px-4 py-3 border-b border-slate-200">
+          )}
+
+          {/* Broadcast progress */}
+          {job && (
+            <div className="rounded-2xl bg-[#11131A] p-4 ring-1 ring-white/[0.07]">
+              <div className="mb-2.5 flex items-center justify-between text-[13px]">
+                <span className="flex items-center gap-2 font-semibold text-white">
+                  <span
+                    className={cx(
+                      "h-2 w-2 rounded-full",
+                      job.status === "running" ? "animate-pulse bg-[#FFB547]" : job.status === "done" ? "bg-[#3DDC97]" : "bg-[#FF5C6C]"
+                    )}
+                  />
+                  {job.status === "running" ? "Sending" : job.status === "done" ? "Sent" : "Finished with errors"}
+                </span>
+                <span className="tabular-nums text-[#6E7389]">
+                  {(job.sent + job.failed).toLocaleString()} / {job.total.toLocaleString()}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                <div className="h-full rounded-full bg-[#FFB547] transition-all duration-500" style={{ width: `${progress}%` }} />
+              </div>
+              <p className="mt-2 text-[11px] text-[#6E7389]">
+                {job.sent.toLocaleString()} delivered{job.failed > 0 ? ` · ${job.failed.toLocaleString()} failed` : ""}.
+              </p>
+              {job.failed > 0 && job.errors.length > 0 && (
+                <details className="mt-2 text-[11px] text-[#6E7389]">
+                  <summary className="cursor-pointer transition-colors hover:text-[#D6D8E2]">View sample errors</summary>
+                  <ul className="mt-1.5 space-y-1 font-mono">
+                    {job.errors.map((e, i) => <li key={i} className="truncate">{e.email} — {e.error}</li>)}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Right: live inbox preview ────────────────────────────────── */}
+        <div className="lg:sticky lg:top-8">
+          <div className="mb-2 flex items-center gap-2">
+            <span className={EYEBROW}>Preview</span>
+            <span className="text-[11px] text-[#4A4F63]">exactly what recipients see</span>
+          </div>
+          {/* Deliberately light: this is a mail client's chrome, not part of
+              the dashboard's own surface. */}
+          <Card pad={false} className="ring-white/[0.09]">
+            <div className="overflow-hidden rounded-[15px]">
+              <div className="border-b border-slate-200 bg-slate-100 px-4 py-3">
                 <div className="flex items-center gap-2.5">
-                  <div className="h-9 w-9 rounded-full bg-indigo-500 text-white grid place-items-center text-sm font-bold shrink-0">L</div>
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#8B7CFF] text-sm font-bold text-white">L</div>
                   <div className="min-w-0">
-                    <div className="text-[13px] font-semibold text-slate-900 truncate">Level Up</div>
-                    <div className="text-[11px] text-slate-500 truncate">to {mode === "individual" ? (to || "recipient") : `${PREVIEW_NAME.toLowerCase()}@example.com`}</div>
+                    <div className="truncate text-[13px] font-semibold text-slate-900">Level Up</div>
+                    <div className="truncate text-[11px] text-slate-500">
+                      to {mode === "individual" ? (to || "recipient") : `${PREVIEW_NAME.toLowerCase()}@example.com`}
+                    </div>
                   </div>
                 </div>
-                <div className="text-[15px] font-semibold text-slate-900 mt-3 truncate">
-                  {subject || <span className="text-slate-400 font-normal">No subject yet</span>}
+                <div className="mt-3 truncate text-[15px] font-semibold text-slate-900">
+                  {subject || <span className="font-normal text-slate-400">No subject yet</span>}
                 </div>
               </div>
-              {/* Rendered email, isolated in an iframe */}
               <iframe
                 title="Email preview"
                 srcDoc={previewDoc}
-                className="w-full h-[460px] bg-white border-0"
+                className="h-[460px] w-full border-0 bg-white"
                 sandbox=""
               />
             </div>
-            <p className="text-[11px] text-slate-600 mt-2 text-center">
-              {mode === "broadcast" ? "Broadcasts include an unsubscribe link (shown above)." : `“{{name}}” shows as “${PREVIEW_NAME}” here.`}
-            </p>
-          </div>
+          </Card>
+          <p className="mt-2 text-center text-[11px] text-[#4A4F63]">
+            {mode === "broadcast"
+              ? "Broadcasts include an unsubscribe link (shown above)."
+              : `“{{name}}” shows as “${PREVIEW_NAME}” here.`}
+          </p>
         </div>
       </div>
-    </div>
-  );   
-} 
+    </Page>
+  );
+}

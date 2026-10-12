@@ -2,9 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { CheckCircle, XCircle, Clock, Loader2, Play, X, Trash2, DollarSign, Code2, Copy, Check, Timer } from "lucide-react";
+import { CheckCircle, XCircle, Clock, Loader2, Play, Trash2, DollarSign, Code2, Copy, Check, Timer, ArrowLeft } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, StatusBadge, Pagination, fmtDate, fmtUsd, fmtPosition, fmtDuration } from "../components";
+import {
+  Page, PageHeader, Card, RowList, ROW_HOVER, Segmented, Modal, Chip,
+  LoadingBlock, ErrorBlock, EmptyState, StatusBadge, Pagination,
+  fmtDate, fmtUsd, fmtPosition, fmtDuration,
+} from "../components";
+import { EYEBROW, cx } from "../theme";
 import { DynamicPlayer } from "../../remotion/DynamicPlayer";
 
 interface ActivityItem {
@@ -19,7 +24,12 @@ interface ActivityItem {
   createdAt: string;
 }
 
-const STATUS_FILTERS = ["all", "generating", "ready", "failed"];
+const STATUS_FILTERS = [
+  { key: "all", label: "All" },
+  { key: "generating", label: "Generating" },
+  { key: "ready", label: "Ready" },
+  { key: "failed", label: "Failed" },
+];
 
 export default function Courses() {
   const { courseId } = useParams();
@@ -60,60 +70,82 @@ export default function Courses() {
   }, []);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+    <Page>
       <PageHeader
         title="Courses"
         sub="Every AI-generated course across all users."
-        right={
-          <div className="flex gap-1 bg-white border border-slate-200 rounded-lg p-1">
-            {STATUS_FILTERS.map((s) => (
-              <button
-                key={s}
-                onClick={() => { setStatus(s); setPage(1); }}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors ${
-                  status === s ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-50"
-                }`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        }
+        right={<Segmented options={STATUS_FILTERS} value={status} onChange={(s) => { setStatus(s); setPage(1); }} />}
       />
 
       {genStats && genStats.avgSec != null && (
-        <div className="flex items-center gap-2 mb-4 text-sm text-slate-500">
-          <Timer className="h-4 w-4 text-slate-400" />
-          Avg. generation time: <span className="font-semibold text-slate-700">{fmtDuration(genStats.avgSec)}</span>
-          <span className="text-slate-400">(across {genStats.coursesCounted} finished course{genStats.coursesCounted === 1 ? "" : "s"})</span>
+        <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl bg-[#11131A] px-5 py-3.5 text-[13px] ring-1 ring-white/[0.07]">
+          <Timer className="h-4 w-4 shrink-0 text-[#6E7389]" />
+          <span className="text-[#8A8FA3]">Average generation time</span>
+          <span className="font-semibold text-white">{fmtDuration(genStats.avgSec)}</span>
+          <span className="text-[11px] text-[#4A4F63]">
+            across {genStats.coursesCounted} finished course{genStats.coursesCounted === 1 ? "" : "s"}
+          </span>
         </div>
       )}
 
       {loading ? <LoadingBlock /> : error ? <ErrorBlock message={error} /> : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div className="divide-y divide-slate-100">
-            {activity.length === 0 ? (
-              <div className="p-8"><EmptyState label="courses" /></div>
-            ) : activity.map((a) => (
-              <button key={a.id} onClick={() => navigate(`/admin/courses/${a.id}`)} className="w-full flex items-center gap-4 px-5 py-3 hover:bg-slate-50 text-left transition-colors">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-slate-800 truncate">{a.topic || "Untitled"}</p>
-                  <p className="text-xs text-slate-400 truncate">{a.user ? `${a.user.name} · ${a.user.email}` : "Unknown user"} · {fmtDate(a.createdAt)}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {a.isFreeTrial && <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">trial</span>}
-                  <span className="text-xs text-slate-500">{a.lessonsReady}/{a.lessonsTotal}</span>
-                  <StatusBadge status={a.status} />
-                </div>
-              </button>
-            ))}
-          </div>
+        <Card pad={false}>
+          {activity.length === 0 ? (
+            <div className="p-5"><EmptyState label="courses" /></div>
+          ) : (
+            <RowList>
+              {activity.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => navigate(`/admin/courses/${a.id}`)}
+                  className={cx("flex w-full items-center gap-4 px-5 py-3 text-left", ROW_HOVER)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-medium text-[#ECEDF2]">{a.topic || "Untitled"}</p>
+                    <p className="truncate text-[11px] text-[#6E7389]">
+                      {a.user ? `${a.user.name} · ${a.user.email}` : "Unknown user"} · {fmtDate(a.createdAt)}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2.5">
+                    {a.isFreeTrial && <Chip>trial</Chip>}
+                    {a.lessonsFailed > 0 && <Chip tone="danger">{a.lessonsFailed} failed</Chip>}
+                    <LessonPips ready={a.lessonsReady} failed={a.lessonsFailed} total={a.lessonsTotal} />
+                    <StatusBadge status={a.status} />
+                  </div>
+                </button>
+              ))}
+            </RowList>
+          )}
           <Pagination page={page} pages={pages} onChange={setPage} />
-        </div>
+        </Card>
       )}
 
       {courseId && <CourseDetailModal courseId={courseId} onClose={() => navigate("/admin/courses")} onDeleted={load} />}
-    </div>
+    </Page>
+  );
+}
+
+/**
+ * One dot per lesson — ready / failed / still pending. Reads at a glance in a
+ * long list where "4/6" doesn't say whether the other two failed or are still
+ * building. Collapses to a plain count past 12 lessons.
+ */
+function LessonPips({ ready, failed, total }: { ready: number; failed: number; total: number }) {
+  if (total === 0 || total > 12) {
+    return <span className="text-[11px] tabular-nums text-[#6E7389]">{ready}/{total}</span>;
+  }
+  return (
+    <span className="hidden items-center gap-[3px] sm:flex" title={`${ready} ready · ${failed} failed · ${total} total`}>
+      {Array.from({ length: total }, (_, i) => (
+        <span
+          key={i}
+          className={cx(
+            "h-1.5 w-1.5 rounded-full",
+            i < ready ? "bg-[#3DDC97]" : i < ready + failed ? "bg-[#FF5C6C]" : "bg-white/[0.14]"
+          )}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -194,152 +226,183 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
     }
   };
 
+  if (loading) {
+    return (
+      <Modal title="Loading…" onClose={onClose} width="xl">
+        <div className="flex items-center justify-center p-16">
+          <Loader2 className="h-6 w-6 animate-spin text-[#8B7CFF]" />
+        </div>
+      </Modal>
+    );
+  }
+  if (!course) return null;
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        {loading ? (
-          <div className="p-12 flex items-center justify-center"><Loader2 className="h-7 w-7 text-slate-400 animate-spin" /></div>
-        ) : course && (
-          <>
-            <div className="flex items-start justify-between px-6 py-4 border-b border-slate-100 sticky top-0 bg-white z-10">
-              <div className="min-w-0">
-                <h2 className="text-lg font-bold text-slate-900 truncate">{course.topic}</h2>
-                <p className="text-xs text-slate-400 truncate">{course.userId ? `${course.userId.name} · ${course.userId.email}` : "Unknown"}</p>
+    <Modal
+      title={course.topic}
+      sub={course.userId ? `${course.userId.name} · ${course.userId.email}` : "Unknown owner"}
+      onClose={onClose}
+      width="xl"
+      actions={
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#6E7389] transition-colors hover:bg-[#FF5C6C]/10 hover:text-[#FF8A95] disabled:opacity-40"
+          title="Delete course permanently"
+        >
+          {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+        </button>
+      }
+    >
+      {(costs || genTime) && (
+        <div className="grid gap-px bg-white/[0.06] sm:grid-cols-2">
+          {costs && (
+            <div className="bg-[#0E1016] px-6 py-4">
+              <div className="flex items-center gap-2">
+                <DollarSign className="h-3.5 w-3.5 text-[#6E7389]" />
+                <span className={EYEBROW}>Total cost</span>
               </div>
-              <div className="flex items-center gap-2 shrink-0 ml-3">
-                <button onClick={handleDelete} disabled={deleting} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-50">
-                  {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                </button>
-                <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+              <div className="mt-1.5 text-2xl font-semibold leading-none text-white tabular-nums">{fmtUsd(costs.totalUsd)}</div>
+              {/* Not every dollar here is equally certain — LLM calls carry
+                  OpenRouter's own actually-billed amount, but TTS (Kokoro
+                  returns no cost field at all) is always a per-character
+                  estimate. Showing the split instead of one flat number is
+                  the whole point of this endpoint's real/estimated
+                  breakdown — see adminController.js's getCourseCosts. */}
+              <p className="mt-1.5 text-[11px] leading-relaxed text-[#6E7389]">
+                {fmtUsd(costs.realUsd)} actual (OpenRouter-billed)
+                {costs.estimatedUsd > 0 && <> · {fmtUsd(costs.estimatedUsd)} estimated (TTS has no real-cost figure)</>}
+              </p>
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                {costs.byKind.map((k) => (
+                  <Chip key={k.kind}>
+                    {k.kind}: {fmtUsd(k.totalUsd)} ({k.calls}){k.estimatedUsd > 0 && k.realUsd > 0 && " · mixed"}
+                  </Chip>
+                ))}
               </div>
             </div>
+          )}
 
-            {costs && (
-              <div className="px-6 py-4 border-b border-slate-100 bg-slate-50">
-                <div className="flex items-center gap-2 mb-1">
-                  <DollarSign className="h-4 w-4 text-slate-400" />
-                  <span className="text-sm font-semibold text-slate-700">Total cost: {fmtUsd(costs.totalUsd)}</span>
-                </div>
-                {/* Not every dollar here is equally certain — LLM calls carry
-                    OpenRouter's own actually-billed amount, but TTS (Kokoro
-                    returns no cost field at all) is always a per-character
-                    estimate. Showing the split instead of one flat number is
-                    the whole point of this endpoint's real/estimated
-                    breakdown — see adminController.js's getCourseCosts. */}
-                <p className="text-xs text-slate-400 mb-2">
-                  {fmtUsd(costs.realUsd)} actual (OpenRouter-billed)
-                  {costs.estimatedUsd > 0 && <> · {fmtUsd(costs.estimatedUsd)} estimated (TTS has no real-cost figure)</>}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {costs.byKind.map((k) => (
-                    <span key={k.kind} className="text-xs px-2 py-1 rounded-lg bg-white border border-slate-200 text-slate-600">
-                      {k.kind}: {fmtUsd(k.totalUsd)} ({k.calls}){k.estimatedUsd > 0 && k.realUsd > 0 && " · mixed"}
-                    </span>
-                  ))}
-                </div>
+          {genTime && (
+            <div className="bg-[#0E1016] px-6 py-4">
+              <div className="flex items-center gap-2">
+                <Timer className="h-3.5 w-3.5 text-[#6E7389]" />
+                <span className={EYEBROW}>Generation time</span>
+              </div>
+              <div className="mt-1.5 text-2xl font-semibold leading-none text-white tabular-nums">{fmtDuration(genTime.totalSec)}</div>
+              {/* Sum of each lesson's own generation time, not literal
+                  wall-clock — lessons build concurrently (see
+                  buildLessonsConcurrently), so what the user actually
+                  waited is shorter than this total. See
+                  getCourseGenerationTime's own comment. */}
+              <p className="mt-1.5 text-[11px] leading-relaxed text-[#6E7389]">
+                Sum of each lesson's own time — lessons build concurrently, so the real wait was shorter.
+              </p>
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                {genTime.lessons.map((l) => (
+                  <Chip key={l.lessonNumber} tone={l.status === "failed" ? "danger" : "neutral"}>
+                    L{l.lessonNumber}: {fmtDuration(l.durationSec)}
+                    {l.attempts > 1 && ` (${l.attempts} attempts)`}
+                    {l.status === "failed" && " · failed"}
+                  </Chip>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="p-6">
+        {previewLesson !== null && course.lessons[previewLesson]?.code ? (
+          <div>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <button
+                onClick={() => { setPreviewLesson(null); setShowCode(false); }}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-[#B4A9FF] transition-colors hover:text-white"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" /> All lessons
+              </button>
+              <button
+                onClick={() => setShowCode((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-3 py-1.5 text-xs font-medium text-[#D6D8E2] ring-1 ring-inset ring-white/[0.08] transition-colors hover:bg-white/[0.09]"
+              >
+                <Code2 className="h-3.5 w-3.5" /> {showCode ? "Hide code" : "View code"}
+              </button>
+            </div>
+            <div className="overflow-hidden rounded-2xl ring-1 ring-white/[0.08]">
+              <DynamicPlayer
+                code={course.lessons[previewLesson].code}
+                durationInFrames={course.lessons[previewLesson].totalFrames ?? 3600}
+              />
+            </div>
+            {showCode && (
+              <div className="relative mt-3">
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(course.lessons[previewLesson].code);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  }}
+                  className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-lg bg-white/[0.08] px-2.5 py-1 text-xs font-medium text-[#D6D8E2] ring-1 ring-inset ring-white/[0.1] backdrop-blur transition-colors hover:bg-white/[0.14] hover:text-white"
+                >
+                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy"}
+                </button>
+                <pre className="ad-scroll max-h-[500px] overflow-auto whitespace-pre rounded-2xl bg-[#07080C] p-4 pt-10 text-[11px] leading-relaxed text-[#B9BCCB] ring-1 ring-inset ring-white/[0.07]">
+                  {course.lessons[previewLesson].code}
+                </pre>
               </div>
             )}
-
-            {genTime && (
-              <div className="px-6 py-4 border-b border-slate-100 bg-slate-50">
-                <div className="flex items-center gap-2 mb-2">
-                  <Timer className="h-4 w-4 text-slate-400" />
-                  <span className="text-sm font-semibold text-slate-700">Total generation time: {fmtDuration(genTime.totalSec)}</span>
-                </div>
-                {/* Sum of each lesson's own generation time, not literal
-                    wall-clock — lessons build concurrently (see
-                    buildLessonsConcurrently), so what the user actually
-                    waited is shorter than this total. See
-                    getCourseGenerationTime's own comment. */}
-                <p className="text-xs text-slate-400 mb-2">Sum of each lesson's own generation time — lessons build concurrently, so actual wait was shorter.</p>
-                <div className="flex flex-wrap gap-2">
-                  {genTime.lessons.map((l) => (
-                    <span
-                      key={l.lessonNumber}
-                      className={`text-xs px-2 py-1 rounded-lg bg-white border text-slate-600 ${l.status === "failed" ? "border-red-200" : "border-slate-200"}`}
-                    >
-                      L{l.lessonNumber}: {fmtDuration(l.durationSec)}{l.attempts > 1 && ` (${l.attempts} attempts)`}{l.status === "failed" && " · failed"}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="p-6">
-              {previewLesson !== null && course.lessons[previewLesson]?.code ? (
-                <div className="mb-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <button onClick={() => { setPreviewLesson(null); setShowCode(false); }} className="text-xs text-blue-600">← Back to lessons</button>
-                    <button
-                      onClick={() => setShowCode((v) => !v)}
-                      className="flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg"
-                    >
-                      <Code2 className="h-3.5 w-3.5" /> {showCode ? "Hide code" : "View code"}
-                    </button>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {course.lessons.map((l: any, i: number) => {
+              const progress = progressByLesson?.get(i + 1);
+              return (
+                <div
+                  key={i}
+                  className="flex items-center gap-3 rounded-xl bg-white/[0.02] px-3.5 py-3 ring-1 ring-inset ring-white/[0.05] transition-colors hover:bg-white/[0.04]"
+                >
+                  <span className="shrink-0">
+                    {l.status === "ready" ? <CheckCircle className="h-4 w-4 text-[#3DDC97]" /> :
+                     l.status === "failed" ? <XCircle className="h-4 w-4 text-[#FF5C6C]" /> :
+                     l.status === "locked" ? <Clock className="h-4 w-4 text-[#FFB547]" /> :
+                     <Loader2 className="h-4 w-4 animate-spin text-[#8B7CFF]" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] text-[#ECEDF2]">
+                      <span className="font-mono text-[11px] text-[#4A4F63]">{String(i + 1).padStart(2, "0")}</span>{" "}
+                      {l.title}
+                    </p>
+                    {l.status === "failed" && l.error && <p className="truncate text-[11px] text-[#FF8A95]">{l.error}</p>}
                   </div>
-                  <DynamicPlayer code={course.lessons[previewLesson].code} durationInFrames={course.lessons[previewLesson].totalFrames ?? 3600} />
-                  {showCode && (
-                    <div className="mt-3 relative">
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(course.lessons[previewLesson].code);
-                          setCopied(true);
-                          setTimeout(() => setCopied(false), 1500);
-                        }}
-                        className="absolute top-2 right-2 flex items-center gap-1 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded-lg"
-                      >
-                        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy"}
-                      </button>
-                      <pre className="text-[11px] leading-relaxed bg-slate-900 text-slate-200 rounded-lg p-4 pt-10 overflow-auto max-h-[500px] whitespace-pre">
-                        {course.lessons[previewLesson].code}
-                      </pre>
+                  {progress && (
+                    <div className="shrink-0 text-right text-[11px]">
+                      {progress.watched ? (
+                        <span className="font-medium text-[#3DDC97]">Watched</span>
+                      ) : progress.lastPositionFrame > 0 ? (
+                        <span className="font-medium text-[#FFB547]">In progress</span>
+                      ) : (
+                        <span className="text-[#4A4F63]">Not started</span>
+                      )}
+                      {progress.lastPositionFrame > 0 && (
+                        <p className="tabular-nums text-[#6E7389]">{fmtPosition(progress.lastPositionFrame, progress.totalFrames)}</p>
+                      )}
                     </div>
                   )}
+                  {l.status === "ready" && l.code && (
+                    <button
+                      onClick={() => setPreviewLesson(i)}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#8B7CFF]/12 px-3 py-1.5 text-xs font-medium text-[#B4A9FF] ring-1 ring-inset ring-[#8B7CFF]/25 transition-colors hover:bg-[#8B7CFF]/20 hover:text-white"
+                    >
+                      <Play className="h-3 w-3" /> Preview
+                    </button>
+                  )}
                 </div>
-              ) : (
-                <div className="space-y-2">
-                  {course.lessons.map((l: any, i: number) => {
-                    const progress = progressByLesson?.get(i + 1);
-                    return (
-                    <div key={i} className="flex items-center gap-3 p-3 rounded-lg border border-slate-100">
-                      <div className="shrink-0">
-                        {l.status === "ready" ? <CheckCircle className="h-4 w-4 text-emerald-500" /> :
-                         l.status === "failed" ? <XCircle className="h-4 w-4 text-red-400" /> :
-                         l.status === "locked" ? <Clock className="h-4 w-4 text-amber-400" /> :
-                         <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-slate-700 truncate">{i + 1}. {l.title}</p>
-                        {l.status === "failed" && l.error && <p className="text-xs text-red-400 truncate">{l.error}</p>}
-                      </div>
-                      {progress && (
-                        <div className="shrink-0 text-xs text-right">
-                          {progress.watched ? (
-                            <span className="text-emerald-600 font-medium">Watched</span>
-                          ) : progress.lastPositionFrame > 0 ? (
-                            <span className="text-amber-600 font-medium">In progress</span>
-                          ) : (
-                            <span className="text-slate-300">Not started</span>
-                          )}
-                          {progress.lastPositionFrame > 0 && (
-                            <p className="text-slate-400">{fmtPosition(progress.lastPositionFrame, progress.totalFrames)}</p>
-                          )}
-                        </div>
-                      )}
-                      {l.status === "ready" && l.code && (
-                        <button onClick={() => setPreviewLesson(i)} className="shrink-0 flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-800 bg-blue-50 px-3 py-1.5 rounded-lg">
-                          <Play className="h-3 w-3" /> Preview
-                        </button>
-                      )}
-                    </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </>
+              );
+            })}
+          </div>
         )}
       </div>
-    </div>
+    </Modal>
   );
 }

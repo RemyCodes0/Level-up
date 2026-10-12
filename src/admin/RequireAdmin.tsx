@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, ShieldAlert, LogIn } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Loader2, ShieldAlert, LogIn, ArrowRight } from "lucide-react";
 import { adminApi, AdminApiError } from "./adminApi";
+import { AdminStyles, Aurora, BTN_PRIMARY, BTN_SOFT, SURFACE, cx } from "./theme";
 
 // Formalizes the 401/403 check every admin page used to do ad hoc (the old
 // /ai_admin dashboard had this inline; nothing else had it at all). Hits the
@@ -22,43 +24,80 @@ export function RequireAdmin({ children }: { children: React.ReactNode }) {
       });
   }, []);
 
-  if (state === "checking") {
+  // Mounted for the gate screens too, not just the dashboard — otherwise the
+  // "log in required" / "no access" cards render in the browser's default
+  // font on a bare white page before the layout ever gets a chance to load it.
+  if (state === "ok") {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <Loader2 className="h-8 w-8 text-slate-400 animate-spin" />
-      </div>
+      <>
+        <AdminStyles />
+        {children}
+      </>
     );
   }
 
-  if (state === "unauthenticated") {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
-        <div className="bg-white rounded-xl border border-slate-200 p-8 max-w-sm text-center">
-          <LogIn className="h-10 w-10 text-slate-400 mx-auto mb-3" />
-          <h2 className="text-lg font-bold text-slate-900 mb-1">Log in required</h2>
-          <p className="text-sm text-slate-500">You need to be logged in to view this page.</p>
-        </div>
+  return (
+    <>
+      <AdminStyles />
+      <div className="ad-shell relative flex min-h-screen items-center justify-center bg-[#0A0B10] px-4 text-[#ECEDF2] antialiased">
+        <Aurora />
+        {state === "checking" ? (
+          <div className="flex flex-col items-center gap-3">
+            <Loader2 className="h-6 w-6 animate-spin text-[#8B7CFF]" />
+            <p className="text-xs text-[#6E7389]">Checking access…</p>
+          </div>
+        ) : (
+          <Gate state={state} />
+        )}
       </div>
-    );
-  }
+    </>
+  );
+}
 
-  if (state === "forbidden" || state === "error") {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
-        <div className="bg-white rounded-xl border border-slate-200 p-8 max-w-sm text-center">
-          <ShieldAlert className="h-10 w-10 text-amber-500 mx-auto mb-3" />
-          <h2 className="text-lg font-bold text-slate-900 mb-1">
-            {state === "forbidden" ? "Admin access required" : "Something went wrong"}
-          </h2>
-          <p className="text-sm text-slate-500">
-            {state === "forbidden"
-              ? "Your account doesn't have access to this page."
-              : "Couldn't verify admin access — try refreshing."}
-          </p>
-        </div>
+function Gate({ state }: { state: "unauthenticated" | "forbidden" | "error" }) {
+  const copy =
+    state === "unauthenticated"
+      ? {
+          icon: <LogIn className="h-5 w-5 text-[#B4A9FF]" />,
+          ring: "bg-[#8B7CFF]/10 ring-[#8B7CFF]/25",
+          title: "Log in required",
+          body: "You need to be signed in to open the admin dashboard.",
+        }
+      : state === "forbidden"
+      ? {
+          icon: <ShieldAlert className="h-5 w-5 text-[#FFB547]" />,
+          ring: "bg-[#FFB547]/10 ring-[#FFB547]/25",
+          title: "Admin access required",
+          body: "This account doesn't have admin rights. Ask an existing admin to grant them.",
+        }
+      : {
+          icon: <ShieldAlert className="h-5 w-5 text-[#FF8A95]" />,
+          ring: "bg-[#FF5C6C]/10 ring-[#FF5C6C]/25",
+          title: "Something went wrong",
+          body: "Couldn't verify admin access — the API may be unreachable. Try refreshing.",
+        };
+
+  return (
+    <div className={cx(SURFACE, "ad-rise w-full max-w-sm p-8 text-center shadow-[0_60px_120px_-50px_rgba(0,0,0,1)]")}>
+      <span className={cx("mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl ring-1", copy.ring)}>
+        {copy.icon}
+      </span>
+      <h2 className="ad-serif text-[26px] leading-tight text-white">{copy.title}</h2>
+      <p className="mx-auto mt-2 max-w-[17rem] text-[13px] leading-relaxed text-[#8A8FA3]">{copy.body}</p>
+      <div className="mt-6 flex flex-col gap-2">
+        {state === "unauthenticated" ? (
+          <Link to="/login" className={BTN_PRIMARY}>
+            Log in <ArrowRight className="h-4 w-4" />
+          </Link>
+        ) : state === "error" ? (
+          <button onClick={() => window.location.reload()} className={BTN_PRIMARY}>
+            Refresh
+          </button>
+        ) : null}
+        <Link to="/ai_tutor" className={BTN_SOFT}>
+          Back to the app
+        </Link>
       </div>
-    );
-  }
-
-  return <>{children}</>;
+    </div>
+  );
 }

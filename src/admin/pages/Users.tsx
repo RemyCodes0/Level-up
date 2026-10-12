@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Search, Trash2, Pencil, X, Loader2, Activity, CheckCircle2, Circle, Coins } from "lucide-react";
+import { Search, Trash2, Pencil, Loader2, Activity, CheckCircle2, Circle, Coins, BadgeCheck } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, fmtDate, fmtPosition } from "../components";
+import {
+  Page, PageHeader, Card, Modal, LoadingBlock, ErrorBlock, EmptyState, fmtDate, fmtPosition,
+} from "../components";
+import { INPUT, LABEL, BTN_PRIMARY, BTN_MINT, BTN_DANGER, EYEBROW, cx } from "../theme";
 
 interface User {
   _id: string;
@@ -24,6 +27,23 @@ interface User {
 function spendableBalance(u: User): number {
   const bonusValid = !!u.signupBonusExpiresAt && new Date(u.signupBonusExpiresAt).getTime() > Date.now();
   return (bonusValid ? u.signupBonusCredits || 0 : 0) + (u.courseCredits || 0);
+}
+
+function initials(name: string): string {
+  return (name || "?")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]!.toUpperCase())
+    .join("");
+}
+
+/** Deterministic accent per user, so the same person keeps the same colour. */
+const AVATAR_TINTS = ["#8B7CFF", "#FF7A45", "#3DDC97", "#FFB547", "#FF5C6C"];
+function tintFor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_TINTS[h % AVATAR_TINTS.length];
 }
 
 export default function Users() {
@@ -61,66 +81,102 @@ export default function Users() {
     (u) => u.name?.toLowerCase().includes(search.toLowerCase()) || u.email?.toLowerCase().includes(search.toLowerCase())
   );
 
-  return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
-      <PageHeader title="Users" sub={`${users.length} total`} />
+  const verifiedCount = users.filter((u) => u.verified).length;
 
-      <div className="relative mb-4 max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name or email…"
-          className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200"
-        />
-      </div>
+  return (
+    <Page>
+      <PageHeader
+        title="Users"
+        sub={`${users.length} accounts · ${verifiedCount} verified`}
+        right={
+          <div className="relative w-full sm:w-72">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#4A4F63]" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search name or email…"
+              className={cx(INPUT, "pl-10")}
+            />
+          </div>
+        }
+      />
 
       {loading ? <LoadingBlock /> : error ? <ErrorBlock message={error} /> : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <Card pad={false}>
           {filtered.length === 0 ? (
-            <div className="p-8"><EmptyState label="users" /></div>
+            <div className="p-5">
+              <EmptyState label={search ? "matching users" : "users"} />
+            </div>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
-                  <th className="px-5 py-3 font-medium">Name</th>
-                  <th className="px-5 py-3 font-medium">Email</th>
-                  <th className="px-5 py-3 font-medium">Verified</th>
-                  <th className="px-5 py-3 font-medium">Credits</th>
-                  <th className="px-5 py-3 font-medium w-20" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {filtered.map((u) => (
-                  <tr key={u._id} className="hover:bg-slate-50">
-                    <td className="px-5 py-3 font-medium text-slate-800">{u.name}</td>
-                    <td className="px-5 py-3 text-slate-500">{u.email}</td>
-                    <td className="px-5 py-3">
-                      {u.verified ? <span className="text-xs text-emerald-600">Yes</span> : <span className="text-xs text-slate-400">No</span>}
-                    </td>
-                    <td className="px-5 py-3 text-slate-600">{spendableBalance(u)}</td>
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-1 justify-end">
-                        <button onClick={() => setViewingProgress(u)} className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg" title="View course progress">
-                          <Activity className="h-3.5 w-3.5" />
-                        </button>
-                        <button onClick={() => setAdjustingCredits(u)} className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg" title="Add or remove credits">
-                          <Coins className="h-3.5 w-3.5" />
-                        </button>
-                        <button onClick={() => setEditing(u)} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg" title="Edit user">
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button onClick={() => handleDelete(u._id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </td>
+            <div className="ad-scroll overflow-x-auto">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead>
+                  <tr className="border-b border-white/[0.06] bg-white/[0.015]">
+                    <th className={cx(EYEBROW, "px-5 py-3 text-left")}>User</th>
+                    <th className={cx(EYEBROW, "px-5 py-3 text-left")}>Joined</th>
+                    <th className={cx(EYEBROW, "px-5 py-3 text-left")}>Status</th>
+                    <th className={cx(EYEBROW, "px-5 py-3 text-right")}>Credits</th>
+                    <th className="w-36 px-5 py-3" />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {filtered.map((u) => (
+                    <tr key={u._id} className="group transition-colors hover:bg-white/[0.025]">
+                      <td className="px-5 py-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span
+                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ring-1"
+                            style={{
+                              background: `${tintFor(u._id)}1F`,
+                              color: tintFor(u._id),
+                              borderColor: "transparent",
+                              boxShadow: `inset 0 0 0 1px ${tintFor(u._id)}40`,
+                            }}
+                          >
+                            {initials(u.name)}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate text-[13px] font-medium text-[#ECEDF2]">{u.name}</p>
+                            <p className="truncate text-[11px] text-[#6E7389]">{u.email}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-[11px] text-[#6E7389]">{fmtDate(u.createdAt)}</td>
+                      <td className="px-5 py-3">
+                        {u.verified ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#3DDC97]">
+                            <BadgeCheck className="h-3.5 w-3.5" /> Verified
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-[#6E7389]">Unverified</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        <span className="text-[13px] font-semibold tabular-nums text-white">{spendableBalance(u)}</span>
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
+                          <RowAction onClick={() => setViewingProgress(u)} title="View course progress" hover="#3DDC97">
+                            <Activity className="h-3.5 w-3.5" />
+                          </RowAction>
+                          <RowAction onClick={() => setAdjustingCredits(u)} title="Add or remove credits" hover="#FFB547">
+                            <Coins className="h-3.5 w-3.5" />
+                          </RowAction>
+                          <RowAction onClick={() => setEditing(u)} title="Edit user" hover="#B4A9FF">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </RowAction>
+                          <RowAction onClick={() => handleDelete(u._id)} title="Delete user" hover="#FF8A95">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </RowAction>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
-        </div>
+        </Card>
       )}
 
       {editing && (
@@ -152,7 +208,24 @@ export default function Users() {
           }}
         />
       )}
-    </div>
+    </Page>
+  );
+}
+
+/** Icon button whose hover colour is set per action, via a CSS variable. */
+function RowAction({
+  onClick, title, hover, children,
+}: { onClick: () => void; title: string; hover: string; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#6E7389] transition-colors hover:bg-white/[0.06] hover:text-[var(--ad-hover)]"
+      style={{ "--ad-hover": hover } as React.CSSProperties}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -174,7 +247,6 @@ interface CourseProgressRow {
   lessons: LessonProgressRow[];
 }
 
-
 function UserProgressModal({ userId, userName, onClose }: { userId: string; userName: string; onClose: () => void }) {
   const [courses, setCourses] = useState<CourseProgressRow[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -193,67 +265,66 @@ function UserProgressModal({ userId, userName, onClose }: { userId: string; user
   }, [userId]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sticky top-0 bg-white flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h2 className="text-lg font-bold text-slate-900">{userName}'s progress</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
-        </div>
-
-        <div className="p-6">
-          {loading ? (
-            <LoadingBlock />
-          ) : error ? (
-            <ErrorBlock message={error} />
-          ) : !courses || courses.length === 0 ? (
-            <EmptyState label="courses" />
-          ) : (
-            <div className="space-y-6">
-              {courses.map((c) => (
-                <div key={c.courseId} className="border border-slate-200 rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                    <span className="font-medium text-slate-800 text-sm">{c.topic}</span>
-                    {c.completedAt && (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-                        Completed {fmtDate(c.completedAt)}
-                      </span>
-                    )}
+    <Modal title={`${userName}'s progress`} sub="Watch state across every course they own" onClose={onClose}>
+      <div className="p-6">
+        {loading ? (
+          <LoadingBlock />
+        ) : error ? (
+          <ErrorBlock message={error} />
+        ) : !courses || courses.length === 0 ? (
+          <EmptyState label="courses" />
+        ) : (
+          <div className="space-y-4">
+            {courses.map((c) => {
+              const watched = c.lessons.filter((l) => l.watched).length;
+              return (
+                <div key={c.courseId} className="overflow-hidden rounded-2xl ring-1 ring-white/[0.07]">
+                  <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] bg-white/[0.02] px-4 py-3">
+                    <span className="min-w-0 truncate text-[13px] font-medium text-[#ECEDF2]">{c.topic}</span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-[11px] tabular-nums text-[#6E7389]">{watched}/{c.lessons.length} watched</span>
+                      {c.completedAt && (
+                        <span className="rounded-full bg-[#3DDC97]/10 px-2 py-0.5 text-[10px] font-medium text-[#3DDC97] ring-1 ring-inset ring-[#3DDC97]/25">
+                          Completed {fmtDate(c.completedAt)}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="divide-y divide-slate-50">
+                  <div className="divide-y divide-white/[0.04]">
                     {c.lessons
                       .slice()
                       .sort((a, b) => a.lessonNumber - b.lessonNumber)
                       .map((l) => (
-                        <div key={l.lessonNumber} className="px-4 py-2.5 flex items-center justify-between text-sm">
-                          <div className="flex items-center gap-2 min-w-0">
+                        <div key={l.lessonNumber} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                          <div className="flex min-w-0 items-center gap-2.5">
                             {l.watched ? (
-                              <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                              <CheckCircle2 className="h-4 w-4 shrink-0 text-[#3DDC97]" />
                             ) : (
-                              <Circle className="h-4 w-4 text-slate-300 shrink-0" />
+                              <Circle className="h-4 w-4 shrink-0 text-white/[0.14]" />
                             )}
-                            <span className="text-slate-700 truncate">
-                              Lesson {l.lessonNumber}: {l.title}
+                            <span className="truncate text-[13px] text-[#D6D8E2]">
+                              <span className="font-mono text-[11px] text-[#4A4F63]">{String(l.lessonNumber).padStart(2, "0")}</span>{" "}
+                              {l.title}
                             </span>
                           </div>
-                          <div className="flex items-center gap-3 shrink-0 text-xs text-slate-400">
-                            {l.watchedAt && <span>watched {fmtDate(l.watchedAt)}</span>}
+                          <div className="flex shrink-0 items-center gap-3 text-[11px] text-[#6E7389]">
+                            {l.watchedAt && <span className="hidden sm:inline">watched {fmtDate(l.watchedAt)}</span>}
                             {l.lastPositionFrame > 0 && (
-                              <span className="text-slate-500 font-medium">{fmtPosition(l.lastPositionFrame, l.totalFrames)}</span>
+                              <span className="font-medium tabular-nums text-[#8A8FA3]">
+                                {fmtPosition(l.lastPositionFrame, l.totalFrames)}
+                              </span>
                             )}
                           </div>
                         </div>
                       ))}
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -283,28 +354,26 @@ function EditUserModal({ user, onClose, onSaved }: { user: User; onClose: () => 
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold text-slate-900">Edit user</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
-        </div>
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs font-medium text-slate-500 mb-1 block">Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-slate-600">
-            <input type="checkbox" checked={verified} onChange={(e) => setVerified(e.target.checked)} />
-            Verified
-          </label>
-        </div>
-        {error && <p className="text-xs text-red-500 mt-3">{error}</p>}
-        <button onClick={handleSave} disabled={saving} className="w-full mt-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg py-2.5 text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2">
+    <Modal title="Edit user" sub={user.email} onClose={onClose} width="sm">
+      <div className="p-6">
+        <label className={LABEL}>Name</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} />
+
+        <label className="mt-4 flex cursor-pointer items-center gap-2.5 rounded-xl bg-white/[0.03] px-3.5 py-3 text-[13px] text-[#D6D8E2] ring-1 ring-inset ring-white/[0.06] transition-colors hover:bg-white/[0.06]">
+          <input type="checkbox" checked={verified} onChange={(e) => setVerified(e.target.checked)} className="h-4 w-4 rounded" />
+          Email verified
+        </label>
+
+        <p className="mt-3 text-[11px] leading-relaxed text-[#4A4F63]">
+          Credits aren't editable here — use the Coins action so the change lands in the ledger.
+        </p>
+
+        {error && <p className="mt-3 text-[11px] text-[#FF8A95]">{error}</p>}
+        <button onClick={handleSave} disabled={saving} className={cx(BTN_PRIMARY, "mt-5 w-full")}>
           {saving && <Loader2 className="h-4 w-4 animate-spin" />} Save changes
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -318,6 +387,7 @@ function AdjustCreditsModal({ user, onClose, onAdjusted }: { user: User; onClose
   const currentBalance = spendableBalance(user);
   const parsedAmount = Number(amount);
   const validAmount = amount.trim() !== "" && Number.isFinite(parsedAmount) && parsedAmount > 0;
+  const nextBalance = direction === "add" ? currentBalance + parsedAmount : Math.max(0, currentBalance - parsedAmount);
 
   const handleSubmit = async () => {
     if (!validAmount) return;
@@ -337,80 +407,78 @@ function AdjustCreditsModal({ user, onClose, onAdjusted }: { user: User; onClose
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-lg font-bold text-slate-900">Adjust credits</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
-        </div>
-        <p className="text-sm text-slate-500 mb-4">
-          {user.name} — currently <span className="font-semibold text-slate-700">{currentBalance}</span> credits
-        </p>
-
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setDirection("add")}
-              className={`py-2 rounded-lg text-sm font-semibold border ${
-                direction === "add" ? "bg-emerald-600 border-emerald-600 text-white" : "border-slate-200 text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              + Add
-            </button>
-            <button
-              type="button"
-              onClick={() => setDirection("remove")}
-              className={`py-2 rounded-lg text-sm font-semibold border ${
-                direction === "remove" ? "bg-red-600 border-red-600 text-white" : "border-slate-200 text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              − Remove
-            </button>
-          </div>
-
+    <Modal title="Adjust credits" sub={user.name} onClose={onClose} width="sm">
+      <div className="p-6">
+        <div className="mb-5 flex items-end justify-between rounded-2xl bg-white/[0.03] px-4 py-3.5 ring-1 ring-inset ring-white/[0.06]">
           <div>
-            <label className="text-xs font-medium text-slate-500 mb-1 block">Amount</label>
-            <input
-              type="number"
-              min={1}
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="e.g. 50"
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-              autoFocus
-            />
+            <span className={EYEBROW}>Balance now</span>
+            <div className="mt-1 text-2xl font-semibold leading-none text-white tabular-nums">{currentBalance}</div>
           </div>
-
-          <div>
-            <label className="text-xs font-medium text-slate-500 mb-1 block">Reason (optional, kept in the ledger)</label>
-            <input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="e.g. goodwill credit, refund correction"
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-
           {validAmount && (
-            <p className="text-xs text-slate-400">
-              New balance: {direction === "add" ? currentBalance + parsedAmount : Math.max(0, currentBalance - parsedAmount)} credits
-            </p>
+            <div className="text-right">
+              <span className={EYEBROW}>After</span>
+              <div
+                className="mt-1 text-2xl font-semibold leading-none tabular-nums"
+                style={{ color: direction === "add" ? "#3DDC97" : "#FF8A95" }}
+              >
+                {nextBalance}
+              </div>
+            </div>
           )}
         </div>
 
-        {error && <p className="text-xs text-red-500 mt-3">{error}</p>}
+        <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-[#0C0D13] p-1 ring-1 ring-white/[0.07]">
+          <button
+            type="button"
+            onClick={() => setDirection("add")}
+            className={cx(
+              "rounded-lg py-2 text-[13px] font-semibold transition-all",
+              direction === "add" ? "bg-[#3DDC97] text-[#0A0B10]" : "text-[#8A8FA3] hover:bg-white/[0.05] hover:text-white"
+            )}
+          >
+            + Add
+          </button>
+          <button
+            type="button"
+            onClick={() => setDirection("remove")}
+            className={cx(
+              "rounded-lg py-2 text-[13px] font-semibold transition-all",
+              direction === "remove" ? "bg-[#FF5C6C] text-[#0A0B10]" : "text-[#8A8FA3] hover:bg-white/[0.05] hover:text-white"
+            )}
+          >
+            − Remove
+          </button>
+        </div>
+
+        <label className={LABEL}>Amount</label>
+        <input
+          type="number"
+          min={1}
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="e.g. 50"
+          className={INPUT}
+          autoFocus
+        />
+
+        <label className={cx(LABEL, "mt-4")}>Reason — kept in the ledger</label>
+        <input
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. goodwill credit, refund correction"
+          className={INPUT}
+        />
+
+        {error && <p className="mt-3 text-[11px] text-[#FF8A95]">{error}</p>}
         <button
           onClick={handleSubmit}
           disabled={saving || !validAmount}
-          className={`w-full mt-4 rounded-lg py-2.5 text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2 text-white ${
-            direction === "add" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"
-          }`}
+          className={cx(direction === "add" ? BTN_MINT : BTN_DANGER, "mt-5 w-full")}
         >
           {saving && <Loader2 className="h-4 w-4 animate-spin" />}
           {direction === "add" ? "Add credits" : "Remove credits"}
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }

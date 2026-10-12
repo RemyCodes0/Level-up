@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Trash2, Star } from "lucide-react";
+import { Trash2, Star, MessageSquare } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, Pagination, fmtDate } from "../components";
+import {
+  Page, PageHeader, Card, RowList, LoadingBlock, ErrorBlock, EmptyState, Pagination, fmtDate,
+} from "../components";
+import { EYEBROW, cx } from "../theme";
 
 interface Feedback {
   _id: string;
@@ -17,9 +20,9 @@ interface Feedback {
 
 function Stars({ n }: { n: number }) {
   return (
-    <div className="flex gap-0.5">
+    <div className="flex gap-0.5" title={`${n} of 5`}>
       {Array.from({ length: 5 }, (_, i) => (
-        <Star key={i} className={`h-3.5 w-3.5 ${i < n ? "fill-amber-400 text-amber-400" : "text-slate-200"}`} />
+        <Star key={i} className={cx("h-3.5 w-3.5", i < n ? "fill-[#FFB547] text-[#FFB547]" : "text-white/[0.12]")} />
       ))}
     </div>
   );
@@ -53,40 +56,71 @@ export default function FeedbackAndReviews() {
     }
   };
 
+  // Average over the page in view — the endpoint paginates and returns no
+  // aggregate, so this is deliberately labelled "this page", not "all time".
+  const avg = items.length > 0 ? items.reduce((s, f) => s + f.rating, 0) / items.length : null;
+
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-      <PageHeader title="Feedback" />
+    <Page max="5xl">
+      <PageHeader
+        title="Feedback"
+        sub="What learners said after finishing a course, newest first."
+        right={
+          avg !== null && (
+            <div className="rounded-xl bg-[#11131A] px-4 py-2.5 ring-1 ring-white/[0.07]">
+              <span className={cx(EYEBROW, "text-[10px]")}>Avg · this page</span>
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-lg font-semibold leading-none text-white tabular-nums">{avg.toFixed(1)}</span>
+                <Stars n={Math.round(avg)} />
+              </div>
+            </div>
+          )
+        }
+      />
+
       {loading ? (
         <LoadingBlock />
       ) : error ? (
         <ErrorBlock message={error} />
       ) : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <Card pad={false}>
           {items.length === 0 ? (
-            <div className="p-8"><EmptyState label="feedback" /></div>
+            <div className="p-5"><EmptyState label="feedback" /></div>
           ) : (
-            <div className="divide-y divide-slate-100">
+            <RowList>
               {items.map((f) => (
-                <div key={f._id} className="px-5 py-4 flex items-start gap-4">
+                <div key={f._id} className="group flex items-start gap-4 px-5 py-4">
+                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.04] ring-1 ring-white/[0.07]">
+                    <MessageSquare className="h-3.5 w-3.5 text-[#6E7389]" />
+                  </span>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="mb-1.5 flex flex-wrap items-center gap-2">
                       <Stars n={f.rating} />
-                      <span className="text-xs text-slate-400">{f.userName}{f.userEmail ? ` · ${f.userEmail}` : ""}</span>
+                      <span className="text-[11px] text-[#8A8FA3]">
+                        {f.userName}
+                        {f.userEmail ? <span className="text-[#5B607A]"> · {f.userEmail}</span> : ""}
+                      </span>
+                      <span className="text-[11px] text-[#4A4F63]">{fmtDate(f.createdAt)}</span>
                     </div>
-                    {f.courseName && <p className="text-xs text-indigo-600 mb-1">{f.courseName}</p>}
-                    <p className="text-sm text-slate-700">{f.message}</p>
-                    <p className="text-xs text-slate-400 mt-1">{fmtDate(f.createdAt)}</p>
+                    {f.courseName && (
+                      <p className="mb-1 text-[11px] font-medium text-[#B4A9FF]">{f.courseName}</p>
+                    )}
+                    <p className="text-[13px] leading-relaxed text-[#D6D8E2]">{f.message}</p>
                   </div>
-                  <button onClick={() => remove(f._id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg shrink-0">
+                  <button
+                    onClick={() => remove(f._id)}
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#4A4F63] opacity-0 transition-colors hover:bg-[#FF5C6C]/10 hover:text-[#FF8A95] focus-visible:opacity-100 group-hover:opacity-100"
+                    title="Delete this feedback"
+                  >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
               ))}
-            </div>
+            </RowList>
           )}
           <Pagination page={page} pages={pages} onChange={setPage} />
-        </div>
+        </Card>
       )}
-    </div>
+    </Page>
   );
 }

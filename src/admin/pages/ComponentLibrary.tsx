@@ -3,7 +3,11 @@
 import { useEffect, useState, useCallback } from "react";
 import { Check, X, Trash2, RotateCcw, Loader2, Repeat, Sparkles, Code2, Percent } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, LoadingBlock, ErrorBlock, EmptyState, Pagination, StatCard, fmtDate } from "../components";
+import {
+  Page, PageHeader, StatCard, Segmented, Chip,
+  LoadingBlock, ErrorBlock, EmptyState, Pagination, fmtDate,
+} from "../components";
+import { SURFACE, cx } from "../theme";
 import { DynamicPlayer } from "../../remotion/DynamicPlayer";
 
 // A "shadcn-style" browsable gallery for the global reusable-component
@@ -100,52 +104,56 @@ export default function ComponentLibrary() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+    <Page>
       <PageHeader
         title="Component Library"
         sub="Reusable visual components grown from real lesson generation — review, preview, and approve before they're offered to future lessons."
         right={
-          <div className="flex gap-1 bg-white border border-slate-200 rounded-lg p-1">
-            {TABS.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => { setTab(t.key); setPage(1); }}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
-                  tab === t.key ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-50"
-                }`}
-              >
-                {t.label}
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${tab === t.key ? "bg-white/20" : "bg-slate-100"}`}>
-                  {counts[t.key] ?? "…"}
-                </span>
-              </button>
-            ))}
-          </div>
+          <Segmented
+            value={tab}
+            onChange={(k) => { setTab(k); setPage(1); }}
+            options={TABS.map((t) => ({
+              key: t.key,
+              label: (
+                <>
+                  {t.label}
+                  <span
+                    className={cx(
+                      "rounded-full px-1.5 py-0.5 text-[10px] tabular-nums",
+                      tab === t.key ? "bg-[#0A0B10]/20 text-[#0A0B10]" : "bg-white/[0.07] text-[#8A8FA3]"
+                    )}
+                  >
+                    {counts[t.key] ?? "…"}
+                  </span>
+                </>
+              ),
+            }))}
+          />
         }
       />
 
       {stats && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
           <StatCard
-            icon={<Repeat className="h-5 w-5" />}
-            label="Total Reuses"
+            icon={<Repeat className="h-4 w-4" />}
+            label="Total reuses"
             value={stats.totalReuses}
             sub="lesson calls to an existing component"
-            accent="text-emerald-500"
+            accent="text-[#3DDC97]"
           />
           <StatCard
-            icon={<Sparkles className="h-5 w-5" />}
-            label="New Components"
+            icon={<Sparkles className="h-4 w-4" />}
+            label="New components"
             value={stats.totalProposed}
             sub="distinct pieces ever proposed by real lessons"
-            accent="text-indigo-500"
+            accent="text-[#B4A9FF]"
           />
           <StatCard
-            icon={<Percent className="h-5 w-5" />}
-            label="Reuse Rate"
+            icon={<Percent className="h-4 w-4" />}
+            label="Reuse rate"
             value={stats.reuseRatePercent === null ? "—" : `${stats.reuseRatePercent}%`}
             sub="reuse events vs. new-component events"
-            accent="text-amber-500"
+            accent="text-[#FFB547]"
           />
         </div>
       )}
@@ -158,7 +166,7 @@ export default function ComponentLibrary() {
         <EmptyState label={tab === "candidate" ? "components awaiting review" : `${tab} components`} />
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
             {components.map((c) => (
               <ComponentCard key={c._id} component={c} onChanged={refreshAfterAction} />
             ))}
@@ -166,9 +174,12 @@ export default function ComponentLibrary() {
           <Pagination page={page} pages={pages} onChange={setPage} />
         </>
       )}
-    </div>
+    </Page>
   );
 }
+
+const ACTION_BTN =
+  "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold ring-1 ring-inset transition-colors disabled:opacity-50 disabled:pointer-events-none";
 
 function ComponentCard({ component, onChanged }: { component: LibraryComponentRow; onChanged: () => void }) {
   const [preview, setPreview] = useState<{ code: string; durationInFrames: number } | null>(null);
@@ -199,41 +210,47 @@ function ComponentCard({ component, onChanged }: { component: LibraryComponentRo
   };
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col">
-      <div className="aspect-video bg-slate-900 relative">
+    <div className={cx(SURFACE, "flex flex-col overflow-hidden transition-colors hover:ring-white/[0.14]")}>
+      <div className="relative aspect-video bg-[#07080C]">
         {previewError ? (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-red-300 px-4 text-center">{previewError}</div>
+          <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-[11px] text-[#FF8A95]">{previewError}</div>
         ) : !preview ? (
           <div className="absolute inset-0 flex items-center justify-center">
-            <Loader2 className="h-5 w-5 text-slate-500 animate-spin" />
+            <Loader2 className="h-5 w-5 animate-spin text-[#4A4F63]" />
           </div>
         ) : (
           <DynamicPlayer code={preview.code} durationInFrames={preview.durationInFrames} />
         )}
       </div>
 
-      <div className="p-4 flex-1 flex flex-col">
-        <div className="flex items-start justify-between gap-2 mb-1">
-          <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-            <Sparkles className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-            {component.name}
+      <div className="flex flex-1 flex-col p-4">
+        <div className="mb-1.5 flex items-start justify-between gap-2">
+          <h3 className="flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-white">
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#B4A9FF]" />
+            <span className="truncate">{component.name}</span>
           </h3>
           {component.status === "active" && (
-            <span className="shrink-0 flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-[#3DDC97]/10 px-2 py-0.5 text-[10px] font-medium text-[#3DDC97] ring-1 ring-inset ring-[#3DDC97]/25">
               <Repeat className="h-3 w-3" /> {component.usageCount} {component.usageCount === 1 ? "reuse" : "reuses"}
             </span>
           )}
         </div>
-        <p className="text-xs text-slate-500 mb-2 flex-1">{component.description}</p>
+
+        <p className="mb-2.5 flex-1 text-[12px] leading-relaxed text-[#8A8FA3]">{component.description}</p>
+
         {component.propsDoc && (
-          <code className="text-[11px] text-slate-400 bg-slate-50 rounded px-1.5 py-1 mb-2 break-all">{component.propsDoc}</code>
+          <code className="mb-2.5 block break-all rounded-lg bg-[#07080C] px-2 py-1.5 text-[10px] leading-relaxed text-[#6E7389] ring-1 ring-inset ring-white/[0.05]">
+            {component.propsDoc}
+          </code>
         )}
-        <div className="flex flex-wrap gap-1 mb-2">
-          {component.domainTags.map((tag) => (
-            <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">{tag}</span>
-          ))}
-        </div>
-        <p className="text-[11px] text-slate-400 mb-3">
+
+        {component.domainTags.length > 0 && (
+          <div className="mb-2.5 flex flex-wrap gap-1">
+            {component.domainTags.map((tag) => <Chip key={tag}>{tag}</Chip>)}
+          </div>
+        )}
+
+        <p className="mb-3 text-[10px] text-[#4A4F63]">
           {component.sourceLessonNumber
             ? `Proposed from lesson ${component.sourceLessonNumber} · ${fmtDate(component.createdAt)}`
             : component.sourceCourseId
@@ -243,28 +260,30 @@ function ComponentCard({ component, onChanged }: { component: LibraryComponentRo
 
         <button
           onClick={() => setShowCode((v) => !v)}
-          className="text-[11px] text-slate-400 hover:text-slate-600 flex items-center gap-1 mb-2 self-start"
+          className="mb-2.5 flex items-center gap-1 self-start text-[11px] text-[#6E7389] transition-colors hover:text-[#D6D8E2]"
         >
           <Code2 className="h-3 w-3" /> {showCode ? "Hide source" : "View source"}
         </button>
         {showCode && preview && (
-          <pre className="text-[10px] bg-slate-900 text-slate-200 rounded-lg p-3 overflow-x-auto max-h-48 mb-3">{preview.code}</pre>
+          <pre className="ad-scroll mb-3 max-h-48 overflow-auto rounded-xl bg-[#07080C] p-3 text-[10px] leading-relaxed text-[#B9BCCB] ring-1 ring-inset ring-white/[0.05]">
+            {preview.code}
+          </pre>
         )}
 
-        <div className="flex gap-2 mt-auto pt-2 border-t border-slate-100">
+        <div className="mt-auto flex gap-2 border-t border-white/[0.06] pt-3">
           {component.status === "candidate" && (
             <>
               <button
                 onClick={() => act("approve")}
                 disabled={busy}
-                className="flex-1 flex items-center justify-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg disabled:opacity-50"
+                className={cx(ACTION_BTN, "bg-[#3DDC97]/10 text-[#3DDC97] ring-[#3DDC97]/25 hover:bg-[#3DDC97]/20")}
               >
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Approve
               </button>
               <button
                 onClick={() => act("reject")}
                 disabled={busy}
-                className="flex-1 flex items-center justify-center gap-1 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg disabled:opacity-50"
+                className={cx(ACTION_BTN, "bg-[#FF5C6C]/10 text-[#FF8A95] ring-[#FF5C6C]/25 hover:bg-[#FF5C6C]/20")}
               >
                 <X className="h-3.5 w-3.5" /> Reject
               </button>
@@ -274,7 +293,7 @@ function ComponentCard({ component, onChanged }: { component: LibraryComponentRo
             <button
               onClick={() => act("reject")}
               disabled={busy}
-              className="flex-1 flex items-center justify-center gap-1 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg disabled:opacity-50"
+              className={cx(ACTION_BTN, "bg-[#FF5C6C]/10 text-[#FF8A95] ring-[#FF5C6C]/25 hover:bg-[#FF5C6C]/20")}
             >
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />} Remove from library
             </button>
@@ -284,14 +303,15 @@ function ComponentCard({ component, onChanged }: { component: LibraryComponentRo
               <button
                 onClick={() => act("approve")}
                 disabled={busy}
-                className="flex-1 flex items-center justify-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg disabled:opacity-50"
+                className={cx(ACTION_BTN, "bg-[#3DDC97]/10 text-[#3DDC97] ring-[#3DDC97]/25 hover:bg-[#3DDC97]/20")}
               >
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Restore
               </button>
               <button
                 onClick={() => act("delete")}
                 disabled={busy}
-                className="flex items-center justify-center gap-1 text-xs font-medium text-slate-500 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-lg disabled:opacity-50"
+                className="flex items-center justify-center gap-1 rounded-xl bg-white/[0.04] px-3 py-2 text-xs font-semibold text-[#6E7389] ring-1 ring-inset ring-white/[0.07] transition-colors hover:bg-white/[0.08] hover:text-white disabled:opacity-50"
+                title="Delete permanently"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>

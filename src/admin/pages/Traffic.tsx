@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Eye, Users2 } from "lucide-react";
+import { Eye, Users2, FileText, ExternalLink } from "lucide-react";
 import { adminApi } from "../adminApi";
-import { PageHeader, StatCard, LoadingBlock, ErrorBlock, EmptyState } from "../components";
+import {
+  Page, PageHeader, StatCard, Card, RowList, Segmented, Bars,
+  LoadingBlock, ErrorBlock, EmptyState,
+} from "../components";
 
 interface PageViewStats {
   range: string;
@@ -37,92 +40,91 @@ export default function Traffic() {
   }, [range]);
 
   const totalViews = data?.daily.reduce((s, d) => s + d.views, 0) || 0;
-  const maxViews = Math.max(...(data?.daily.map((d) => d.views) || [0]), 1);
+  const perVisitor = data && data.totalUniqueSessions > 0 ? totalViews / data.totalUniqueSessions : 0;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+    <Page>
       <PageHeader
         title="Traffic"
         sub="First-party page views — recorded directly from the app, not a third-party analytics dashboard."
-        right={
-          <div className="flex gap-1 bg-white border border-slate-200 rounded-lg p-1">
-            {RANGES.map((r) => (
-              <button
-                key={r.key}
-                onClick={() => setRange(r.key)}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                  range === r.key ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-50"
-                }`}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-        }
+        right={<Segmented options={RANGES} value={range} onChange={setRange} />}
       />
 
       {loading ? <LoadingBlock /> : error ? <ErrorBlock message={error} /> : data && (
         <>
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <StatCard icon={<Eye className="h-5 w-5" />} accent="text-indigo-500" label="Total views" value={totalViews} sub={data.range} />
-            <StatCard icon={<Users2 className="h-5 w-5" />} accent="text-emerald-500" label="Unique visitors" value={data.totalUniqueSessions} sub={data.range} />
+          <div className="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-3">
+            <StatCard icon={<Eye className="h-4 w-4" />} accent="text-[#B4A9FF]" label="Total views" value={totalViews.toLocaleString()} sub={data.range} />
+            <StatCard icon={<Users2 className="h-4 w-4" />} accent="text-[#3DDC97]" label="Unique visitors" value={data.totalUniqueSessions.toLocaleString()} sub={data.range} />
+            <StatCard
+              icon={<FileText className="h-4 w-4" />}
+              accent="text-[#FFB547]"
+              label="Views / visitor"
+              value={perVisitor > 0 ? perVisitor.toFixed(1) : "—"}
+              sub="how deep a session goes"
+            />
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 p-5 mb-6">
-            <h3 className="text-sm font-semibold text-slate-700 mb-4">Views per day</h3>
-            {data.daily.length === 0 ? (
-              <EmptyState label="page views" />
-            ) : (
-              <div className="flex items-end gap-1 h-32">
-                {data.daily.map((d) => (
-                  <div key={d.date} className="flex-1 flex flex-col items-center justify-end gap-1">
-                    <div
-                      className="w-full bg-emerald-400 rounded-t hover:bg-emerald-500 transition-colors"
-                      style={{ height: `${Math.max(4, (d.views / maxViews) * 100)}%` }}
-                      title={`${d.date}: ${d.views} views, ${d.uniqueSessions} unique`}
-                    />
-                    <span className="text-[9px] text-slate-400 whitespace-nowrap">{d.date.slice(5)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+          <div className="mb-5">
+            <Card title="Views per day" icon={<Eye className="h-4 w-4" />}>
+              {data.daily.length === 0 ? (
+                <EmptyState label="page views" />
+              ) : (
+                <Bars
+                  data={data.daily.map((d) => ({ label: d.date.slice(5), value: d.views, hint: `${d.uniqueSessions} unique` }))}
+                  format={(v) => v.toLocaleString()}
+                  tone="mint"
+                />
+              )}
+            </Card>
           </div>
 
-          <div className="grid lg:grid-cols-2 gap-4">
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-100">
-                <h3 className="text-sm font-semibold text-slate-700">Top pages</h3>
-              </div>
-              <div className="divide-y divide-slate-100">
-                {data.topPaths.length === 0 ? (
-                  <EmptyState label="page data" />
-                ) : data.topPaths.map((p) => (
-                  <div key={p.path} className="flex items-center justify-between px-5 py-2.5">
-                    <span className="text-sm text-slate-700 truncate font-mono">{p.path}</span>
-                    <span className="text-sm font-semibold text-slate-900 shrink-0 ml-3">{p.views}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card title="Top pages" icon={<FileText className="h-4 w-4" />} pad={false}>
+              {data.topPaths.length === 0 ? (
+                <div className="p-5"><EmptyState label="page data" /></div>
+              ) : (
+                <RowList>
+                  {data.topPaths.map((p) => (
+                    <Row key={p.path} label={p.path} value={p.views} max={data.topPaths[0].views} mono />
+                  ))}
+                </RowList>
+              )}
+            </Card>
 
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-100">
-                <h3 className="text-sm font-semibold text-slate-700">Top referrers</h3>
-              </div>
-              <div className="divide-y divide-slate-100">
-                {data.topReferrers.length === 0 ? (
-                  <EmptyState label="referrer data" />
-                ) : data.topReferrers.map((r) => (
-                  <div key={r.referrer} className="flex items-center justify-between px-5 py-2.5">
-                    <span className="text-sm text-slate-700 truncate">{r.referrer}</span>
-                    <span className="text-sm font-semibold text-slate-900 shrink-0 ml-3">{r.views}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <Card title="Top referrers" icon={<ExternalLink className="h-4 w-4" />} pad={false}>
+              {data.topReferrers.length === 0 ? (
+                <div className="p-5"><EmptyState label="referrer data" /></div>
+              ) : (
+                <RowList>
+                  {data.topReferrers.map((r) => (
+                    <Row key={r.referrer} label={r.referrer} value={r.views} max={data.topReferrers[0].views} />
+                  ))}
+                </RowList>
+              )}
+            </Card>
           </div>
         </>
       )}
+    </Page>
+  );
+}
+
+/**
+ * A ranked row with the share-of-top bar drawn behind the label — the same
+ * trick the AI Spend page's "by model" list uses, so the two read alike.
+ */
+function Row({ label, value, max, mono }: { label: string; value: number; max: number; mono?: boolean }) {
+  return (
+    <div className="relative px-5 py-2.5">
+      <span
+        className="pointer-events-none absolute inset-y-0 left-0 bg-[#8B7CFF]/[0.07]"
+        style={{ width: `${max > 0 ? Math.max(1, (value / max) * 100) : 0}%` }}
+        aria-hidden="true"
+      />
+      <div className="relative flex items-center justify-between gap-3">
+        <span className={`min-w-0 truncate text-[13px] text-[#D6D8E2] ${mono ? "font-mono text-[12px]" : ""}`}>{label}</span>
+        <span className="shrink-0 text-[13px] font-semibold tabular-nums text-white">{value.toLocaleString()}</span>
+      </div>
     </div>
   );
 }

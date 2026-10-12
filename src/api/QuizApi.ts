@@ -71,7 +71,20 @@ export async function getLatestAttempt(courseId: string): Promise<QuizResult | n
   return res.json();
 }
 
-export async function getAttemptHistory(courseId: string): Promise<QuizResult[]> {
+// What GET /attempts actually returns: raw QuizAttempt docs, oldest first,
+// with `answers` projected out. Deliberately NOT QuizResult — the list
+// endpoint does no enrichment, so readinessLabel/missedQuestions/trend are
+// absent there and only the single-attempt endpoints carry them.
+export interface QuizAttemptSummary {
+  _id: string;
+  score: number;
+  total: number;
+  pct: number;
+  topicBreakdown: TopicBreakdown[];
+  submittedAt: string;
+}
+
+export async function getAttemptHistory(courseId: string): Promise<QuizAttemptSummary[]> {
   const res = await fetch(`${BASE_URL}/api/quiz/${courseId}/attempts`, { headers: { ...authHeaders() } });
   if (!res.ok) throw new Error("Failed to load quiz attempt history");
   return res.json();
