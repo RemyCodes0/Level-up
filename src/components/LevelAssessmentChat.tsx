@@ -387,7 +387,7 @@ export function LevelAssessmentChat({ topic, onComplete, onSkip }: LevelAssessme
 
       {/* Footer hint */}
       <div className="relative flex shrink-0 items-center justify-center gap-3 border-t border-white/[0.06] px-4 py-3 text-[11px] text-[#555A6E] sm:px-6">
-        <span>Tailors the depth of your course · skip anytime</span>
+        <span>Tailors the depth of your course · skip anytime · AI can make mistakes</span>
         <span className="hidden items-center gap-1.5 md:inline-flex">
           <span className="h-3 w-px bg-white/10" />
           <Keyboard className="h-3.5 w-3.5" /> Press A–D to answer

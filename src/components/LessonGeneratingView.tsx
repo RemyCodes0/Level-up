@@ -196,7 +196,6 @@ function SceneTimeline({ sceneProgress }: { sceneProgress: SceneProgressItem[] }
 
       <div className="relative px-4 pb-4 sm:px-6 sm:pb-5">
         <p className="lgv-serif text-lg text-white sm:text-xl">{readyCount} of {sceneProgress.length} scenes animated</p>
-        <p className="mt-0.5 text-[11px] text-[#6E7389] sm:text-xs">The lesson builds in the background — feel free to browse others.</p>
       </div>
     </div>
   );

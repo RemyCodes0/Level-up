@@ -99,7 +99,6 @@ interface HistoryEntry {
 interface Lesson {
   id: number;
   title: string;
-  duration: string;
   completed: boolean;
   description: string;
   keyPoints: string[];
@@ -163,11 +162,18 @@ function mergeLesson(l: Lesson, a: ApiLesson | undefined): Lesson {
   };
 }
 
+// Real runtime of a lesson, read off the same frame count the player uses.
+// null while the lesson is still generating (no frame count yet).
+function lessonDuration(lesson: Lesson): string | null {
+  if (!lesson.totalFrames || lesson.totalFrames <= 0) return null;
+  const seconds = Math.round(lesson.totalFrames / FPS);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 function buildMockLessons(count: number = 6): Lesson[] {
   return Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     title: `Lesson ${i + 1}`,
-    duration: "~2:00",
     completed: false,
     description: i === 0 ? "Generating your first lesson…" : "Generating…",
     keyPoints: ["Loading…", "Loading…", "Loading…", "Loading…"],
@@ -696,7 +702,7 @@ function Composer({ onGenerate, credits, courseTiers, onRequestTopUp }: {
                 </div>
               ))}
             </div>
-            <p className="mt-8 text-center text-xs text-[#555A6E]">A full course is ready in about 10 minutes.</p>
+            <p className="mt-8 text-center text-xs text-[#555A6E]">A full course is ready in about 5 minutes.</p>
           </>
         )}
       </div>
@@ -967,7 +973,6 @@ function SceneTimeline({ sceneProgress }: { sceneProgress: SceneProgressItem[] }
 
       <div className="relative px-4 pb-4 sm:px-6 sm:pb-5">
         <p className="lu-serif text-lg text-white sm:text-xl">{readyCount} of {sceneProgress.length} scenes animated</p>
-        <p className="mt-0.5 text-[11px] text-[#6E7389] sm:text-xs">Lessons build in parallel — feel free to browse the others.</p>
       </div>
     </div>
   );
@@ -1067,6 +1072,7 @@ function LessonStage({
   const points = lesson.keyPoints.filter((p) => p !== "");
   const pointsLoading = lesson.keyPoints.length > 0 && lesson.keyPoints.every(isPlaceholderPoint);
   const isBuilding = !lesson.code;
+  const durationLabel = lessonDuration(lesson);
 
   return (
     <div className="space-y-6">
@@ -1078,9 +1084,9 @@ function LessonStage({
           </p>
           <h2 className="lu-serif mt-2 text-3xl leading-[1.08] text-white sm:text-[44px]">{lesson.title}</h2>
         </div>
-        {!isBuilding && (
+        {!isBuilding && durationLabel && (
           <span className="hidden shrink-0 items-center gap-1.5 text-xs text-[#6E7389] sm:inline-flex">
-            <Clock className="h-3.5 w-3.5" /> {lesson.duration}
+            <Clock className="h-3.5 w-3.5" /> {durationLabel}
           </span>
         )}
       </div>
@@ -1856,7 +1862,7 @@ function SyllabusPanel({
           </div>
         ) : (
           <ol className="relative">
-            <span className="absolute bottom-6 left-[27px] top-6 w-px bg-white/[0.07]" aria-hidden="true" />
+            <span className="absolute bottom-6 left-[23.5px] top-6 w-px bg-white/[0.07]" aria-hidden="true" />
             {lessons.map((lesson, i) => {
               const status = lessonStatuses[i];
               const isActive = activeSection === "video" && activeLesson === i;
@@ -1902,9 +1908,9 @@ function SyllabusPanel({
                           <span className="text-[#FFB08A]">Generating…</span>
                         ) : status === "failed" ? (
                           <span className="text-[#FF8A95]">Generation failed</span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-[#6E7389]"><Clock className="h-3 w-3" /> {lesson.duration}</span>
-                        )}
+                        ) : lessonDuration(lesson) ? (
+                          <span className="flex items-center gap-1 text-[#6E7389]"><Clock className="h-3 w-3" /> {lessonDuration(lesson)}</span>
+                        ) : null}
                       </span>
                     </span>
                   </button>
@@ -2053,6 +2059,11 @@ export default function AILearningPage() {
   // Mirrors activeHistoryId for async callbacks that must check it at resolution time.
   const activeHistoryIdRef = useRef<string | null>(null);
   useEffect(() => { activeHistoryIdRef.current = activeHistoryId; }, [activeHistoryId]);
+  // Same reason: detachActiveCoursePoll runs inside event handlers and needs
+  // the CURRENT statuses to decide whether the course it is leaving still has
+  // work in flight worth watching in the background.
+  const lessonStatusesRef = useRef<LessonStatus[]>([]);
+  useEffect(() => { lessonStatusesRef.current = lessonStatuses; }, [lessonStatuses]);
   const lessonProgresses = useLessonProgress(lessonStatuses, lessons.map((l) => l.sceneProgress));
   const isMobile = useIsMobile();
 
@@ -2099,9 +2110,52 @@ export default function AILearningPage() {
     if (course.questions?.length) setQuizQuestions(course.questions);
   };
 
+  // Keeps a course's SIDEBAR ENTRY up to date after the user has moved off it.
+  // pollCancelRef holds a single poll — the one driving the open course — so
+  // opening or generating something else cancels it. For a course that was
+  // still generating that left its entry frozen on "Generating" forever (until
+  // a reload), even though the server went on to finish it. These background
+  // watchers update only the history entry, never the live view, so they can
+  // run alongside whatever course is currently open.
+  const bgPollsRef = useRef<Map<string, () => void>>(new Map());
+
+  const watchCourseInBackground = (courseId: string) => {
+    if (!courseId || bgPollsRef.current.has(courseId)) return;
+    const cancel = pollCourse(courseId, (course: CourseFromAPI) => {
+      const statuses = course.lessons.map((l) => mapStatus(l.status));
+      setHistory((prev) => prev.map((e) => e.id !== course._id ? e : {
+        ...e,
+        lessons: e.lessons.map((l, i) => mergeLesson(l, course.lessons[i])),
+        lessonStatuses: statuses,
+        questions: course.questions?.length ? course.questions : e.questions,
+      }));
+      // Done — stop holding the handle so a later revisit can watch it again.
+      if (!statuses.some((s) => s === "generating")) {
+        bgPollsRef.current.get(course._id)?.();
+        bgPollsRef.current.delete(course._id);
+      }
+    });
+    bgPollsRef.current.set(courseId, cancel);
+  };
+
+  // Hand the currently-open course off to a background watcher if it is still
+  // generating, right before its foreground poll gets cancelled.
+  const detachActiveCoursePoll = () => {
+    const leaving = activeHistoryIdRef.current;
+    if (leaving && lessonStatusesRef.current.some((s) => s === "generating")) {
+      watchCourseInBackground(leaving);
+    }
+    if (pollCancelRef.current) pollCancelRef.current();
+  };
+
+  useEffect(() => () => {
+    bgPollsRef.current.forEach((cancel) => cancel());
+    bgPollsRef.current.clear();
+  }, []);
+
   const mapCourseToEntry = (c: CourseFromAPI): HistoryEntry => {
     const mappedLessons: Lesson[] = (c.lessons || []).map((l, i) => ({
-      id: i + 1, title: l.title || `Lesson ${i + 1}`, duration: "~2:00", completed: false,
+      id: i + 1, title: l.title || `Lesson ${i + 1}`, completed: false,
       description: l.description || "", keyPoints: l.keyPoints?.length ? l.keyPoints : ["", "", "", ""],
       videoUrl: l.videoUrl, code: l.code ?? null, totalFrames: l.totalFrames ?? null, error: l.error ?? null,
       sceneProgress: l.sceneProgress ?? [], scenes: l.scenes ?? [],
@@ -2277,6 +2331,11 @@ export default function AILearningPage() {
     }
   };
 
+  // Mirrors the live course state into its own sidebar entry. activeHistoryId
+  // is in the dependency list deliberately: it is READ here, so leaving it out
+  // meant the effect always ran against whichever course happened to be active
+  // when lessons/lessonStatuses last changed — the exact stale-pairing that let
+  // one course's state be written onto another's entry.
   useEffect(() => {
     if (!activeHistoryId) return;
     setHistory((prev) => prev.map((e) => e.id !== activeHistoryId ? e : {
@@ -2284,7 +2343,7 @@ export default function AILearningPage() {
       quizAnswers, quizDone, questions: quizQuestions,
       quizScore: quizDone ? Math.round((quizAnswers.filter((a) => { const q = quizQuestions.find((q) => q.id === a.questionId); return q && q.correct === a.selected; }).length / Math.max(quizQuestions.length, 1)) * 100) : null,
     }));
-  }, [lessons, lessonStatuses, quizAnswers, quizDone, quizQuestions]);
+  }, [activeHistoryId, lessons, lessonStatuses, quizAnswers, quizDone, quizQuestions]);
 
   const handleDeleteCourse = async (id: string) => {
     setHistory((prev) => prev.filter((e) => e.id !== id));
@@ -2302,7 +2361,16 @@ export default function AILearningPage() {
   const runGeneration = async (name: string, file: File | null | undefined, level: Level, tier: string | null) => {
     analytics.courseStarted({ topic: name, source: file ? (file.name.toLowerCase().endsWith(".pptx") ? "pptx" : "pdf") : "topic" });
     bgTimersRef.current.forEach(clearTimeout); bgTimersRef.current = [];
-    if (pollCancelRef.current) pollCancelRef.current();
+    detachActiveCoursePoll();
+    // Detach from the previously-open course BEFORE the placeholder lessons
+    // below replace the live state. The effect that mirrors live state into the
+    // sidebar keys off activeHistoryId, and the new course's id does not exist
+    // until startCourseGeneration resolves — so without this, the new course's
+    // all-"generating" placeholders were written into the PREVIOUS course's
+    // history entry, which then showed "Generating" forever because polling for
+    // it was just cancelled on the line above. Null means "no course owns the
+    // live state right now", and that effect no-ops until the new id arrives.
+    setActiveHistoryId(null);
     setFileName(name); setPhase("course");
     // Untouched 100-credit bonus = first course ever (drives the post-quiz feedback prompt).
     const isFirstCourseEver = credits?.signupBonusCredits === 100;
@@ -2341,7 +2409,7 @@ export default function AILearningPage() {
   };
 
   const restoreEntry = (entry: HistoryEntry) => {
-    if (pollCancelRef.current) pollCancelRef.current();
+    detachActiveCoursePoll();
     setCourseDetailsLoading(false);
     setActiveHistoryId(entry.id);
     if (urlCourseId !== entry.id) router(`/ai_tutor/${entry.id}`);

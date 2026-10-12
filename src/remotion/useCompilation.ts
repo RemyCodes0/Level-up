@@ -267,6 +267,42 @@ const Tex: React.FC<{
   });
 };
 
+// ── Backdrop defocus ─────────────────────────────────────────────────────────
+// Renders the lesson's own generated Backdrop out of focus. Nothing about the
+// motif changes — same imagery, same motion, same palette — it just sits behind
+// a blur so it reads as depth rather than as competing detail.
+//
+// BACKDROP_BLUR_PX is the single knob. Kept moderate on purpose: a full-frame
+// CSS blur is re-rasterised every frame on an animated subtree, and large radii
+// at 1920x1080 are a well-known frame-rate killer (the same cost I flagged when
+// looking into playback judder). ~16px still clearly defocuses the motif while
+// letting a bit more of its shape read through; push it far higher only
+// alongside a check that frames aren't being dropped.
+const BACKDROP_BLUR_PX = 16;
+
+function blurBackdrop(Component: any): React.FC<any> {
+  const Blurred: React.FC<any> = (props) =>
+    React.createElement(
+      "div",
+      {
+        style: {
+          position: "absolute",
+          inset: 0,
+          zIndex: 0,
+          pointerEvents: "none",
+          filter: `blur(${BACKDROP_BLUR_PX}px)`,
+          // Blur samples transparency from beyond the element's bounds, which
+          // leaves a visibly soft/faded band around all four edges. Overfilling
+          // slightly pushes that fringe off-frame; the player clips the overflow.
+          transform: "scale(1.08)",
+          transformOrigin: "center",
+        },
+      },
+      React.createElement(Component, props)
+    );
+  return Blurred;
+}
+
 // ── Per-scene crash containment ───────────────────────────────────────────────
 // The single biggest cause of the "This animation hit an error" red screen: ONE
 // scene throwing during render takes down the WHOLE composition, because the
@@ -404,6 +440,7 @@ SCOPE.Loop = makeCallable(RemotionNS.Loop);
 SCOPE.Series = CallableSeries;
 SCOPE.Tex = Tex;                        // KaTeX math typesetting (see above)
 SCOPE.__guardScene = guardScene;        // per-scene crash containment (see above)
+SCOPE.__blurBackdrop = blurBackdrop;    // defocus the ambient motif (see above)
 
 const SCOPE_KEYS = Object.keys(SCOPE);
 
@@ -516,6 +553,24 @@ export function useCompilation(
             .map((n) => `const ${n} = __guardScene(__raw_${n}, "${n}", "${compileId}");`)
             .join("\n") +
           "\n";
+      }
+
+      // Step 3c — defocus the ambient motif. Same rename+alias trick as the
+      // scenes above, applied to the header's own Backdrop: it is renamed to
+      // __raw_Backdrop and re-aliased through __blurBackdrop, so whatever the
+      // lesson generated keeps its exact imagery and motion and is simply
+      // rendered out of focus behind the content.
+      //
+      // Done here rather than by asking the model to blur its own Backdrop:
+      // this way it is guaranteed instead of probabilistic, it applies to every
+      // lesson ALREADY generated with no regeneration, and the strength is one
+      // number in one place instead of an adjective in a prompt.
+      if (/^(?:function|const)\s+Backdrop\b/m.test(codeWithoutExports)) {
+        codeWithoutExports = codeWithoutExports.replace(
+          /^(function|const)(\s+)Backdrop\b/m,
+          "$1$2__raw_Backdrop"
+        );
+        codeWithoutExports += "\nconst Backdrop = __blurBackdrop(__raw_Backdrop);\n";
       }
 
       // Step 4 — build the scope destructure prelude, EXCLUDING any name the

@@ -431,7 +431,7 @@ export default function PublicGallery() {
 
               <div className="mt-20 overflow-hidden rounded-3xl bg-gradient-to-br from-[#8B7CFF]/[0.14] via-[#11131A] to-[#FF7A45]/[0.08] p-8 text-center ring-1 ring-white/[0.08] sm:p-12">
                 <p className="pg-serif text-3xl text-white sm:text-5xl">Don't see your topic?</p>
-                <p className="mx-auto mt-3 max-w-md text-sm text-[#8A8FA3]">Type any subject or upload your lecture notes — Level Up animates a full course in about 10 minutes.</p>
+                <p className="mx-auto mt-3 max-w-md text-sm text-[#8A8FA3]">Type any subject or upload your lecture notes — Level Up animates a full course in about 5 minutes.</p>
                 <Link to="/ai_tutor" className="mt-7 inline-flex h-12 items-center gap-2 rounded-xl bg-[#8B7CFF] px-6 text-sm font-semibold text-[#0A0B10] shadow-[0_10px_30px_-10px_rgba(139,124,255,0.8)] transition-colors hover:bg-[#A093FF]">
                   <Sparkles className="h-4 w-4" /> Create your own course
                 </Link>
