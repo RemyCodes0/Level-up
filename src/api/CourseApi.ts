@@ -105,6 +105,10 @@ export interface CourseFromAPI {
   mcqCount?: number;
   timeAllocationMinutes?: number;
   creditCost?: number;
+  // Learning-loop lineage — set when this course was generated from another
+  // course's results page. See server/models/Course.js.
+  parentCourseId?: string | null;
+  followUpKind?: "repair" | "extend" | null;
 }
 
 // ── Start course generation — returns courseId immediately ───────────────────
@@ -112,13 +116,20 @@ export async function startCourseGeneration(
   topic: string,
   file?: File | null,
   level?: "beginner" | "intermediate" | "advanced" | null,
-  tier?: string | null
+  tier?: string | null,
+  // Present only for a follow-up started from a results page — the server
+  // re-checks that the parent really belongs to the caller before storing it.
+  lineage?: { parentCourseId: string; followUpKind: "repair" | "extend" }
 ): Promise<{ courseId: string; status: string }> {
   const formData = new FormData();
   if (topic) formData.append("topic", topic);
   if (file) formData.append("file", file);
   if (level) formData.append("level", level);
   if (tier) formData.append("tier", tier);
+  if (lineage) {
+    formData.append("parentCourseId", lineage.parentCourseId);
+    formData.append("followUpKind", lineage.followUpKind);
+  }
 
   const res = await fetch(`${BASE_URL}/api/course/generate`, {
     method: "POST",

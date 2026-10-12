@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import type { ReactNode, CSSProperties } from "react";
 import { Helmet } from "react-helmet-async";
 import { useNavigate, useParams, Link } from "react-router-dom";
@@ -38,7 +38,7 @@ import {
   TrendingUp, TrendingDown, ClipboardList, Trophy, X, Check, PanelLeft, PanelRight, Plus,
   GraduationCap, Loader2, Trash2, XCircle, Zap, MessageSquare, Share2, Globe2,
   User as UserIcon, LogOut, ChevronsUpDown, Search, Gift, Paperclip, ArrowUp, ArrowRight,
-  Menu, Film, Mic, Wand2, Target, Keyboard, RotateCcw, Users,
+  Menu, Film, Mic, Wand2, Target, Keyboard, RotateCcw, Users, CornerDownRight,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,6 +90,13 @@ interface HistoryEntry {
   quizDone: boolean;
   questions: MCQQuestion[];
   isFreeTrialCourse?: boolean;
+  // Learning-loop lineage (persisted server-side, so it survives a reload and
+  // can be drawn in the library rail). null for a composer-started course.
+  parentCourseId?: string | null;
+  followUpKind?: "repair" | "extend" | null;
+  // Credits this course cost, from its own tier snapshot — shown on a
+  // follow-up card so the spend stays visible after the fact.
+  creditCost?: number;
   // Server-graded quiz result (score never trusted from the client).
   serverQuizResult?: QuizResult | null;
   // Tier snapshot's quiz time allocation (minutes). Defaults to 30.
@@ -1605,6 +1612,219 @@ function QuestionMap({ outcomes }: { outcomes: QuestionOutcome[] }) {
   );
 }
 
+// ── Growth: did the loop actually work? ─────────────────────────────────────
+// Shown on a follow-up's own results page. The loop's whole promise is "this
+// course will fix the thing you got wrong", so once its quiz is graded the
+// claim gets checked against the parent's own result rather than asserted.
+
+type GrowthPoint = { label: string; pct: number; kind?: "repair" | "extend" | null };
+
+/** Score across the chain of courses, root → current. */
+function GrowthPath({ points }: { points: GrowthPoint[] }) {
+  const W = 340, H = 140, L = 30, R = 14, T = 16, B = 26;
+  const plotW = W - L - R, plotH = H - T - B;
+  const x = (i: number) => L + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+  const y = (pct: number) => T + plotH - (Math.min(Math.max(pct, 0), 100) / 100) * plotH;
+  const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.pct).toFixed(1)}`).join(" ");
+  const area = `${line} L${x(points.length - 1).toFixed(1)},${(T + plotH).toFixed(1)} L${x(0).toFixed(1)},${(T + plotH).toFixed(1)} Z`;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Quiz score across your learning path">
+      <defs>
+        <linearGradient id="lu-growth-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={C.mint} stopOpacity="0.3" />
+          <stop offset="100%" stopColor={C.mint} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+
+      {[0, 50, 100].map((g) => (
+        <g key={g}>
+          <line x1={L} y1={y(g)} x2={W - R} y2={y(g)} stroke="rgba(255,255,255,0.06)" />
+          <text x={L - 6} y={y(g) + 3} textAnchor="end" fontSize="8" fill="#4A4F63">{g}</text>
+        </g>
+      ))}
+      <line x1={L} y1={y(PASS_MARK)} x2={W - R} y2={y(PASS_MARK)} stroke={C.mint} strokeOpacity="0.4" strokeDasharray="3 3" />
+
+      <path d={area} fill="url(#lu-growth-fill)" />
+      <path d={line} fill="none" stroke={C.mint} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+
+      {points.map((p, i) => {
+        const isLast = i === points.length - 1;
+        return (
+          <g key={i}>
+            <circle cx={x(i)} cy={y(p.pct)} r={isLast ? 4.5 : 3.5} fill={isLast ? C.mint : "#0A0B10"} stroke={C.mint} strokeWidth="1.6" />
+            <text x={x(i)} y={y(p.pct) - 9} textAnchor="middle" fontSize="9" fontWeight="600" fill="#ECEDF2">{p.pct}%</text>
+            <text x={x(i)} y={H - 8} textAnchor="middle" fontSize="8" fill="#6E7389">
+              {i === 0 ? "start" : isLast ? "now" : `#${i + 1}`}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** before → after on one measure, with the gap drawn to scale. */
+function DeltaBar({ label, before, after }: { label: string; before: number; after: number }) {
+  const delta = after - before;
+  const up = delta >= 0;
+  const lo = Math.min(before, after);
+  const span = Math.abs(delta);
+  return (
+    <div>
+      <div className="mb-1.5 flex items-baseline justify-between gap-3">
+        <span className="min-w-0 truncate text-[13px] font-medium text-[#E3E5EE]">{label}</span>
+        <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs tabular-nums">
+          <span className="text-[#8A8FA3]">{before}%</span>
+          <ArrowRight className="h-3 w-3 text-[#4A4F63]" />
+          <span className="font-semibold" style={{ color: up ? C.mint : C.rose }}>{after}%</span>
+        </span>
+      </div>
+      <div className="relative h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
+        {/* The shared base, then the change stacked on top in its own colour. */}
+        <div className="absolute inset-y-0 left-0 rounded-full bg-white/[0.14]" style={{ width: `${lo}%` }} />
+        <div
+          className="absolute inset-y-0 rounded-full transition-all duration-1000"
+          style={{ left: `${lo}%`, width: `${span}%`, background: up ? C.mint : C.rose, opacity: 0.9 }}
+        />
+        <span className="absolute top-0 h-full w-px bg-white/25" style={{ left: `${PASS_MARK}%` }} aria-hidden="true" />
+      </div>
+      <p className="mt-1 text-[11px]" style={{ color: up ? C.mint : C.rose }}>
+        {up ? "+" : ""}{delta} points{up && after >= PASS_MARK && before < PASS_MARK ? " — now past the pass mark" : ""}
+      </p>
+    </div>
+  );
+}
+
+function GrowthComparison({
+  lineage, currentPct, currentTopic, followUpKind,
+}: {
+  lineage: HistoryEntry[];
+  currentPct: number;
+  currentTopic: string;
+  followUpKind?: "repair" | "extend" | null;
+}) {
+  // lineage is root → current; the course right before this one is its parent.
+  const parent = lineage.length >= 2 ? lineage[lineage.length - 2] : null;
+  const [parentAttempt, setParentAttempt] = useState<QuizResult | null>(null);
+
+  useEffect(() => {
+    if (!parent) return;
+    let alive = true;
+    getLatestAttempt(parent.id)
+      .then((a) => { if (alive) setParentAttempt(a); })
+      .catch(() => { /* no graded parent attempt — the overall delta is simply unavailable */ });
+    return () => { alive = false; };
+  }, [parent?.id]);
+
+  if (!parent) return null;
+
+  const parentPct = parentAttempt?.pct ?? parent.quizScore;
+  // For a gap-repair course, the honest "before" is how the parent's quiz
+  // scored THAT topic — not the parent's overall score. The topic string is
+  // the parent's lesson title (generateCourseQuiz copies it verbatim), which
+  // is exactly what the follow-up was named after.
+  const key = currentTopic.trim().toLowerCase();
+  const focused = parentAttempt?.topicBreakdown.find((t) => t.topic.trim().toLowerCase() === key) ?? null;
+
+  // Nothing to compare against yet.
+  if (parentPct === null && !focused) return null;
+
+  // flatMap rather than map+filter: dropping the unscored courses this way
+  // keeps the element type exact without a type predicate.
+  const scored: GrowthPoint[] = lineage.flatMap((e, i) => {
+    const isCurrent = i === lineage.length - 1;
+    const pct = isCurrent ? currentPct : e.id === parent.id ? parentPct : e.quizScore;
+    if (pct === null || pct === undefined) return [];
+    return [{ label: cleanName(e.fileName), pct, kind: e.followUpKind }];
+  });
+
+  const overallDelta = parentPct !== null && parentPct !== undefined ? currentPct - parentPct : null;
+
+  return (
+    <div className={cx(SURFACE, "relative overflow-hidden p-5 sm:p-7")}>
+      <div
+        className="pointer-events-none absolute -left-24 -top-24 h-60 w-60 rounded-full opacity-20 blur-3xl"
+        style={{ background: `radial-gradient(closest-side, ${C.mint}, transparent)` }}
+        aria-hidden="true"
+      />
+
+      <div className="relative flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <p className={EYEBROW}>Your progress</p>
+          <h3 className="lu-serif mt-1.5 text-3xl leading-tight text-white">
+            {followUpKind === "repair" ? "Did the gap close?" : "How far you've come"}
+          </h3>
+          <p className="mt-1.5 text-[13px] text-[#8A8FA3]">
+            Measured against “{cleanName(parent.fileName)}”, the course this one came from.
+          </p>
+        </div>
+        {overallDelta !== null && (
+          <span
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold"
+            style={{
+              color: overallDelta >= 0 ? C.mint : C.rose,
+              background: `${overallDelta >= 0 ? C.mint : C.rose}14`,
+              boxShadow: `inset 0 0 0 1px ${overallDelta >= 0 ? C.mint : C.rose}40`,
+            }}
+          >
+            {overallDelta >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+            {overallDelta > 0 ? "+" : ""}{overallDelta}% overall
+          </span>
+        )}
+      </div>
+
+      <div className="relative mt-6 grid gap-6 lg:grid-cols-[1fr_1fr]">
+        <div className="space-y-5">
+          {focused && (
+            <DeltaBar
+              label={`“${cleanName(currentTopic)}” — the topic you came to fix`}
+              before={focused.pct}
+              after={currentPct}
+            />
+          )}
+          {overallDelta !== null && (
+            <DeltaBar label="Overall quiz score" before={parentPct!} after={currentPct} />
+          )}
+
+          <p className="rounded-xl bg-white/[0.03] px-4 py-3 text-[12px] leading-relaxed text-[#B9BCCB] ring-1 ring-inset ring-white/[0.05]">
+            {focused && currentPct >= PASS_MARK && focused.pct < PASS_MARK ? (
+              <>You scored <span className="font-semibold text-[#FF8A95]">{focused.pct}%</span> on this
+              topic in the parent course and <span className="font-semibold text-[#3DDC97]">{currentPct}%</span> after
+              the follow-up. That gap is closed — pick the next one below.</>
+            ) : focused ? (
+              <>This topic went from <span className="font-semibold text-white">{focused.pct}%</span> to{" "}
+              <span className="font-semibold text-white">{currentPct}%</span>. Still under the {PASS_MARK}% mark, so
+              another pass on it is worth more than moving on.</>
+            ) : (
+              <>Each course in this path builds on the one before it. Keep the chain going and this chart keeps
+              growing with you.</>
+            )}
+          </p>
+        </div>
+
+        {scored.length >= 2 && (
+          <div>
+            <p className={cx(EYEBROW, "mb-2")}>Learning path · {scored.length} courses</p>
+            <GrowthPath points={scored} />
+            <ol className="mt-3 space-y-1.5">
+              {scored.map((p, i) => (
+                <li key={`${p.label}-${i}`} className="flex items-center gap-2 text-[12px]">
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-white/[0.06] font-mono text-[9px] text-[#8A8FA3]">
+                    {i + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[#D6D8E2]">{p.label}</span>
+                  <span className="shrink-0 font-mono tabular-nums" style={{ color: bandFor(p.pct).color }}>{p.pct}%</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── The learning loop ───────────────────────────────────────────────────────
 type FollowUp = { id: string; topic: string; reason: string; kind: "repair" | "extend"; level: Level };
 
@@ -1621,15 +1841,16 @@ type FollowUp = { id: string; topic: string; reason: string; kind: "repair" | "e
  *                 implies, so no second assessment chat is needed.
  */
 function ContinueLearning({
-  weakTopics, pct, courseId, tiers, balance, onGenerate, onRequestTopUp,
+  weakTopics, pct, courseId, tiers, balance, onGenerate, onRequestTopUp, starting, startError,
 }: {
   weakTopics: { topic: string; pct: number }[];
   pct: number;
   courseId?: string | null;
   tiers: CourseTier[] | null;
   balance: number;
-  onGenerate: (topic: string, tierKey: string, level: Level) => void;
+  onGenerate: (topic: string, tierKey: string, level: Level, kind: "repair" | "extend") => void;
   onRequestTopUp: () => void;
+  starting: boolean; startError: string | null;
 }) {
   const [suggestions, setSuggestions] = useState<NextCourseSuggestion[] | null>(null);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
@@ -1775,10 +1996,11 @@ function ContinueLearning({
                   ) : isConfirming ? (
                     <>
                       <button
-                        onClick={() => { setConfirming(null); onGenerate(item.topic, tierKey!, item.level); }}
+                        onClick={() => { setConfirming(null); onGenerate(item.topic, tierKey!, item.level, item.kind); }}
+                        disabled={starting}
                         className={cx(BTN_PRIMARY, "h-9 whitespace-nowrap")}
                       >
-                        <Check className="h-3.5 w-3.5" /> Spend {cost} credits
+                        {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Spend {cost} credits
                       </button>
                       <button onClick={() => setConfirming(null)} className="text-[11px] text-[#6E7389] transition-colors hover:text-white">
                         Cancel
@@ -1799,6 +2021,7 @@ function ContinueLearning({
                 <p className="mt-3 border-t border-white/[0.07] pt-3 text-[11px] leading-relaxed text-[#B9BCCB]">
                   This spends <span className="font-semibold text-white">{cost} credits</span> and starts a new{" "}
                   {tier?.lessonCount}-lesson course on “{item.topic}”. Your balance goes from {balance} to {balance - cost}.
+                  It builds <span className="text-white">just below this page</span> — you can keep reading your results while it does.
                 </p>
               )}
             </div>
@@ -1825,6 +2048,12 @@ function ContinueLearning({
           </button>
         )}
 
+        {startError && (
+          <p className="rounded-xl bg-[#FF5C6C]/10 px-4 py-3 text-[12px] text-[#FF8A95] ring-1 ring-inset ring-[#FF5C6C]/25">
+            {startError}
+          </p>
+        )}
+
         {suggestions?.length === 0 && items.length === 0 && (
           <p className="rounded-2xl bg-white/[0.02] px-4 py-5 text-center text-[13px] text-[#6E7389]">
             Couldn't load suggestions right now — you can always start a new course from the composer.
@@ -1838,13 +2067,17 @@ function ContinueLearning({
 function ResultsStage({
   answers, questions, serverResult, courseId, onFeedback,
   lessons, lessonStatuses, onSelectLesson,
-  credits, courseTiers, onGenerateFollowUp, onRequestTopUp,
+  credits, courseTiers, onGenerateFollowUp, onRequestTopUp, starting, startError, lineage,
 }: {
   answers: QuizAnswer[]; questions: MCQQuestion[]; serverResult?: QuizResult | null; courseId?: string | null; onFeedback: () => void;
   lessons: Lesson[]; lessonStatuses: LessonStatus[]; onSelectLesson: (i: number) => void;
   credits: Credits | null; courseTiers: CourseTier[] | null;
-  onGenerateFollowUp: (topic: string, tierKey: string, level: Level) => void;
+  onGenerateFollowUp: (topic: string, tierKey: string, level: Level, kind: "repair" | "extend") => void;
   onRequestTopUp: () => void;
+  starting: boolean; startError: string | null;
+  // Root → this course, for the growth comparison. Length 1 (just this
+  // course) when it wasn't generated from another one's results.
+  lineage: HistoryEntry[];
 }) {
   // Prefer the server-graded result; client computation only bridges the round-trip.
   const clientScore = answers.filter((a) => { const q = questions.find((q) => q.id === a.questionId); return q && q.correct === a.selected; }).length;
@@ -2099,7 +2332,14 @@ function ResultsStage({
         </div>
       )}
 
-      {/* ── The loop ─────────────────────────────────────────────────────── */}
+      {/* ── Growth, then the next loop ───────────────────────────────────── */}
+      <GrowthComparison
+        lineage={lineage}
+        currentPct={pct}
+        currentTopic={lineage[lineage.length - 1]?.fileName ?? ""}
+        followUpKind={lineage[lineage.length - 1]?.followUpKind}
+      />
+
       <ContinueLearning
         weakTopics={weaknesses}
         pct={pct}
@@ -2108,6 +2348,8 @@ function ResultsStage({
         balance={balance}
         onGenerate={onGenerateFollowUp}
         onRequestTopUp={onRequestTopUp}
+        starting={starting}
+        startError={startError}
       />
 
       <div className={cx(SURFACE, "flex flex-col items-start gap-2 p-5 sm:flex-row sm:items-center sm:justify-between")}>
@@ -2191,9 +2433,400 @@ function AccountMenu({ user, onLogout, compact = false }: { user: SessionUser; o
   );
 }
 
+/**
+ * Full-screen block while a follow-up course is being started. Spending
+ * credits is the one irreversible thing this page does, so the whole UI goes
+ * inert for the round-trip rather than relying on a disabled button — a
+ * second click on anything (another card, the depth selector, the composer)
+ * can't start a second course or navigate mid-request.
+ *
+ * Captures focus and swallows keyboard activation too, so Tab+Enter can't
+ * reach what the backdrop covers.
+ */
+function StartingOverlay({ label }: { label: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    const trap = (e: KeyboardEvent) => {
+      if (e.key === "Tab" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    document.addEventListener("keydown", trap, true);
+    return () => document.removeEventListener("keydown", trap, true);
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      role="alertdialog"
+      aria-busy="true"
+      aria-label={label}
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-[#05060A]/80 outline-none backdrop-blur-md"
+    >
+      <div className={cx(SURFACE, "lu-rise flex w-full max-w-xs flex-col items-center p-7 text-center")}>
+        <span className="relative flex h-12 w-12 items-center justify-center">
+          <span className="absolute inset-0 animate-ping rounded-full bg-[#8B7CFF]/20" />
+          <span className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-[#8B7CFF]/15 ring-1 ring-[#8B7CFF]/30">
+            <Loader2 className="h-5 w-5 animate-spin text-[#B4A9FF]" />
+          </span>
+        </span>
+        <p className="lu-serif mt-5 text-2xl leading-tight text-white">Starting your next course</p>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-[#8A8FA3]">{label}</p>
+        <p className="mt-3 text-[11px] text-[#555A6E]">Don't close this tab — it only takes a moment.</p>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Follow-up thread — the courses this course led to
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FOLLOW_UP_TONE = {
+  repair: { color: C.rose, label: "Gap closed", Icon: TrendingDown },
+  extend: { color: C.iris, label: "Went further", Icon: TrendingUp },
+} as const;
+
+function followUpTone(kind?: "repair" | "extend" | null) {
+  return kind === "repair" ? FOLLOW_UP_TONE.repair : FOLLOW_UP_TONE.extend;
+}
+
+/**
+ * Rendered directly under whatever course section is open, so starting a
+ * follow-up from the results never navigates away: the new course builds
+ * below the one it came from and the user scrolls down to watch it.
+ *
+ * Reads entirely from `history` rather than its own copy of the course, which
+ * is what lets it survive leaving and re-opening the parent (and a reload —
+ * parentCourseId is persisted). The background watcher that already keeps the
+ * rail's "Generating" state fresh is the only thing polling.
+ */
+function FollowUpThread({
+  parentTopic, parentTopicScores, followUps, onOpen, scrollToId, onScrolled,
+  selectedLessonFor, onSelectLesson,
+}: {
+  parentTopic: string;
+  // The parent's graded per-topic scores, when its quiz has been taken — the
+  // "before" half of a repair follow-up's result.
+  parentTopicScores?: { topic: string; pct: number }[] | null;
+  followUps: HistoryEntry[];
+  onOpen: (entry: HistoryEntry) => void;
+  scrollToId: string | null;
+  onScrolled: () => void;
+  /** Which lesson of a given follow-up the player is on. */
+  selectedLessonFor: (courseId: string) => number;
+  onSelectLesson: (courseId: string, lesson: number) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  // One-shot scroll when a brand-new follow-up appears: the whole point of
+  // generating in place is that the user sees it start, and the panel is
+  // below the fold on every realistic viewport.
+  useEffect(() => {
+    if (!scrollToId || !ref.current) return;
+    ref.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    onScrolled();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToId]);
+
+  if (followUps.length === 0) return null;
+
+  return (
+    <div ref={ref} className="mt-5 scroll-mt-4">
+      {/* Lineage seam — makes "this came from the course above" visual rather
+          than something the copy has to explain. */}
+      <div className="flex items-center gap-3 px-1">
+        <span className="h-px flex-1 bg-gradient-to-r from-transparent via-white/[0.1] to-white/[0.1]" />
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#6E7389]">
+          <CornerDownRight className="h-3.5 w-3.5" />
+          {followUps.length === 1 ? "What this led to" : `${followUps.length} courses this led to`}
+        </span>
+        <span className="h-px flex-1 bg-gradient-to-l from-transparent via-white/[0.1] to-white/[0.1]" />
+      </div>
+
+      <div className="mt-4 space-y-4">
+        {followUps.map((child) => (
+          <FollowUpCard
+            key={child.id}
+            parentTopic={parentTopic}
+            parentTopicScores={parentTopicScores}
+            entry={child}
+            onOpen={() => onOpen(child)}
+            selectedLesson={selectedLessonFor(child.id)}
+            onSelectLesson={(i) => onSelectLesson(child.id, i)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FollowUpCard({ parentTopic, parentTopicScores, entry, onOpen, selectedLesson, onSelectLesson }: {
+  parentTopic: string;
+  parentTopicScores?: { topic: string; pct: number }[] | null;
+  entry: HistoryEntry;
+  onOpen: () => void;
+  selectedLesson: number;
+  onSelectLesson: (lesson: number) => void;
+}) {
+  // The history list carries no quiz score (only the course that's actually
+  // open gets one computed), so a finished follow-up's result is fetched here
+  // — that score is the whole point of showing the card after the fact.
+  const [fetchedPct, setFetchedPct] = useState<number | null>(null);
+  const tone = followUpTone(entry.followUpKind);
+  const statuses = entry.lessonStatuses ?? [];
+  const readyCount = statuses.filter((s) => s === "ready").length;
+  const failedCount = statuses.filter((s) => s === "failed").length;
+  const generating = statuses.length === 0 || statuses.some((s) => s === "generating");
+  const isPlayable = (i: number) => statuses[i] === "ready" && !!entry.lessons[i]?.code;
+  const firstPlayableIndex = entry.lessons.findIndex((_, i) => isPlayable(i));
+  // Fall back to the first playable lesson if the selected one isn't ready yet
+  // (e.g. the right-hand nav pointed at a lesson that has since been reset).
+  const playingIndex = isPlayable(selectedLesson) ? selectedLesson : firstPlayableIndex;
+  const playing = playingIndex >= 0 ? entry.lessons[playingIndex] : null;
+  // A repair follow-up is named after the parent lesson it targets, and the
+  // parent's quiz scored that same title — so the two line up directly.
+  const key = entry.fileName.trim().toLowerCase();
+  const before =
+    entry.followUpKind === "repair"
+      ? parentTopicScores?.find((t) => t.topic.trim().toLowerCase() === key)?.pct ?? null
+      : null;
+  const scored = entry.quizScore ?? fetchedPct;
+
+  const allReady = statuses.length > 0 && statuses.every((st) => st === "ready");
+  useEffect(() => {
+    if (!allReady || entry.quizScore !== null) return;
+    let alive = true;
+    getLatestAttempt(entry.id)
+      .then((a) => { if (alive && a) setFetchedPct(a.pct); })
+      .catch(() => { /* no attempt yet — the card simply shows no score */ });
+    return () => { alive = false; };
+  }, [entry.id, allReady, entry.quizScore]);
+
+  return (
+    <div className={cx(SURFACE, "relative overflow-hidden")}>
+      <span className="absolute inset-x-0 top-0 h-px" style={{ background: `linear-gradient(90deg, transparent, ${tone.color}66, transparent)` }} aria-hidden="true" />
+
+      <div className="flex flex-wrap items-start justify-between gap-3 p-5">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em]"
+              style={{ color: tone.color, background: `${tone.color}14` }}
+            >
+              <tone.Icon className="h-3 w-3" /> {tone.label}
+            </span>
+            {generating ? (
+              <span className="flex items-center gap-1.5 text-[11px] text-[#FFB08A]"><RecDot /> Generating</span>
+            ) : failedCount > 0 ? (
+              <span className="text-[11px] text-[#FF8A95]">{failedCount} lesson{failedCount === 1 ? "" : "s"} failed</span>
+            ) : (
+              <span className="flex items-center gap-1 text-[11px] text-[#3DDC97]"><CheckCircle2 className="h-3 w-3" /> Ready to watch</span>
+            )}
+            {typeof entry.creditCost === "number" && entry.creditCost > 0 && (
+              <span className="flex items-center gap-1 text-[11px] text-[#6E7389]">
+                <Zap className="h-3 w-3 text-[#FFB547]" /> {entry.creditCost} credits
+              </span>
+            )}
+            {scored !== null && (
+              <span className="font-mono text-[11px] text-[#3DDC97]">Quiz {scored}%</span>
+            )}
+          </div>
+
+          <p className="lu-serif mt-2 text-2xl leading-tight text-white sm:text-3xl">{cleanName(entry.fileName)}</p>
+          <p className="mt-1 truncate text-[11px] text-[#6E7389]">
+            Continued from “{cleanName(parentTopic)}”
+          </p>
+
+          {before !== null && scored !== null && (
+            <p className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-white/[0.03] px-2.5 py-1.5 text-[11px] ring-1 ring-inset ring-white/[0.06]">
+              <span className="text-[#6E7389]">On this topic</span>
+              <span className="font-mono text-[#FF8A95]">{before}%</span>
+              <ArrowRight className="h-3 w-3 text-[#4A4F63]" />
+              <span className="font-mono font-semibold" style={{ color: scored >= before ? C.mint : C.rose }}>{scored}%</span>
+              <span className="font-semibold" style={{ color: scored >= before ? C.mint : C.rose }}>
+                ({scored >= before ? "+" : ""}{scored - before})
+              </span>
+            </p>
+          )}
+        </div>
+
+        <div className="flex shrink-0 flex-col items-stretch gap-1.5">
+          <button onClick={onOpen} className={cx(BTN_SOFT, "h-9 whitespace-nowrap")}>
+            {generating ? "Open while it builds" : <>Open its quiz <ArrowRight className="h-3.5 w-3.5" /></>}
+          </button>
+          {!generating && <span className="text-center text-[10px] text-[#4A4F63]">playing below</span>}
+        </div>
+      </div>
+
+      {/* While it builds: the same filmstrip the main stage uses, so the two
+          generations on this page animate identically. */}
+      {generating && (
+        <div className="px-5 pb-5">
+          {/* The filmstrip only while there's nothing to watch yet — once a
+              lesson lands, the player below replaces it and the bar keeps
+              reporting the rest. */}
+          {firstPlayableIndex < 0 && (
+            <div className="overflow-hidden rounded-2xl ring-1 ring-white/[0.07]">
+              {entry.lessons[0]?.sceneProgress?.length
+                ? <SceneTimeline sceneProgress={entry.lessons[0].sceneProgress!} />
+                : <GeneratingStage />}
+            </div>
+          )}
+          {statuses.length > 0 && (
+            <div className={cx("flex items-center gap-2", firstPlayableIndex < 0 && "mt-3")}>
+              <div className="flex flex-1 gap-1" aria-hidden="true">
+                {statuses.map((st, i) => (
+                  <span
+                    key={i}
+                    className={cx(
+                      "h-1.5 flex-1 rounded-full transition-colors duration-500",
+                      st === "ready" ? "bg-[#3DDC97]" : st === "failed" ? "bg-[#FF5C6C]" : st === "generating" ? "bg-[#8B7CFF]/40" : "bg-white/[0.08]"
+                    )}
+                  />
+                ))}
+              </div>
+              <span className="shrink-0 text-[11px] tabular-nums text-[#6E7389]">{readyCount}/{statuses.length} lessons</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Plays in place as soon as there's something to play — the new course
+          sits directly under the one it came from, no navigation needed. */}
+      {playing?.code && (
+        <div className="px-5 pb-5">
+          {statuses.length > 1 && (
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              {entry.lessons.map((l, i) => {
+                const playableHere = isPlayable(i);
+                const current = i === playingIndex;
+                return (
+                  <button
+                    key={l.id}
+                    disabled={!playableHere}
+                    onClick={() => onSelectLesson(i)}
+                    title={l.title}
+                    className={cx(
+                      "flex h-7 min-w-7 items-center justify-center rounded-lg px-2 font-mono text-[11px] font-semibold transition-colors",
+                      current
+                        ? "bg-[#8B7CFF] text-[#0A0B10]"
+                        : playableHere
+                        ? "bg-white/[0.05] text-[#B9BCCB] ring-1 ring-inset ring-white/[0.08] hover:bg-white/[0.1] hover:text-white"
+                        : "cursor-not-allowed bg-white/[0.02] text-[#3E4253]"
+                    )}
+                  >
+                    {statuses[i] === "generating" ? <Loader2 className="h-3 w-3 animate-spin" /> : pad2(i + 1)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="overflow-hidden rounded-2xl ring-1 ring-white/[0.08]">
+            <PlayerErrorBoundary resetKey={playing.code}>
+              <DynamicPlayer code={playing.code} durationInFrames={playing.totalFrames ?? 3600} scenes={playing.scenes} />
+            </PlayerErrorBoundary>
+          </div>
+          <p className="mt-2 text-[12px] text-[#D6D8E2]">
+            <span className="font-mono text-[11px] text-[#6E7389]">{pad2(playingIndex + 1)}</span> {playing.title}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Library rail (course history)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One row of the library rail. `depth > 0` means this course was generated
+ * from the one above it, which the caller draws as an indented branch off the
+ * parent (see the rail container in LibraryRail).
+ *
+ * `orphanParentTitle` covers the case the tree can't: a follow-up whose parent
+ * landed in a different date group (generate a follow-up a week later and the
+ * two are no longer neighbours). Rather than tear the groups apart or silently
+ * drop the relation, that row stays at top level and names its parent inline.
+ */
+function RailRow({
+  entry, isActive, depth, childCount, orphanParentTitle, onSelect, onDelete,
+}: {
+  entry: HistoryEntry;
+  isActive: boolean;
+  depth: number;
+  childCount: number;
+  orphanParentTitle: string | null;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const generating = entry.lessonStatuses?.some((s) => s === "generating");
+  const tone = followUpTone(entry.followUpKind);
+  const isChild = depth > 0;
+
+  return (
+    <div
+      className={cx(
+        "group/item relative flex items-center rounded-xl transition-colors",
+        isActive ? "bg-white/[0.07]" : "hover:bg-white/[0.04]"
+      )}
+    >
+      {/* Elbow into the parent's rail. */}
+      {isChild && <span className="absolute -left-2.5 top-1/2 h-px w-2.5 bg-white/[0.09]" aria-hidden="true" />}
+      {isActive && <span className="absolute left-0 bottom-2 top-2 w-[3px] rounded-full bg-[#8B7CFF]" />}
+
+      <button onClick={onSelect} className="min-w-0 flex-1 px-3 py-2.5 text-left">
+        <p className={cx("flex items-center gap-1.5 pr-6", isChild ? "text-[12px]" : "text-[13px]")}>
+          {isChild && (
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: tone.color }}
+              title={entry.followUpKind === "repair" ? "Started to close a gap in the parent course" : "Started to go further than the parent course"}
+            />
+          )}
+          <span className={cx("line-clamp-1 leading-snug", isActive ? "font-medium text-white" : isChild ? "text-[#A2A7BA]" : "text-[#B9BCCB]")}>
+            {cleanName(entry.fileName)}
+          </span>
+        </p>
+
+        {orphanParentTitle && (
+          <p className="mt-1 flex items-center gap-1 text-[10px] text-[#555A6E]">
+            <CornerDownRight className="h-2.5 w-2.5 shrink-0" />
+            <span className="line-clamp-1">from {cleanName(orphanParentTitle)}</span>
+          </p>
+        )}
+
+        {(generating || entry.quizScore !== null || childCount > 0) && (
+          <p className="mt-1 flex items-center gap-2 text-[11px]">
+            {generating && <span className="flex items-center gap-1.5 text-[#FFB08A]"><RecDot /> Generating</span>}
+            {entry.quizScore !== null && <span className="font-mono text-[#3DDC97]">Quiz {entry.quizScore}%</span>}
+            {childCount > 0 && (
+              <span
+                className="flex items-center gap-0.5 text-[#6E7389]"
+                title={`Led to ${childCount} follow-up course${childCount === 1 ? "" : "s"}`}
+              >
+                <CornerDownRight className="h-3 w-3" />{childCount}
+              </span>
+            )}
+          </p>
+        )}
+      </button>
+
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        className="absolute right-1.5 top-2 flex h-7 w-7 items-center justify-center rounded-lg text-[#6E7389] opacity-0 transition-all hover:bg-[#FF5C6C]/10 hover:text-[#FF5C6C] group-hover/item:opacity-100 focus:opacity-100"
+        aria-label="Delete course"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
 
 function LibraryRail({ history, activeId, onSelect, onNew, onDelete, collapsed, onToggle, loading, error, credits, onBuy, isMobile, onFeedback, hasMore, loadingMore, onLoadMore, user, onLogout }: {
   history: HistoryEntry[]; activeId: string | null;
@@ -2219,6 +2852,14 @@ function LibraryRail({ history, activeId, onSelect, onNew, onDelete, collapsed, 
   }, {});
   const groupOrder = ["Today", "Yesterday", "Previous 7 days", "Previous 30 days"];
   const sortedGroups = [...groupOrder.filter((g) => groups[g]), ...Object.keys(groups).filter((g) => !groupOrder.includes(g))];
+
+  // Lineage, resolved against the WHOLE history (not the current filter), so a
+  // parent that's scrolled off or filtered out can still be named.
+  const byId = new Map(history.map((e) => [e.id, e]));
+  const childCountOf = history.reduce<Record<string, number>>((acc, e) => {
+    if (e.parentCourseId) acc[e.parentCourseId] = (acc[e.parentCourseId] ?? 0) + 1;
+    return acc;
+  }, {});
 
   const balance = Math.max(credits?.spendableBalance ?? credits?.courseCredits ?? 0, 0);
   const bonus = Math.max(credits?.signupBonusCredits ?? 0, 0);
@@ -2364,36 +3005,47 @@ function LibraryRail({ history, activeId, onSelect, onNew, onDelete, collapsed, 
             <Search className="mx-auto mb-2 h-6 w-6 text-[#3E4253]" />
             <p className="text-xs text-[#8A8FA3]">No courses match “{searchQuery.trim()}”.</p>
           </div>
-        ) : sortedGroups.map((group) => (
-          <div key={group} className="mb-2">
-            <p className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#555A6E]">{group}</p>
-            {groups[group].map((entry) => {
-              const isActive = entry.id === activeId;
-              const generating = entry.lessonStatuses?.some((s) => s === "generating");
-              return (
-                <div key={entry.id} className={cx("group/item relative flex items-center rounded-xl transition-colors", isActive ? "bg-white/[0.07]" : "hover:bg-white/[0.04]")}>
-                  {isActive && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-[#8B7CFF]" />}
-                  <button onClick={() => onSelect(entry)} className="min-w-0 flex-1 px-3 py-2.5 text-left">
-                    <p className={cx("line-clamp-1 pr-6 text-[13px] leading-snug", isActive ? "font-medium text-white" : "text-[#B9BCCB]")}>{cleanName(entry.fileName)}</p>
-                    {(generating || entry.quizScore !== null) && (
-                      <p className="mt-1 flex items-center gap-2 text-[11px]">
-                        {generating && <span className="flex items-center gap-1.5 text-[#FFB08A]"><RecDot /> Generating</span>}
-                        {entry.quizScore !== null && <span className="font-mono text-[#3DDC97]">Quiz {entry.quizScore}%</span>}
-                      </p>
-                    )}
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); if (window.confirm(`Delete "${cleanName(entry.fileName)}"? This cannot be undone.`)) onDelete(entry.id); }}
-                    className="absolute right-1.5 top-2 flex h-7 w-7 items-center justify-center rounded-lg text-[#6E7389] opacity-0 transition-all hover:bg-[#FF5C6C]/10 hover:text-[#FF5C6C] group-hover/item:opacity-100 focus:opacity-100"
-                    aria-label="Delete course"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        ))}
+        ) : sortedGroups.map((group) => {
+          // A follow-up nests under its parent only when both are in the same
+          // date group; otherwise it stays a root and names its parent inline,
+          // which keeps "Today / Yesterday / …" meaning what it says.
+          const entries = groups[group];
+          const idsHere = new Set(entries.map((e) => e.id));
+          const nestedUnder = (e: HistoryEntry) => !!e.parentCourseId && idsHere.has(e.parentCourseId);
+          const kidsOf = (id: string) => entries.filter((e) => e.parentCourseId === id);
+
+          const renderEntry = (entry: HistoryEntry, depth: number): ReactNode => {
+            const kids = kidsOf(entry.id);
+            const parent = entry.parentCourseId ? byId.get(entry.parentCourseId) : undefined;
+            return (
+              <div key={entry.id}>
+                <RailRow
+                  entry={entry}
+                  isActive={entry.id === activeId}
+                  depth={depth}
+                  childCount={childCountOf[entry.id] ?? 0}
+                  orphanParentTitle={depth === 0 && parent ? parent.fileName : null}
+                  onSelect={() => onSelect(entry)}
+                  onDelete={() => {
+                    if (window.confirm(`Delete "${cleanName(entry.fileName)}"? This cannot be undone.`)) onDelete(entry.id);
+                  }}
+                />
+                {kids.length > 0 && depth < 3 && (
+                  <div className="relative ml-[18px] border-l border-white/[0.08] pl-2.5">
+                    {kids.map((kid) => renderEntry(kid, depth + 1))}
+                  </div>
+                )}
+              </div>
+            );
+          };
+
+          return (
+            <div key={group} className="mb-2">
+              <p className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#555A6E]">{group}</p>
+              {entries.filter((e) => !nestedUnder(e)).map((entry) => renderEntry(entry, 0))}
+            </div>
+          );
+        })}
         {hasMore && (
           <button
             onClick={onLoadMore}
@@ -2439,15 +3091,120 @@ function LibraryRail({ history, activeId, onSelect, onNew, onDelete, collapsed, 
 // Syllabus (course outline)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * A follow-up course as a continuation of the open course's syllabus. Drawn as
+ * a branch off the same rail the lesson list uses, so the two generations read
+ * as one path instead of two unrelated courses that happen to be open.
+ *
+ * Selecting a lesson here drives the inline player further down the page — it
+ * does not switch courses, which is the whole point of the connection.
+ */
+function FollowUpSyllabus({ entry, selectedLesson, onSelectLesson }: {
+  entry: HistoryEntry;
+  selectedLesson: number | null;
+  onSelectLesson: (lesson: number) => void;
+}) {
+  const statuses = entry.lessonStatuses ?? [];
+  const tone = followUpTone(entry.followUpKind);
+  const readyCount = statuses.filter((st) => st === "ready").length;
+  const generating = statuses.length === 0 || statuses.some((st) => st === "generating");
+
+  return (
+    <div className="mt-6">
+      <div className="mb-2 flex items-center gap-2 px-2">
+        <CornerDownRight className="h-3.5 w-3.5 shrink-0" style={{ color: tone.color }} />
+        <p className={cx(EYEBROW, "min-w-0 truncate")}>
+          {entry.followUpKind === "repair" ? "Gap you went back for" : "Where you went next"}
+        </p>
+      </div>
+
+      <div className="px-2">
+        <p className="truncate text-[13px] font-medium text-white">{cleanName(entry.fileName)}</p>
+        <p className="mt-0.5 text-[11px] text-[#6E7389]">
+          {generating
+            ? statuses.length === 0 ? "Planning lessons…" : `Building · ${readyCount}/${statuses.length} ready`
+            : `${statuses.length} lesson${statuses.length === 1 ? "" : "s"} · plays below`}
+        </p>
+      </div>
+
+      <ol className="relative mt-2 ml-[18px] border-l border-white/[0.08] pl-1.5">
+        {entry.lessons.map((lesson, i) => {
+          const status = statuses[i];
+          const playable = status === "ready" && !!lesson.code;
+          const isActive = selectedLesson !== null && selectedLesson === i && playable;
+          return (
+            <li key={lesson.id}>
+              <button
+                disabled={!playable}
+                onClick={() => playable && onSelectLesson(i)}
+                className={cx(
+                  "relative flex w-full items-start gap-2.5 rounded-xl px-2 py-2 text-left transition-colors",
+                  isActive ? "bg-[#8B7CFF]/[0.1]" : playable ? "hover:bg-white/[0.04]" : "cursor-not-allowed opacity-55"
+                )}
+              >
+                <span className="absolute -left-1.5 top-1/2 h-px w-1.5 bg-white/[0.09]" aria-hidden="true" />
+                <span className="relative z-10 shrink-0 pt-0.5">
+                  {status === "ready" ? (
+                    isActive ? (
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#8B7CFF] shadow-[0_0_16px_-3px_rgba(139,124,255,0.9)]">
+                        <Play className="ml-0.5 h-2.5 w-2.5 fill-[#0A0B10] text-[#0A0B10]" />
+                      </span>
+                    ) : (
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#0C0D13] font-mono text-[10px] text-[#8A8FA3] ring-1 ring-white/[0.12]">
+                        {pad2(i + 1)}
+                      </span>
+                    )
+                  ) : status === "failed" ? (
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#FF5C6C]/10 ring-1 ring-[#FF5C6C]/30">
+                      <XCircle className="h-3 w-3 text-[#FF5C6C]" />
+                    </span>
+                  ) : (
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#0C0D13] ring-1 ring-white/[0.1]">
+                      <Loader2 className="h-3 w-3 animate-spin text-[#FFB08A]" />
+                    </span>
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className={cx("line-clamp-2 text-[12px] leading-snug", isActive ? "font-semibold text-white" : status === "failed" ? "text-[#FF8A95]" : "text-[#C9CCD8]")}>
+                    {lesson.title}
+                  </span>
+                  <span className="mt-0.5 block text-[10px]">
+                    {status === "ready" ? (
+                      lessonDuration(lesson) ? (
+                        <span className="flex items-center gap-1 text-[#6E7389]"><Clock className="h-2.5 w-2.5" /> {lessonDuration(lesson)}</span>
+                      ) : null
+                    ) : status === "failed" ? (
+                      <span className="text-[#FF8A95]">Generation failed</span>
+                    ) : (
+                      <span className="text-[#FFB08A]">Generating…</span>
+                    )}
+                  </span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 function SyllabusPanel({
   open, isMobile, onClose, loading, lessons, lessonStatuses, lessonProgresses, activeSection, activeLesson,
   allLessonsReady, quizDone, quizCount, quizScore, onSelectLesson, onSelectQuiz, onSelectResults,
+  followUps, followUpSelection, onSelectFollowUpLesson,
 }: {
   open: boolean; isMobile: boolean; onClose: () => void; loading: boolean;
   lessons: Lesson[]; lessonStatuses: LessonStatus[]; lessonProgresses: number[];
   activeSection: CourseSection; activeLesson: number; allLessonsReady: boolean; quizDone: boolean;
   quizCount: number; quizScore: number | null;
   onSelectLesson: (i: number) => void; onSelectQuiz: () => void; onSelectResults: () => void;
+  // Courses generated from this one's results. Listed as a continuation of the
+  // same syllabus rather than a separate library item, because that's how the
+  // page plays them — in one scroll, under the course they came from.
+  followUps: HistoryEntry[];
+  followUpSelection: { courseId: string; lesson: number } | null;
+  onSelectFollowUpLesson: (courseId: string, lesson: number) => void;
 }) {
   const body = (
     <aside className={cx("flex h-full min-h-0 flex-col border-l border-white/[0.06] bg-[#0C0D13] text-[#ECEDF2]", isMobile ? "w-[86vw] max-w-[320px]" : "w-[320px]")}>
@@ -2567,6 +3324,15 @@ function SyllabusPanel({
             {!quizDone && <Lock className="h-3 w-3 text-[#555A6E]" />}
           </button>
         </div>
+
+        {followUps.map((child) => (
+          <FollowUpSyllabus
+            key={child.id}
+            entry={child}
+            selectedLesson={followUpSelection?.courseId === child.id ? followUpSelection.lesson : null}
+            onSelectLesson={(i) => onSelectFollowUpLesson(child.id, i)}
+          />
+        ))}
       </nav>
     </aside>
   );
@@ -2650,6 +3416,22 @@ export default function AILearningPage() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [showPaywall, setShowPaywall] = useState(false);
+  // Inline follow-up generation (results page → next course, in place).
+  const [startingFollowUp, setStartingFollowUp] = useState(false);
+  const startingFollowUpRef = useRef(false);
+  const [startingFollowUpLabel, setStartingFollowUpLabel] = useState("");
+  // Which lesson of which follow-up the inline player is on. Shared with the
+  // syllabus panel so one nav drives both generations.
+  const [followUpSelection, setFollowUpSelection] = useState<{ courseId: string; lesson: number } | null>(null);
+  // Follow-ups already seen playable, so a course that finished in an earlier
+  // session doesn't yank the view around on open — only a completion that
+  // happens while the user is sitting here does.
+  const followUpSeenPlayableRef = useRef<Set<string>>(new Set());
+  const followUpSeededRef = useRef(false);
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
+  // Set to a brand-new follow-up's id so its panel scrolls itself into view
+  // once, then cleared.
+  const [scrollToFollowUpId, setScrollToFollowUpId] = useState<string | null>(null);
   const [failureBanner, setFailureBanner] = useState<{ lessonIndex: number; title: string; error: string | null } | null>(null);
   const seenFailuresRef = useRef<Set<number>>(new Set());
 
@@ -2736,11 +3518,19 @@ export default function AILearningPage() {
       setHistory((prev) => prev.map((e) => e.id !== course._id ? e : {
         ...e,
         lessons: e.lessons.map((l, i) => mergeLesson(l, course.lessons[i])),
-        lessonStatuses: statuses,
+        // Keep the placeholders until the server has actually written its
+        // lessons: processCourse fills the whole array in one update after the
+        // course-plan call, so `[]` here means "still planning", not "no
+        // lessons" — and overwriting with [] made the rail drop its
+        // "Generating" line for the first half-minute of every new course.
+        lessonStatuses: statuses.length ? statuses : e.lessonStatuses,
         questions: course.questions?.length ? course.questions : e.questions,
       }));
       // Done — stop holding the handle so a later revisit can watch it again.
-      if (!statuses.some((s) => s === "generating")) {
+      // Keyed off the course's own status, not "are any lessons generating":
+      // a brand-new course's lessons array is still empty on the first poll,
+      // which the old check read as finished and cancelled itself over.
+      if (course.status === "ready" || course.status === "failed") {
         bgPollsRef.current.get(course._id)?.();
         bgPollsRef.current.delete(course._id);
       }
@@ -2780,6 +3570,9 @@ export default function AILearningPage() {
       quizAnswers: [], quizDone: false, questions: c.questions || [],
       isFreeTrialCourse: !!c.isFreeTrialCourse,
       timeAllocationMinutes: c.timeAllocationMinutes ?? 30,
+      parentCourseId: c.parentCourseId ?? null,
+      followUpKind: c.followUpKind ?? null,
+      creditCost: c.creditCost,
     };
   };
 
@@ -3011,13 +3804,67 @@ export default function AILearningPage() {
     }
   };
 
-  // Results → next course, without re-running the level assessment: the quiz
-  // we just graded is a better level signal than the chat would be. Credits
-  // are still spent server-side by checkCredits on the generation request —
-  // nothing here deducts anything locally.
-  const startFollowUpCourse = (topic: string, tierKey: string, level: Level) => {
-    setPendingGeneration(null);
-    runGeneration(topic, null, level, tierKey);
+  // Results → next course, generated IN PLACE: the open course keeps its
+  // scroll position and its results, and the new one builds in a panel below
+  // it (see FollowUpThread) so both are on screen at once. Deliberately not
+  // runGeneration, which takes over the whole stage and would throw away the
+  // results page the user just acted on.
+  //
+  // No level assessment either — the quiz we just graded is a better signal
+  // than the chat. Credits are spent server-side by checkCredits on this
+  // request; nothing here deducts anything locally.
+  const startFollowUpCourse = async (
+    topic: string, tierKey: string, level: Level, kind: "repair" | "extend"
+  ) => {
+    // Guarded by a ref, not the `starting` state: setState is async, so two
+    // clicks in the same tick would both pass a state check and spend credits
+    // twice. The overlay below blocks the pointer; this blocks the logic.
+    if (startingFollowUpRef.current) return;
+    const parentId = activeHistoryIdRef.current;
+    if (!parentId) return;
+    startingFollowUpRef.current = true;
+    const tier = courseTiers?.find((t) => t.key === tierKey) ?? null;
+    const lessonCount = tier?.lessonCount ?? 6;
+    setFollowUpError(null);
+    setStartingFollowUpLabel(
+      tier ? `“${topic}” · ${tier.creditCost} credits` : `“${topic}”`
+    );
+    setStartingFollowUp(true);
+    analytics.courseStarted({ topic, source: "topic" });
+    try {
+      const { courseId } = await startCourseGeneration(topic, null, level, tierKey, {
+        parentCourseId: parentId,
+        followUpKind: kind,
+      });
+      startedCoursesRef.current.add(courseId);
+      fetchCredits();
+      const placeholder = buildMockLessons(lessonCount).map((l) => ({
+        ...l, completed: false, videoUrl: null, code: null, totalFrames: null,
+      }));
+      setHistory((prev) => [{
+        id: courseId, fileName: topic, createdAt: new Date(),
+        completedLessons: 0, quizScore: null,
+        lessons: placeholder, lessonStatuses: placeholder.map(() => "generating" as LessonStatus),
+        quizAnswers: [], quizDone: false, questions: [],
+        parentCourseId: parentId, followUpKind: kind,
+        creditCost: tier?.creditCost,
+        timeAllocationMinutes: tier?.timeAllocationMinutes ?? 30,
+      }, ...prev]);
+      // The same watcher that keeps the rail's "Generating" state fresh also
+      // feeds the inline panel — one poll per course, no second mechanism.
+      watchCourseInBackground(courseId);
+      setScrollToFollowUpId(courseId);
+    } catch (err) {
+      console.error(err);
+      // startCourseGeneration attaches the HTTP status so a 402 (out of
+      // credits) can open the paywall instead of showing a generic error.
+      const failure = err as { status?: number; message?: string };
+      if (failure?.status === 402) setShowPaywall(true);
+      else setFollowUpError(failure?.message || "Couldn't start that course. Please try again.");
+    } finally {
+      startingFollowUpRef.current = false;
+      setStartingFollowUp(false);
+    }
   };
 
   const handleAssessmentDone = (level: Level) => {
@@ -3029,6 +3876,11 @@ export default function AILearningPage() {
 
   const restoreEntry = (entry: HistoryEntry) => {
     detachActiveCoursePoll();
+    // This course may already be watched in the background (e.g. a follow-up
+    // generating in the panel below its parent). The foreground poll below
+    // takes over, so release that handle rather than polling it twice.
+    bgPollsRef.current.get(entry.id)?.();
+    bgPollsRef.current.delete(entry.id);
     setCourseDetailsLoading(false);
     setActiveHistoryId(entry.id);
     if (urlCourseId !== entry.id) router(`/ai_tutor/${entry.id}`);
@@ -3087,6 +3939,76 @@ export default function AILearningPage() {
   const courseProgress = lessons.length ? (completedCount / lessons.length) * 100 : 0;
   const generatingCount = lessonStatuses.filter((s) => s === "generating").length;
   const activeEntry = history.find((e) => e.id === activeHistoryId);
+  // Courses spawned from the open one, oldest first so the thread reads in
+  // the order it happened. Memoised because the auto-show effect below keys
+  // off it — a fresh array every render would re-run that effect constantly.
+  const followUpChildren = useMemo(
+    () => (activeHistoryId
+      ? history
+          .filter((e) => e.parentCourseId === activeHistoryId)
+          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      : []),
+    [history, activeHistoryId]
+  );
+
+  // Switching courses resets the inline player and re-arms the auto-show for
+  // whatever the newly-opened course has spawned. Declared before the
+  // auto-show effect below so it runs first on an activeHistoryId change.
+  useEffect(() => {
+    setFollowUpSelection(null);
+    followUpSeenPlayableRef.current = new Set();
+    followUpSeededRef.current = false;
+  }, [activeHistoryId]);
+
+  // The chain of courses that led here, root first and the open course last —
+  // what the results page charts as a learning path. `seen` guards against a
+  // cycle: parentCourseId is validated server-side but this walk must
+  // terminate regardless of what the API hands back.
+  const lineageChain: HistoryEntry[] = useMemo(() => {
+    const out: HistoryEntry[] = [];
+    const seen = new Set<string>();
+    let cursor = history.find((e) => e.id === activeHistoryId);
+    while (cursor && !seen.has(cursor.id)) {
+      seen.add(cursor.id);
+      out.unshift(cursor);
+      const parentId: string | null | undefined = cursor.parentCourseId;
+      cursor = parentId ? history.find((e) => e.id === parentId) : undefined;
+    }
+    return out;
+  }, [history, activeHistoryId]);
+
+  const firstPlayableLesson = (entry: HistoryEntry) =>
+    entry.lessons.findIndex((l, i) => entry.lessonStatuses?.[i] === "ready" && !!l.code);
+
+  // Point the inline player at a follow-up lesson and make sure the layout is
+  // the one the user asked for: the course they came from playing on top, the
+  // new one playing underneath.
+  const selectFollowUpLesson = (courseId: string, lesson: number) => {
+    setFollowUpSelection({ courseId, lesson });
+    setActiveSection("video");
+    setScrollToFollowUpId(courseId);
+  };
+
+  // A follow-up finishing its first lesson opens itself — the point of
+  // generating in place is that nothing has to be clicked to see the result.
+  useEffect(() => {
+    const playable = followUpChildren.filter((c) => firstPlayableLesson(c) >= 0);
+    if (!followUpSeededRef.current) {
+      // First look at this course: adopt whatever was already finished without
+      // moving the view.
+      playable.forEach((c) => followUpSeenPlayableRef.current.add(c.id));
+      followUpSeededRef.current = true;
+      return;
+    }
+    const justLanded = playable.find((c) => !followUpSeenPlayableRef.current.has(c.id));
+    if (!justLanded) return;
+    // Never interrupt a quiz in progress — switching sections would throw
+    // away the answers in flight. Deliberately NOT marked as seen here, so
+    // the auto-show happens as soon as they're off the quiz.
+    if (activeSection === "quiz") return;
+    followUpSeenPlayableRef.current.add(justLanded.id);
+    selectFollowUpLesson(justLanded.id, firstPlayableLesson(justLanded));
+  }, [followUpChildren, activeSection]);
 
   const handleNew = () => {
     if (isMobile) setHistorySidebarCollapsed(true);
@@ -3123,6 +4045,7 @@ export default function AILearningPage() {
     <>
       {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} courseId={activeHistoryId} courseName={fileName || undefined} onSuccess={(awarded) => { if (awarded > 0) fetchCredits(); }} />}
       {showPaywall && <PaywallModal onClose={() => setShowPaywall(false)} courseId={activeHistoryId} courseName={fileName || undefined} />}
+      {startingFollowUp && <StartingOverlay label={startingFollowUpLabel} />}
       {phase === "course" && showShareModal && activeHistoryId && <ShareModal courseId={activeHistoryId} onClose={() => setShowShareModal(false)} />}
       {phase === "course" && showPublishModal && activeHistoryId && <PublishModal courseId={activeHistoryId} onClose={() => setShowPublishModal(false)} />}
     </>
@@ -3363,8 +4286,27 @@ export default function AILearningPage() {
                       courseTiers={courseTiers}
                       onGenerateFollowUp={startFollowUpCourse}
                       onRequestTopUp={() => setShowPaywall(true)}
+                      starting={startingFollowUp}
+                      startError={followUpError}
+                      lineage={lineageChain}
                     />
                   )}
+
+                  {/* Everything this course led to, below whatever section is
+                      open — so a follow-up started from the results builds
+                      here instead of replacing the page. */}
+                  <FollowUpThread
+                    parentTopic={fileName}
+                    parentTopicScores={serverQuizResult?.topicBreakdown ?? null}
+                    followUps={followUpChildren}
+                    onOpen={restoreEntry}
+                    scrollToId={scrollToFollowUpId}
+                    onScrolled={() => setScrollToFollowUpId(null)}
+                    selectedLessonFor={(id) =>
+                      followUpSelection?.courseId === id ? followUpSelection.lesson : 0
+                    }
+                    onSelectLesson={selectFollowUpLesson}
+                  />
                 </div>
               </main>
 
@@ -3382,6 +4324,12 @@ export default function AILearningPage() {
                 quizDone={quizDone}
                 quizCount={quizQuestions.length}
                 quizScore={serverQuizResult?.pct ?? activeEntry?.quizScore ?? null}
+                followUps={followUpChildren}
+                followUpSelection={followUpSelection}
+                onSelectFollowUpLesson={(courseId, lesson) => {
+                  selectFollowUpLesson(courseId, lesson);
+                  if (isMobile) setCourseSidebarOpen(false);
+                }}
                 onSelectLesson={(i) => {
                   analytics.lessonViewed({ lesson: i + 1 });
                   setActiveLesson(i);

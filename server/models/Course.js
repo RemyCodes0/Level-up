@@ -132,6 +132,31 @@ const courseSchema = new mongoose.Schema(
       enum: ["generating", "ready", "failed"],
       default: "generating",
     },
+    // Learning-loop lineage: the course whose RESULTS page spawned this one
+    // (see the "Keep going" section in src/ai/AiTutor.tsx). Null for a course
+    // started from the composer, which is still the overwhelming majority.
+    // Stored rather than derived because the relation has to survive a reload
+    // to be drawn in the library sidebar, and because a follow-up's topic is
+    // free text that can't be matched back to its parent reliably.
+    //
+    // Deliberately NOT a cascade: deleting a parent leaves its follow-ups in
+    // place as ordinary courses (the client treats an unresolvable parent as
+    // "no parent"), since a follow-up is a real course the user paid credits
+    // for and must not disappear with its ancestor.
+    parentCourseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Course",
+      default: null,
+      index: true,
+    },
+    // Why the follow-up was offered: "repair" = a topic scored below the pass
+    // mark, re-taught from the ground up; "extend" = an AI-suggested next
+    // topic. Only meaningful alongside parentCourseId.
+    followUpKind: {
+      type: String,
+      enum: ["repair", "extend"],
+      default: null,
+    },
     // Snapshot of the course-tier config AT GENERATION TIME (null tier for
     // the free trial) — deliberately copied onto the course itself rather
     // than re-read from PricingConfig later, so an admin tuning prices/counts

@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const mongoose = require("mongoose");
 const {
   generateCoursePlan,
   generateCourseQuiz,
@@ -154,6 +155,28 @@ async function generateCourseHandler(req, res) {
     // shape, which still needs its own deduction below exactly as before.
     const tierSnapshot = req.courseTierSnapshot;
 
+    // Learning-loop lineage (optional). Ownership-checked rather than trusted:
+    // a parent id is client-supplied, so without this check anyone could
+    // attach their course as a child of someone else's and have it show up in
+    // that person's library sidebar. An unknown or someone else's id is
+    // dropped to null — the follow-up is still generated, just unlinked,
+    // which is strictly better than failing a request the user already paid
+    // credits for.
+    let parentCourseId = null;
+    let followUpKind = null;
+    if (req.body.parentCourseId && mongoose.isValidObjectId(req.body.parentCourseId)) {
+      const parentExists = await Course.exists({
+        _id: req.body.parentCourseId,
+        userId: req.user._id,
+      });
+      if (parentExists) {
+        parentCourseId = req.body.parentCourseId;
+        followUpKind = ["repair", "extend"].includes(req.body.followUpKind)
+          ? req.body.followUpKind
+          : null;
+      }
+    }
+
     // isFreeTrialCourse is no longer written as true for any new course —
     // the free-trial bypass is gone (see checkCredits.js's own comment).
     // The field stays on the schema for historical rows/analytics; the
@@ -168,6 +191,8 @@ async function generateCourseHandler(req, res) {
       mcqCount: tierSnapshot.mcqCount,
       timeAllocationMinutes: tierSnapshot.timeAllocationMinutes,
       creditCost: tierSnapshot.creditCost,
+      parentCourseId,
+      followUpKind,
       lessons: [],
       questions: [],
     });
