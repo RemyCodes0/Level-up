@@ -85,7 +85,18 @@ exports.createRoom = async (req, res) => {
       roomId: room._id,
       courseId: course._id,
       inviteCode: room.inviteCode,
-      joinUrl: `${process.env.CLIENT_URL}/collab/join/${room.inviteCode}`,
+      // FIX: was `/collab/join/${room.inviteCode}` — broken two ways at
+      // once. (1) No frontend route matches "/collab/join/*" at all (the
+      // registered route is "/collab/invite/:shareToken" — see App.tsx);
+      // following the old link hit whatever catch-all the router falls
+      // back to, not JoinCollabRoom. (2) Even fixing the path, inviteCode is
+      // the SHORT, human-TYPEABLE code for the separate manual-entry join
+      // flow (joinRoomByCode) — the link flow (JoinCollabRoom.tsx, via
+      // previewRoomByLink/joinRoomByLink) looks up a room by shareToken, the
+      // long unguessable one generated above, not by inviteCode. A link
+      // built from the wrong identifier against the wrong path never had a
+      // chance of resolving to this room.
+      joinUrl: `${process.env.CLIENT_URL}/collab/invite/${room.shareToken}`,
     });
 
     // Fire-and-forget, identical to how generateCourseHandler kicks off a
