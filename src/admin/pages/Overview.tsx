@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Users, BookOpen, TrendingUp, CreditCard, DollarSign, Eye, Activity, RefreshCw, Wrench, Loader2, ArrowRight } from "lucide-react";
+import { Users, BookOpen, TrendingUp, CreditCard, DollarSign, Eye, Activity, RefreshCw, Wrench, Loader2, ArrowRight, Gift, Users2 } from "lucide-react";
 import { adminApi } from "../adminApi";
 import {
   Page, PageHeader, StatCard, Card, RowList, ROW_HOVER, LoadingBlock, ErrorBlock, Skeleton,
@@ -15,6 +15,9 @@ interface Overview {
   courses: { total: number; last24h: number; last7d: number; freeTrial: number; paid: number; status: { generating: number; ready: number; failed: number } };
   generationHealth: { lessonStatus: { rendering: number; ready: number; failed: number; locked: number }; totalLessons: number; lessonSuccessRate: number | null };
   creditsProxy: { totalRemainingCredits: number };
+  revenue: { last30dUsd: number; allTimeUsd: number; purchaseCountAllTime: number };
+  referrals: { totalReferred: number; conversionRate: number; totalCreditsGranted: number };
+  collab: { activeRooms: number; totalParticipants: number };
   aiSpend: { today: number; last7d: number; last30d: number; byKind: { kind: string; totalUsd: number; calls: number }[] };
   pageViews: { today: number; last7d: number };
   generatedAt: string;
@@ -105,6 +108,34 @@ export default function Overview() {
           sub={`${health.ready} ready · ${health.failed} failed`} />
         <StatCard icon={<CreditCard className="h-4 w-4" />} accent="text-[#FFB547]" label="Credits outstanding" value={overview.creditsProxy.totalRemainingCredits}
           sub={`${overview.courses.paid} paid · ${overview.courses.freeTrial} free trial`} />
+      </div>
+
+      {/* Growth: revenue, referrals, collab — the "is the business working"
+          row, placed above AI spend/traffic since it's the more consequential
+          read at a glance. Revenue/Referrals link to their own pages for the
+          full breakdown; Collab doesn't have one yet, so it's a plain card. */}
+      <div className="mb-5 grid gap-4 lg:grid-cols-3">
+        <MetricLink
+          to="/admin/revenue"
+          icon={<TrendingUp className="h-4 w-4" />}
+          label="Revenue, last 30d"
+          value={fmtUsd(overview.revenue.last30dUsd)}
+          sub={`${fmtUsd(overview.revenue.allTimeUsd)} all-time · ${overview.revenue.purchaseCountAllTime} purchases`}
+        />
+        <MetricLink
+          to="/admin/referrals"
+          icon={<Gift className="h-4 w-4" />}
+          label="Referred signups"
+          value={overview.referrals.totalReferred.toLocaleString()}
+          sub={`${overview.referrals.conversionRate}% of all users · ${overview.referrals.totalCreditsGranted} credits paid out`}
+        />
+        <StatCard
+          icon={<Users2 className="h-4 w-4" />}
+          accent="text-[#8B7CFF]"
+          label="Active study rooms"
+          value={overview.collab.activeRooms}
+          sub={`${overview.collab.totalParticipants} participants across all rooms`}
+        />
       </div>
 
       <div className="mb-5 grid gap-4 lg:grid-cols-3">

@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const User = require("../models/User");
+const Course = require("../models/Course");
 const jwt = require("jsonwebtoken");
 const sendEmail = require("../services/emailService");
 const { completeReferral } = require("./referralController");
@@ -436,7 +437,22 @@ exports.getUsers = async (req, res) => {
     // included, to every caller. .limit(): an unbounded find() over the
     // whole collection turns into a full scan + full-collection
     // serialization as the user count grows.
-    const user = await User.find().select("-password").limit(1000).lean();
+    //
+    // .sort({createdAt: 1}): the admin Users page's default view is "oldest
+    // account first" — explicit here rather than relying on Mongo's natural
+    // insertion-order default, which isn't a documented guarantee the way an
+    // actual sort is.
+    //
+    // courseCount: one aggregate query for every user's course count, not
+    // 1000 individual Course.countDocuments calls — grouped by userId, which
+    // Course's own {userId:1, createdAt:-1} index already covers, so this
+    // doesn't add a collection scan on top of the existing find().
+    const [users, courseCounts] = await Promise.all([
+      User.find().select("-password").sort({ createdAt: 1 }).limit(1000).lean(),
+      Course.aggregate([{ $group: { _id: "$userId", count: { $sum: 1 } } }]),
+    ]);
+    const courseCountByUser = new Map(courseCounts.map((c) => [String(c._id), c.count]));
+    const user = users.map((u) => ({ ...u, courseCount: courseCountByUser.get(String(u._id)) || 0 }));
     res.status(200).json({ user });
   } catch (err) {
     res.status(500).json({ message: err.message });

@@ -246,11 +246,11 @@ export function Bars({
 }: {
   data: { label: string; value: number; hint?: string }[];
   format: (v: number) => string;
-  tone?: "iris" | "mint";
+  tone?: "iris" | "mint" | "amber";
   height?: number;
 }) {
   const peak = Math.max(...data.map((d) => d.value), 0);
-  const accent = tone === "mint" ? C.mint : C.iris;
+  const accent = tone === "mint" ? C.mint : tone === "amber" ? C.amber : C.iris;
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between text-[10px] text-[#4A4F63]">

@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Search, Trash2, Pencil, Loader2, Activity, CheckCircle2, Circle, Coins, BadgeCheck } from "lucide-react";
+import {
+  Search, Trash2, Pencil, Loader2, Activity, CheckCircle2, Circle, Coins, BadgeCheck,
+  ArrowUp, ArrowDown, ArrowUpDown, Film, Gift, Ticket, Mail,
+} from "lucide-react";
 import { adminApi } from "../adminApi";
 import {
   Page, PageHeader, Card, Modal, LoadingBlock, ErrorBlock, EmptyState, fmtDate, fmtPosition,
@@ -17,6 +20,15 @@ interface User {
   signupBonusCredits?: number;
   signupBonusExpiresAt?: string | null;
   createdAt: string;
+  // Added alongside this richer view — see authController.js's getUsers.
+  authProvider?: "local" | "google";
+  freeTrialUsed?: boolean;
+  referralCount?: number;
+  referralCreditsEarned?: number;
+  emailUnsubscribed?: boolean;
+  // Aggregated server-side from the Course collection, not stored on the
+  // user document itself — real counts, not an estimate.
+  courseCount?: number;
 }
 
 // Mirrors creditService.js's getSpendableBalance — the signup bonus only
@@ -46,6 +58,46 @@ function tintFor(id: string): string {
   return AVATAR_TINTS[h % AVATAR_TINTS.length];
 }
 
+type SortKey = "name" | "createdAt" | "courseCount" | "referralCount" | "credits";
+
+const SORT_VALUE: Record<SortKey, (u: User) => number | string> = {
+  name: (u) => (u.name || "").toLowerCase(),
+  createdAt: (u) => new Date(u.createdAt).getTime(),
+  courseCount: (u) => u.courseCount || 0,
+  referralCount: (u) => u.referralCount || 0,
+  credits: (u) => spendableBalance(u),
+};
+
+/**
+ * A clickable column header that sorts by `sortKey`. Clicking the already-
+ * active column flips direction instead of resetting it, same convention
+ * as every other sortable-table UI — clicking "Joined" twice in a row
+ * should flip oldest/newest, not silently do nothing the second time.
+ */
+function SortableTh({
+  label, sortKey, active, dir, onSort, align = "left",
+}: { label: string; sortKey: SortKey; active: boolean; dir: "asc" | "desc"; onSort: (k: SortKey) => void; align?: "left" | "right" }) {
+  return (
+    <th className={cx(EYEBROW, "px-5 py-3", align === "right" ? "text-right" : "text-left")}>
+      <button
+        onClick={() => onSort(sortKey)}
+        className={cx(
+          "group/sort inline-flex items-center gap-1 transition-colors hover:text-[#D6D8E2]",
+          align === "right" && "flex-row-reverse",
+          active && "text-[#B4A9FF]"
+        )}
+      >
+        {label}
+        {active ? (
+          dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 opacity-0 transition-opacity group-hover/sort:opacity-40" />
+        )}
+      </button>
+    </th>
+  );
+}
+
 export default function Users() {
   const [users, setUsers] = useState<User[]>([]);
   const [search, setSearch] = useState("");
@@ -54,6 +106,25 @@ export default function Users() {
   const [editing, setEditing] = useState<User | null>(null);
   const [viewingProgress, setViewingProgress] = useState<User | null>(null);
   const [adjustingCredits, setAdjustingCredits] = useState<User | null>(null);
+  // Default: oldest account first — the server already returns users sorted
+  // this way (see getUsers' explicit sort({createdAt:1})), so this default
+  // doesn't even need a client-side re-sort on first load, only once the
+  // admin clicks a different column.
+  const [sortKey, setSortKey] = useState<SortKey>("createdAt");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  const handleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(key);
+    // First click on a new column picks the direction that's actually
+    // useful to see first: oldest-first for "Joined" (the whole point of
+    // this default), A→Z for "Name", but highest-first for every numeric
+    // metric — nobody clicks "Credits" wanting to see the $0 accounts.
+    setSortDir(key === "createdAt" || key === "name" ? "asc" : "desc");
+  };
 
   const load = () => {
     setLoading(true);
@@ -81,13 +152,22 @@ export default function Users() {
     (u) => u.name?.toLowerCase().includes(search.toLowerCase()) || u.email?.toLowerCase().includes(search.toLowerCase())
   );
 
+  const getSortValue = SORT_VALUE[sortKey];
+  const sorted = [...filtered].sort((a, b) => {
+    const av = getSortValue(a);
+    const bv = getSortValue(b);
+    const cmp = typeof av === "string" ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
   const verifiedCount = users.filter((u) => u.verified).length;
+  const totalCourses = users.reduce((sum, u) => sum + (u.courseCount || 0), 0);
 
   return (
     <Page>
       <PageHeader
         title="Users"
-        sub={`${users.length} accounts · ${verifiedCount} verified`}
+        sub={`${users.length} accounts · ${verifiedCount} verified · ${totalCourses} courses generated`}
         right={
           <div className="relative w-full sm:w-72">
             <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#4A4F63]" />
@@ -103,24 +183,26 @@ export default function Users() {
 
       {loading ? <LoadingBlock /> : error ? <ErrorBlock message={error} /> : (
         <Card pad={false}>
-          {filtered.length === 0 ? (
+          {sorted.length === 0 ? (
             <div className="p-5">
               <EmptyState label={search ? "matching users" : "users"} />
             </div>
           ) : (
             <div className="ad-scroll overflow-x-auto">
-              <table className="w-full min-w-[640px] text-sm">
+              <table className="w-full min-w-[820px] text-sm">
                 <thead>
                   <tr className="border-b border-white/[0.06] bg-white/[0.015]">
-                    <th className={cx(EYEBROW, "px-5 py-3 text-left")}>User</th>
-                    <th className={cx(EYEBROW, "px-5 py-3 text-left")}>Joined</th>
+                    <SortableTh label="User" sortKey="name" active={sortKey === "name"} dir={sortDir} onSort={handleSort} />
+                    <SortableTh label="Joined" sortKey="createdAt" active={sortKey === "createdAt"} dir={sortDir} onSort={handleSort} />
                     <th className={cx(EYEBROW, "px-5 py-3 text-left")}>Status</th>
-                    <th className={cx(EYEBROW, "px-5 py-3 text-right")}>Credits</th>
+                    <SortableTh label="Courses" sortKey="courseCount" active={sortKey === "courseCount"} dir={sortDir} onSort={handleSort} align="right" />
+                    <SortableTh label="Referrals" sortKey="referralCount" active={sortKey === "referralCount"} dir={sortDir} onSort={handleSort} align="right" />
+                    <SortableTh label="Credits" sortKey="credits" active={sortKey === "credits"} dir={sortDir} onSort={handleSort} align="right" />
                     <th className="w-36 px-5 py-3" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/[0.04]">
-                  {filtered.map((u) => (
+                  {sorted.map((u) => (
                     <tr key={u._id} className="group transition-colors hover:bg-white/[0.025]">
                       <td className="px-5 py-3">
                         <div className="flex min-w-0 items-center gap-3">
@@ -136,19 +218,54 @@ export default function Users() {
                             {initials(u.name)}
                           </span>
                           <div className="min-w-0">
-                            <p className="truncate text-[13px] font-medium text-[#ECEDF2]">{u.name}</p>
+                            <p className="flex items-center gap-1.5 truncate text-[13px] font-medium text-[#ECEDF2]">
+                              {u.name}
+                              {u.authProvider === "google" && (
+                                <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold text-[#8A8FA3]" title="Signed up with Google">
+                                  Google
+                                </span>
+                              )}
+                            </p>
                             <p className="truncate text-[11px] text-[#6E7389]">{u.email}</p>
                           </div>
                         </div>
                       </td>
                       <td className="px-5 py-3 text-[11px] text-[#6E7389]">{fmtDate(u.createdAt)}</td>
                       <td className="px-5 py-3">
-                        {u.verified ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#3DDC97]">
-                            <BadgeCheck className="h-3.5 w-3.5" /> Verified
+                        <div className="flex flex-col gap-1">
+                          {u.verified ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#3DDC97]">
+                              <BadgeCheck className="h-3.5 w-3.5" /> Verified
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-[#6E7389]">Unverified</span>
+                          )}
+                          <div className="flex items-center gap-2.5">
+                            {u.freeTrialUsed && (
+                              <span className="inline-flex items-center gap-1 text-[10px] text-[#6E7389]" title="Has used their signup bonus credits">
+                                <Ticket className="h-3 w-3" /> Trial used
+                              </span>
+                            )}
+                            {u.emailUnsubscribed && (
+                              <span className="inline-flex items-center gap-1 text-[10px] text-[#FFB547]" title="Opted out of broadcast emails">
+                                <Mail className="h-3 w-3" /> Unsubscribed
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        <span className="inline-flex items-center justify-end gap-1.5 text-[13px] text-[#D6D8E2] tabular-nums">
+                          <Film className="h-3.5 w-3.5 text-[#6E7389]" /> {u.courseCount ?? 0}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        {u.referralCount ? (
+                          <span className="inline-flex items-center justify-end gap-1.5 text-[13px] text-[#D6D8E2] tabular-nums" title={`${u.referralCreditsEarned ?? 0} credits earned from referrals`}>
+                            <Gift className="h-3.5 w-3.5 text-[#6E7389]" /> {u.referralCount}
                           </span>
                         ) : (
-                          <span className="text-[11px] text-[#6E7389]">Unverified</span>
+                          <span className="text-[11px] text-[#4A4F63]">—</span>
                         )}
                       </td>
                       <td className="px-5 py-3 text-right">

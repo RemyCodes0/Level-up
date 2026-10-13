@@ -5,7 +5,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, DollarSign, BookOpen, Users,
   MessageSquare, LineChart, Settings, Mail, Blocks,
-  Menu, X, ArrowUpRight,
+  Menu, X, ArrowUpRight, TrendingUp, Gift,
 } from "lucide-react";
 import { PageMeta } from "@/components/PageMeta";
 import { RequireAdmin } from "./RequireAdmin";
@@ -22,6 +22,13 @@ const NAV: { group: string; items: { to: string; end?: boolean; label: string; i
       { to: "/admin", end: true, label: "Overview", icon: LayoutDashboard },
       { to: "/admin/ai-spend", label: "AI Spend", icon: DollarSign },
       { to: "/admin/traffic", label: "Traffic", icon: LineChart },
+    ],
+  },
+  {
+    group: "Growth",
+    items: [
+      { to: "/admin/revenue", label: "Revenue", icon: TrendingUp },
+      { to: "/admin/referrals", label: "Referrals", icon: Gift },
     ],
   },
   {

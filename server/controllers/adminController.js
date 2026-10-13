@@ -16,7 +16,10 @@ const AiUsageLog = require("../models/AiUsageLog");
 const PageView = require("../models/PageView");
 const Progress = require("../models/Progress");
 const GenerationLog = require("../models/GenerationLog");
+const CreditTransaction = require("../models/CreditTransaction");
+const CollabRoom = require("../models/CollabRoom");
 const { grantCredits, spendCredits, getSpendableBalance, InsufficientCreditsError } = require("../services/creditService");
+const { getPricingConfig } = require("../services/pricingConfigService");
 
 // GET /api/admin/overview
 // Returns the headline numbers + breakdowns for the dashboard, in one call.
@@ -45,6 +48,12 @@ exports.getOverview = async (req, res) => {
       spendByKind,
       viewsDay,
       viewsWeek,
+      purchasesMonth,
+      purchasesAllTime,
+      referredCount,
+      referralCreditsAgg,
+      activeRoomsCount,
+      roomParticipantsAgg,
     ] = await Promise.all([
       User.countDocuments({}),
       User.countDocuments({ verified: true }),
@@ -92,6 +101,31 @@ exports.getOverview = async (req, res) => {
       ]),
       PageView.countDocuments({ createdAt: { $gte: dayAgo } }),
       PageView.countDocuments({ createdAt: { $gte: weekAgo } }),
+      // Purchase transactions from CreditTransaction — see getRevenue below
+      // for the full breakdown; this is just enough for the dashboard's
+      // headline cards. Grouped by packKey so $ can be computed from
+      // CURRENT PricingConfig pricing in JS below (see getRevenue's own
+      // comment on why this is "current price × count", not a historical
+      // price snapshot — CreditTransaction doesn't record price-at-purchase).
+      CreditTransaction.aggregate([
+        { $match: { source: "purchase", createdAt: { $gte: monthAgo } } },
+        { $group: { _id: "$meta.packKey", count: { $sum: 1 } } },
+      ]),
+      CreditTransaction.aggregate([
+        { $match: { source: "purchase" } },
+        { $group: { _id: "$meta.packKey", count: { $sum: 1 } } },
+      ]),
+      // Referral funnel: how many of the TOTAL users above were referred by
+      // someone else, vs. organic signups.
+      User.countDocuments({ referredBy: { $ne: null } }),
+      User.aggregate([
+        { $group: { _id: null, total: { $sum: "$referralCreditsEarned" } } },
+      ]),
+      CollabRoom.countDocuments({ status: "active" }),
+      CollabRoom.aggregate([
+        { $project: { size: { $size: "$participants" } } },
+        { $group: { _id: null, total: { $sum: "$size" } } },
+      ]),
     ]);
 
     // Reshape the status aggregations into simple objects.
@@ -113,6 +147,19 @@ exports.getOverview = async (req, res) => {
         : null;
 
     const totalRemainingCredits = creditsAgg[0]?.totalCredits || 0;
+
+    // Turn {packKey, count} rows into real dollars using CURRENT
+    // PricingConfig pricing. Caveat (same one getRevenue documents in full):
+    // CreditTransaction never recorded the price AT THE TIME of a purchase,
+    // only which pack — so if a pack's price has changed since an old
+    // purchase, that purchase is priced at today's rate here, not what was
+    // actually charged then. Accurate for packs whose price hasn't moved
+    // (true for most of this app's life so far); flagged, not hidden.
+    const pricingConfig = await getPricingConfig();
+    const priceByPackKey = new Map(pricingConfig.creditPacks.map((p) => [p.key, p.priceCents]));
+    const sumPurchaseRows = (rows) =>
+      rows.reduce((sum, r) => sum + (r.count || 0) * ((priceByPackKey.get(r._id) || 0) / 100), 0);
+    const purchaseCountRows = (rows) => rows.reduce((sum, r) => sum + (r.count || 0), 0);
 
     res.json({
       users: {
@@ -136,11 +183,31 @@ exports.getOverview = async (req, res) => {
         // clearest single health number.
         lessonSuccessRate,
       },
-      // Revenue is approximate: we don't store a payments ledger yet, so this
-      // shows unspent credits as a proxy. Real revenue tracking would need a
-      // payments collection (flagged for later).
+      // totalRemainingCredits is still a useful "liability" figure (credits
+      // issued but not yet spent) — kept alongside the now-real revenue
+      // numbers below rather than replaced by them; they answer different
+      // questions (what's been collected vs. what's still owed in credits).
       creditsProxy: {
         totalRemainingCredits,
+      },
+      // Real revenue, from CreditTransaction's "purchase" rows — see
+      // getRevenue for the full breakdown (by pack, a trend chart, and the
+      // one gap worth knowing: NotchPay purchases bypass this ledger
+      // entirely and write straight to User.courseCredits, so this is a
+      // Stripe-only figure, not total revenue across every payment path).
+      revenue: {
+        last30dUsd: Math.round(sumPurchaseRows(purchasesMonth) * 100) / 100,
+        allTimeUsd: Math.round(sumPurchaseRows(purchasesAllTime) * 100) / 100,
+        purchaseCountAllTime: purchaseCountRows(purchasesAllTime),
+      },
+      referrals: {
+        totalReferred: referredCount,
+        conversionRate: totalUsers > 0 ? Math.round((referredCount / totalUsers) * 100) : 0,
+        totalCreditsGranted: referralCreditsAgg[0]?.total || 0,
+      },
+      collab: {
+        activeRooms: activeRoomsCount,
+        totalParticipants: roomParticipantsAgg[0]?.total || 0,
       },
       aiSpend: {
         today: spendDay[0]?.total || 0,
@@ -157,6 +224,129 @@ exports.getOverview = async (req, res) => {
   } catch (err) {
     console.error("admin getOverview error:", err);
     res.status(500).json({ error: "Failed to load admin overview" });
+  }
+};
+
+// GET /api/admin/revenue?range=7d
+// Real $ revenue, derived from CreditTransaction's "purchase" rows — not an
+// estimate the way the old creditsProxy comment on getOverview used to
+// apologize for. Same range convention as getAiUsage/getPageViewStats
+// (24h/7d/30d/90d, default 7d).
+//
+// TWO caveats worth knowing, both stated here instead of just in a code
+// comment nobody reading the dashboard will see — surfaced in the response
+// so the frontend can show them inline:
+//   1. CreditTransaction records WHICH PACK was bought, not the price paid
+//      at that moment — $ here is pack-count × CURRENT PricingConfig price.
+//      Accurate unless a pack's price changed since an old purchase.
+//   2. Stripe-only. NotchPay's webhook (controllers/notchpayController.js)
+//      grants credits with a direct User.courseCredits $inc and never writes
+//      a CreditTransaction row at all — those purchases are invisible here.
+//      (Worth fixing in notchpayController.js itself at some point — it also
+//      means NotchPay's own duplicate-webhook guard, `user.paymentRefs`, is
+//      never actually written: that field isn't declared on the User schema,
+//      so Mongoose's default strict mode silently drops it.)
+exports.getRevenue = async (req, res) => {
+  try {
+    const rangeDays = { "24h": 1, "7d": 7, "30d": 30, "90d": 90 }[req.query.range] || 7;
+    const since = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000);
+
+    const [pricingConfig, daily, byPack, allTimeByPack] = await Promise.all([
+      getPricingConfig(),
+      CreditTransaction.aggregate([
+        { $match: { source: "purchase", createdAt: { $gte: since } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            packKey: "$meta.packKey",
+          },
+        },
+        { $group: { _id: "$_id", counts: { $push: "$packKey" } } },
+        { $sort: { _id: 1 } },
+      ]),
+      CreditTransaction.aggregate([
+        { $match: { source: "purchase", createdAt: { $gte: since } } },
+        { $group: { _id: "$meta.packKey", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
+      CreditTransaction.aggregate([
+        { $match: { source: "purchase" } },
+        { $group: { _id: "$meta.packKey", count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const priceByPackKey = new Map(pricingConfig.creditPacks.map((p) => [p.key, p.priceCents]));
+    const packLabel = new Map(pricingConfig.creditPacks.map((p) => [p.key, p]));
+    const usdFor = (packKey, count) => ((priceByPackKey.get(packKey) || 0) / 100) * count;
+
+    // `daily` grouped per-day counts as an array of packKeys (Mongo has no
+    // clean "group by two keys, sum a derived value" in one pass without a
+    // second $group) — turn that into a $ total per day here.
+    const dailyUsd = daily.map((d) => ({
+      date: d._id,
+      totalUsd: Math.round(d.counts.reduce((sum, k) => sum + usdFor(k, 1), 0) * 100) / 100,
+      purchases: d.counts.length,
+    }));
+
+    const byPackBreakdown = byPack.map((p) => ({
+      packKey: p._id,
+      label: packLabel.get(p._id)?.credits ? `${packLabel.get(p._id).credits} credits` : p._id || "unknown pack",
+      count: p.count,
+      totalUsd: Math.round(usdFor(p._id, p.count) * 100) / 100,
+    }));
+
+    const totalUsd = Math.round(byPackBreakdown.reduce((sum, p) => sum + p.totalUsd, 0) * 100) / 100;
+    const allTimeUsd =
+      Math.round(allTimeByPack.reduce((sum, p) => sum + usdFor(p._id, p.count), 0) * 100) / 100;
+    const allTimePurchases = allTimeByPack.reduce((sum, p) => sum + p.count, 0);
+
+    res.json({
+      range: req.query.range || "7d",
+      totalUsd,
+      purchaseCount: byPackBreakdown.reduce((sum, p) => sum + p.count, 0),
+      daily: dailyUsd,
+      byPack: byPackBreakdown,
+      allTime: { totalUsd: allTimeUsd, purchaseCount: allTimePurchases },
+      caveats: {
+        pricedAtCurrentRate: true,
+        stripeOnly: true,
+      },
+    });
+  } catch (err) {
+    console.error("admin getRevenue error:", err);
+    res.status(500).json({ error: "Failed to load revenue data" });
+  }
+};
+
+// GET /api/admin/referrals
+// The referral program's real numbers: how many of this app's users were
+// referred by someone else (vs. organic), how many credits the program has
+// cost in grants, and who's actually driving it — a leaderboard, not just a
+// total, since in practice referral programs are usually carried by a small
+// handful of people worth knowing by name.
+exports.getReferralStats = async (req, res) => {
+  try {
+    const [totalUsers, referredUsers, creditsAgg, leaderboard] = await Promise.all([
+      User.countDocuments({}),
+      User.countDocuments({ referredBy: { $ne: null } }),
+      User.aggregate([{ $group: { _id: null, total: { $sum: "$referralCreditsEarned" } } }]),
+      User.find({ referralCount: { $gt: 0 } })
+        .select("name email referralCode referralCount referralCreditsEarned createdAt")
+        .sort({ referralCount: -1 })
+        .limit(25)
+        .lean(),
+    ]);
+
+    res.json({
+      totalUsers,
+      totalReferred: referredUsers,
+      conversionRate: totalUsers > 0 ? Math.round((referredUsers / totalUsers) * 100) : 0,
+      totalCreditsGranted: creditsAgg[0]?.total || 0,
+      leaderboard,
+    });
+  } catch (err) {
+    console.error("admin getReferralStats error:", err);
+    res.status(500).json({ error: "Failed to load referral stats" });
   }
 };
 

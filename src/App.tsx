@@ -14,6 +14,8 @@ import SignupPage from './signup/Signup'
 import AdminLayout from './admin/AdminLayout'
 import AdminOverviewPage from './admin/pages/Overview'
 import AdminAiSpendPage from './admin/pages/AiSpend'
+import AdminRevenuePage from './admin/pages/Revenue'
+import AdminReferralsPage from './admin/pages/Referrals'
 import AdminCoursesPage from './admin/pages/Courses'
 import AdminComponentLibraryPage from './admin/pages/ComponentLibrary'
 import AdminUsersPage from './admin/pages/Users'
@@ -99,6 +101,8 @@ function App() {
       <Route path="/admin" element={<AdminLayout/>}>
         <Route index element={<AdminOverviewPage/>}/>
         <Route path="ai-spend" element={<AdminAiSpendPage/>}/>
+        <Route path="revenue" element={<AdminRevenuePage/>}/>
+        <Route path="referrals" element={<AdminReferralsPage/>}/>
         <Route path="courses" element={<AdminCoursesPage/>}/>
         <Route path="courses/:courseId" element={<AdminCoursesPage/>}/>
         <Route path="component-library" element={<AdminComponentLibraryPage/>}/>

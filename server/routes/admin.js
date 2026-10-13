@@ -12,6 +12,8 @@ const {
   adminDeleteCourse,
   getUserProgress,
   adjustUserCredits,
+  getRevenue,
+  getReferralStats,
 } = require("../controllers/adminController");
 const {
   getAdminPricingConfig,
@@ -41,6 +43,8 @@ router.get("/overview", getOverview);
 router.get("/activity", getRecentActivity);
 router.get("/ai-usage", getAiUsage);
 router.get("/pageviews", getPageViewStats);
+router.get("/revenue", getRevenue);
+router.get("/referrals", getReferralStats);
 // Must be registered BEFORE /courses/:courseId — otherwise Express would
 // match "generation-stats" as a :courseId value and this route would never
 // be reached.
