@@ -4,7 +4,7 @@ const OpenAI = require("openai");
 const { v4: uuidv4 } = require("uuid");
 const { createLimiter } = require("../utils/concurrencyLimiter");
 const { recordAiUsage } = require("./aiUsageService");
-const { estimateTokensFromChars } = require("../config/modelPricing");
+const { estimateTokensFromChars, estimateGeminiAudioTokens } = require("../config/modelPricing");
 
 // Kokoro's raw PCM output format via this OpenRouter hosting — measured
 // directly: a 13-word sentence produced a PCM buffer whose length implies
@@ -12,6 +12,18 @@ const { estimateTokensFromChars } = require("../config/modelPricing");
 // for that word count; a second check against the SAME text's MP3-reported
 // duration (5.952s) came within 0.05s of the PCM-implied duration (5.900s)
 // for a longer sentence — confirming this format.
+//
+// Gemini TTS (the TTS_MODEL=gemini option — see TTS_PROVIDERS above) is
+// assumed to use this SAME 24kHz/16-bit/mono format, NOT independently
+// measured the way Kokoro's was above. That assumption rests on convergent
+// but secondary evidence: Google's own Gemini-API speech-generation docs'
+// example code writes native TTS output as 24kHz/16-bit/mono, and the
+// audio/L16;codec=pcm;rate=24000 MIME type Gemini's API itself returns names
+// that exact rate — but neither was checked against THIS specific model via
+// THIS specific OpenRouter hosting the way Kokoro's figures above were. If
+// Gemini-generated narration ever sounds pitch-shifted or runs at the wrong
+// speed, this mismatched assumption — not the chunking/concatenation logic
+// below — is the first thing to re-measure.
 const PCM_SAMPLE_RATE = 24000;
 const PCM_BITS_PER_SAMPLE = 16;
 const PCM_CHANNELS = 1;
@@ -48,16 +60,27 @@ function pcmToWav(pcmBuffer, { sampleRate = PCM_SAMPLE_RATE, channels = PCM_CHAN
 const FPS = 30;
 
 // GLOBAL cap on simultaneous TTS chunk requests, across ALL scenes in
-// flight at once — not per-scene. Chunking (see splitIntoTtsChunks below)
-// fixed Kokoro's per-call truncation bug, but each scene now fires several
-// chunk requests in parallel, and generateAllSceneAudio already runs
-// multiple SCENES concurrently — multiplying to a much bigger real
-// concurrency spike than a "1 request per scene" baseline would produce (a
-// 140-190 word scene needs ~4-6 chunks; 5 concurrent scenes x 5 chunks each
-// is ~25 simultaneous requests). That spike produces the same kind of
-// "Connection error" failures under load that the code-gen limiters in
-// claudeService.js exist to prevent — this is the equivalent fix for the
-// TTS side.
+// flight at once — not per-scene, not per-course, not per-user. Every scene
+// of every lesson fires its chunk requests immediately and concurrently (see
+// generateAllSceneAudioPipelined below), and every lesson of a course builds
+// concurrently too (buildLessonsConcurrently in courseController.js).
+//
+// REVERTED: briefly raised 8 → 24 on the theory that a bigger pool would cut
+// queue time. Wrong call, confirmed by real-world regression — generation
+// got slower, not faster, after the change. The likely mechanism: unlike
+// the general-purpose LLM endpoints the other limiters guard (GLM, DeepSeek,
+// Gemini — all large multi-tenant services), Kokoro here is ONE small,
+// single-purpose TTS model hosting on OpenRouter, almost certainly backed by
+// far fewer replicas. 24 concurrent requests against that likely exceeded
+// its real serving capacity — not a queueing problem but an overload one —
+// and generateSceneAudio retries a FAILED chunk by redoing the WHOLE SCENE
+// with 2s/4s/6s backoff, so a wave of timeouts/connection errors at 24-wide
+// concurrency compounds into exactly the "way slower than before" the user
+// reported, not the speedup the higher number was supposed to buy.
+// Back to 8, the value this was actually fast at. The queue/call timing log
+// below is left in (it's additive, changes nothing about behavior) — if this
+// still needs tuning, that log is what to look at before changing the
+// number again, not another guess.
 const TTS_CHUNK_MAX_CONCURRENT = Number(process.env.TTS_CHUNK_MAX_CONCURRENT) || 8;
 const limitTtsChunkCall = createLimiter(TTS_CHUNK_MAX_CONCURRENT);
 
@@ -77,6 +100,46 @@ const openai = new OpenAI({
   timeout: 150 * 1000, // 150 seconds — scenes 12-13 with long narration were timing out at 90s
   maxRetries: 0,       // handle retries manually below with backoff
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TTS PROVIDER
+// ═══════════════════════════════════════════════════════════════════════════
+// Same resolveProvider(envVar, defaultKey) convention claudeService.js uses
+// for LESSON_CODE_MODEL/QUIZ_MODEL — a validated allowlist, not a bare
+// `process.env.TTS_MODEL` string, so a typo falls back to the default
+// instead of hitting OpenRouter with a model id that doesn't exist.
+//
+// Default stays "kokoro" — NOT a decision to make silently. Per-second math
+// (see modelPricing.js's GEMINI_TTS_AUDIO_TOKENS_PER_SECOND, verified live
+// against OpenRouter's own pricing API): a typical ~3-minute lesson costs
+// Kokoro a fraction of a cent (input-text-only billing, $0 for output audio)
+// versus roughly $0.03 for Gemini (billed for the AUDIO it generates too,
+// ~25 tokens/sec of output at $6/M) — on the order of 50-60x more expensive
+// per course for this swap, not a rounding difference. Gemini's real
+// upside is quality/naturalness (and a documented "instructions" param for
+// delivery tone this integration doesn't use yet) — set TTS_MODEL=gemini to
+// actually spend that tradeoff; nothing here makes it project-wide.
+const TTS_PROVIDERS = {
+  kokoro: {
+    model: "hexgrad/kokoro-82m",
+    voice: "af_nova", // Kokoro's American Female "Nova" — closest equivalent to the old OpenAI "nova" voice.
+    // true/false, not omitted: generateChunkAudio reads this to decide
+    // whether to send `speed` at all (see its own comment on why Gemini
+    // omits it rather than risk a 400 on an unconfirmed parameter).
+    supportsSpeed: true,
+  },
+  gemini: {
+    model: "google/gemini-3.8-flash-lite-tts",
+    // "Kore" — one of the two voice names OpenRouter's own TTS docs show in
+    // a working example for this model family; no full voice list is
+    // published, so this is a known-good pick, not an exhaustive one.
+    voice: "Kore",
+    supportsSpeed: false,
+  },
+};
+const TTS_MODEL_KEY = TTS_PROVIDERS[process.env.TTS_MODEL] ? process.env.TTS_MODEL : "kokoro";
+const TTS_PROVIDER = TTS_PROVIDERS[TTS_MODEL_KEY];
+console.log(`[tts] voice provider → ${TTS_PROVIDER.model} (set TTS_MODEL=kokoro | gemini to switch)`);
 
 // Kokoro (via this OpenRouter hosting) silently TRUNCATES any single call's
 // audio past roughly 240-290 characters (~36-52 words) — measured directly:
@@ -249,15 +312,39 @@ function splitIntoTtsChunks(rawText, maxChars = TTS_CHUNK_MAX_CHARS) {
 // — chunks concatenate byte-for-byte with zero ambiguity — so this crosses
 // that entire failure class off, not just patches around it.
 async function generateChunkAudio(chunkText) {
+  // Queue time (waiting for a free slot on the pool above) vs. call time
+  // (the provider actually responding) are reported separately, same split
+  // as claudeService.js's generateJson — a slow course could be either "the
+  // pool's too small" or "the provider's slow today," and only one of those
+  // is this file's problem to fix. Logged only past a visible threshold so a
+  // normal, fast chunk doesn't spam the log at the volume this fires.
+  const queuedAt = Date.now();
   return limitTtsChunkCall(async () => {
-    const response = await openai.audio.speech.create({
-      model: "hexgrad/kokoro-82m",
-      voice: "af_nova",
+    const startedAt = Date.now();
+    const request = {
+      model: TTS_PROVIDER.model,
+      voice: TTS_PROVIDER.voice,
       input: chunkText,
-      response_format: "pcm",
-      speed: 1.0,
-    });
+      response_format: "pcm", // required either way — see the concatenation comment below
+    };
+    // `speed` is only sent when the active provider's support is confirmed.
+    // OpenRouter's own TTS docs are explicit that they don't know whether
+    // Gemini honors it, and that other providers can 400 on a non-default
+    // value — sending 1.0 (the default) happens to be harmless either way
+    // today, but omitting it for an unconfirmed provider is the version of
+    // this that doesn't quietly break the day Gemini's behavior here does
+    // turn out to differ.
+    if (TTS_PROVIDER.supportsSpeed) request.speed = 1.0;
+    const response = await openai.audio.speech.create(request);
     const buffer = Buffer.from(await response.arrayBuffer());
+    const queuedMs = startedAt - queuedAt;
+    const callMs = Date.now() - startedAt;
+    if (queuedMs > 2000 || callMs > 8000) {
+      console.log(
+        `  [tts] chunk (${chunkText.length} chars): ${(callMs / 1000).toFixed(1)}s call` +
+          (queuedMs > 2000 ? ` + ${(queuedMs / 1000).toFixed(1)}s queued` : "")
+      );
+    }
     // Computed directly from byte length at a KNOWN, fixed sample rate —
     // raw PCM has no embedded duration metadata to (mis)trust in the first
     // place, so there's nothing here that can drift from the real content.
@@ -277,8 +364,6 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
     try {
       console.log(`  [tts] Scene ${scene.id}: generating audio (attempt ${attempt}/${retries})...`);
 
-      // "af_nova" is Kokoro's American Female "Nova" voice, the closest
-      // equivalent to the previous OpenAI "nova" voice.
       const chunks = splitIntoTtsChunks(stripLatexForSpeech(scene.narration));
       // Chunks are independent TTS calls — fire them in parallel (order of
       // the REQUESTS doesn't matter, only the order they're concatenated in
@@ -299,18 +384,38 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
       if (firstRejected) throw firstRejected.reason;
       const chunkResults = settledChunks.map((s) => s.value);
       const totalChars = chunks.reduce((sum, c) => sum + c.length, 0);
+      const promptTokens = estimateTokensFromChars(totalChars);
+      // Kokoro is billed $0 for output audio (see modelPricing.js), so
+      // completionTokens staying 0 for it is a correct reflection of real
+      // billing, not a gap. Gemini genuinely isn't free on output — it
+      // tokenizes the audio it generates and bills for it — so its
+      // completionTokens has to come from the actual clip length or its
+      // real cost silently reports as $0 for the expensive half of the
+      // call. Summed from each CHUNK's own durationSeconds (generateChunkAudio
+      // computes that from raw PCM byte length, same source of truth the
+      // final scene duration below uses) rather than waiting for the
+      // concatenated buffer, which isn't built until after this call.
+      const completionTokens =
+        TTS_PROVIDER === TTS_PROVIDERS.gemini
+          ? estimateGeminiAudioTokens(chunkResults.reduce((sum, c) => sum + c.durationSeconds, 0))
+          : 0;
       recordAiUsage({
         kind: "tts",
-        provider: "kokoro-tts",
-        model: "hexgrad/kokoro-82m",
+        provider: TTS_MODEL_KEY === "gemini" ? "gemini-tts" : "kokoro-tts",
+        model: TTS_PROVIDER.model,
         userId: context.userId ?? null,
         courseId: context.courseId ?? null,
         lessonNumber: context.lessonNumber ?? null,
         characters: totalChars,
-        estimatedTokens: estimateTokensFromChars(totalChars),
-        // No costUsd passed — Kokoro's audio.speech API returns no usage/
-        // cost data at all (see this function's own comment), so this
-        // always falls back to the static per-character estimate.
+        estimatedTokens: promptTokens,
+        promptTokens,
+        completionTokens,
+        // No costUsd passed for either provider — neither TTS endpoint
+        // returns real usage/cost data in its response (it's raw audio
+        // bytes, not JSON), so this always falls back to the static
+        // modelPricing.js estimate computed from promptTokens/
+        // completionTokens above — $0 output for Kokoro (correctly, that's
+        // how it's billed), real $/M-token output for Gemini.
       });
 
       // Raw PCM concatenates byte-for-byte with no framing/header ambiguity

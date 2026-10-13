@@ -742,22 +742,18 @@ const SCENE_PLAN_PROVIDER = {
 // completion tokens for the same task, tripling real per-lesson cost.
 // Gemini 3.7 Flash REJECTS `{reasoning:{enabled:false}}` outright (400
 // "Reasoning is mandatory") — see withReasoningOff's exemption for why —
-// so both providers below use `{effort:"low"}`, the real cheapest named
+// so this provider uses `{effort:"low"}`, the real cheapest named
 // tier on this model by measured tokens (see CODE_PROVIDERS.gemini's own
 // comment for the full measured table) — briefly tried "minimal" per
 // explicit request, moved back here per explicit request once the data
 // showed "minimal" actually measured more reasoning than "low" does.
 // No provider.order pin — Gemini is single-sourced from Google, not a
 // quantized-third-party-backend concern the way GLM/DeepSeek had.
-const GEMINI_COURSE_PLAN_PROVIDER = {
-  client: openRouterClient,
-  model: "google/gemini-3.7-flash",
-  providerName: "gemini",
-  extraParams: { reasoning: { effort: "low" } },
-  maxTokens: 65536,
-  keyEnv: "OPENROUTER_API_KEY",
-};
-const GEMINI_SCENE_PLAN_PROVIDER = {
+// Course plan and scene plan were ALWAYS identical configs under two names
+// (one const per call site, never independently tuned) — GEMINI_FLASH_PLAN_
+// PROVIDER is that one config, Gemini's own name instead of a name that
+// would go stale the moment PLAN_MODEL points somewhere else.
+const GEMINI_FLASH_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "google/gemini-3.7-flash",
   providerName: "gemini",
@@ -775,6 +771,71 @@ const DEEPSEEK_QUIZ_PROVIDER = {
   maxTokens: 40000,
   keyEnv: "OPENROUTER_API_KEY",
 };
+// Claude Haiku 5.5 via OpenRouter — verified LIVE against OpenRouter's own
+// API on 2026-10-13:
+//   curl https://openrouter.ai/api/v1/models/anthropic/claude-haiku-5.5/endpoints
+// Real slug has a DOT, not a dash: "anthropic/claude-haiku-5.5". Pricing at
+// that size: $0.10/M input, $0.50/M output below 100K prompt tokens (an
+// Anthropic long-context pricing step kicks in above that — $0.50/$2.50 —
+// but this app's plan/quiz prompts don't get remotely that large, so the
+// base tier is what actually applies). 128K max_completion_tokens, and
+// OpenRouter lists "reasoning"/"reasoning_effort" among its supported
+// params, so the {enabled:false} shape below is a real option, not a guess
+// at whether the field exists.
+//
+// What ISN'T verified: whether {enabled:false} is actually HONORED cleanly
+// by Anthropic's backend the way it is by DeepSeek (DEEPSEEK_QUIZ_PROVIDER
+// above uses the identical shape), or whether it needs its own
+// withReasoningOff()-style exemption the way Gemini 3.x did (see that
+// function's own comment for why that exemption exists at all — a model
+// REJECTING {enabled:false} is a confirmed failure mode on this project, not
+// hypothetical). This endpoint-metadata check can't execute a real
+// completion, only confirm the model/params/price exist — CLAUDE.md's own
+// standard practice ("test its reasoning-parameter behavior live") hasn't
+// been done yet for this one. If the first real plan/scene-plan/quiz call
+// against this 400s mentioning "reasoning" (or silently produces WORSE
+// output than Gemini/DeepSeek did), that's the signal this needs an
+// effort-shape instead, not {enabled:false}.
+//
+// ALSO WORTH REMEMBERING — the comment above GEMINI_FLASH_PLAN_PROVIDER
+// already documents that this exact job (course/scene plan) was tried on
+// Claude HAIKU 4.5 once before and moved back off: throughput was fine
+// (566 chars/sec, confirmed live) but it wrote ~2.5x more completion tokens
+// for the same task than what it was compared against, TRIPLING real
+// per-lesson cost despite a fine $/token rate — a cheap-looking $/M price
+// doesn't mean a cheap call if the model is simply more verbose. That was
+// 4.5; whether 5.5 inherited the same verbosity on this exact prompt is
+// unknown here — watch the ACTUAL completion_tokens / real $ this logs
+// (course-plan and quiz both report real OpenRouter-billed cost via
+// onUsage, not an estimate) against what Gemini was producing, not just
+// this provider's advertised per-token rate.
+const CLAUDE_HAIKU_PLAN_PROVIDER = {
+  client: openRouterClient,
+  model: "anthropic/claude-haiku-5.5",
+  providerName: "anthropic",
+  extraParams: { reasoning: { enabled: false } },
+  maxTokens: 128000,
+  keyEnv: "OPENROUTER_API_KEY",
+};
+
+// Which model writes the course plan AND the per-lesson scene plan — one
+// switch, not two, because the two call sites have always shared one config
+// (see GEMINI_FLASH_PLAN_PROVIDER's own comment above). Explicit request
+// (2026-10-13) to move both onto Claude Haiku 5.5; PLAN_MODEL=gemini is the
+// one-line rollback to what this ran on before.
+const PLAN_PROVIDERS = {
+  gemini: GEMINI_FLASH_PLAN_PROVIDER,
+  haiku: CLAUDE_HAIKU_PLAN_PROVIDER,
+};
+const PLAN_MODEL_KEY = PLAN_PROVIDERS[process.env.PLAN_MODEL] ? process.env.PLAN_MODEL : "haiku";
+const PLAN_PROVIDER = PLAN_PROVIDERS[PLAN_MODEL_KEY];
+// Names kept exactly as every existing call site already references them —
+// sceneService.js imports GEMINI_SCENE_PLAN_PROVIDER by this literal name —
+// so nothing downstream needed to change, only what these two now resolve
+// to. Both intentionally point at the SAME resolved object; they were never
+// independently configurable in the first place.
+const GEMINI_COURSE_PLAN_PROVIDER = PLAN_PROVIDER;
+const GEMINI_SCENE_PLAN_PROVIDER = PLAN_PROVIDER;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONCURRENCY
@@ -800,18 +861,28 @@ const DEEPSEEK_QUIZ_PROVIDER = {
 // pipeline produced (the call-volume increase that caused a Z.ai-account-
 // balance production incident the one time this ran against Z.ai directly —
 // see git history / project memory on "single-call-codegen-experiment"),
-// but above the ~6/course a single call-per-lesson design needs. 30 gives
-// that headroom with no queuing at the default course size; tune against
-// real observed throughput/error rates.
+// but above the ~6/course a single call-per-lesson design needs.
+//
+// FIX: was 30, raised to 60. 30 was sized, by its own math above, for
+// EXACTLY one course generating at a time ("headroom with no queuing at the
+// default course size" — 6 lessons × ~4 ≈ 24, right up against the ceiling).
+// That stopped being the only realistic case once the learning-loop feature
+// let a results page start a follow-up course while its parent (or another
+// follow-up) is still generating — a second course's ~24 calls now had
+// nowhere to go but this same queue, quietly slowing scene/code generation
+// for both at once. 60 covers two full courses in flight without either one
+// queuing behind the other; tune against real observed throughput/error
+// rates (the per-attempt queue/model timing log in generateJson below is
+// what to check first if it needs to move again).
 const ZAI_MAX_CONCURRENT = Number(process.env.ZAI_MAX_CONCURRENT) || 1;
 const limitZaiCall = createLimiter(ZAI_MAX_CONCURRENT);
-const LESSON_CODE_MAX_CONCURRENT = Number(process.env.LESSON_CODE_MAX_CONCURRENT) || 30;
+const LESSON_CODE_MAX_CONCURRENT = Number(process.env.LESSON_CODE_MAX_CONCURRENT) || 60;
 const limitLessonCodeCall = createLimiter(LESSON_CODE_MAX_CONCURRENT);
-// Shared by every OpenRouter-routed DeepSeek call: the post-course quiz
-// (DEEPSEEK_QUIZ_PROVIDER above — course plan/scene plan are back on
-// Gemini, see GEMINI_COURSE_PLAN_PROVIDER) and the pre-course level
-// assessment in levelAssessmentService.js (which imports this limiter
-// directly). Kept as one shared cap rather than splitting it: DeepSeek's own documented
+// Shared by every OpenRouter-routed DeepSeek call: the post-course quiz when
+// QUIZ_MODEL=deepseek (DEEPSEEK_QUIZ_PROVIDER above — course plan/scene plan
+// default to Haiku now, see PLAN_PROVIDERS/CLAUDE_HAIKU_PLAN_PROVIDER) and
+// the pre-course level assessment in levelAssessmentService.js (which
+// imports this limiter directly). Kept as one shared cap rather than splitting it: DeepSeek's own documented
 // account-wide cap for deepseek-v4-flash was 2,500 concurrent requests when
 // hit directly — now mediated through OpenRouter's own concurrency handling
 // instead, so that figure is no longer a guaranteed ceiling, just the best
@@ -822,23 +893,26 @@ const limitDeepSeekCall = createLimiter(DEEPSEEK_MAX_CONCURRENT);
 // Which model writes the post-course quiz. This used to be hardcoded to
 // DeepSeek, which made it the LAST call in the course path still on a
 // provider the course plan and scene plan were both deliberately moved OFF
-// for being slow (see GEMINI_COURSE_PLAN_PROVIDER / GEMINI_SCENE_PLAN_PROVIDER
-// above: DeepSeek was reproduced live crawling at ~22 chars/sec on this
-// account). Quiz generation is the very last step before a course goes
-// `ready`, so its latency is the wait the user actually sees — and queueing
-// on a loaded backend is what makes that wait grow the more courses are
-// generated at once.
+// for being slow (see GEMINI_FLASH_PLAN_PROVIDER above: DeepSeek was
+// reproduced live crawling at ~22 chars/sec on this account). Quiz
+// generation is the very last step before a course goes `ready`, so its
+// latency is the wait the user actually sees — and queueing on a loaded
+// backend is what makes that wait grow the more courses are generated at
+// once.
 //
-// Default is Gemini, the same model the other two JSON calls already use.
-// Set QUIZ_MODEL=deepseek to put it back on the old one.
+// Default is Haiku — same explicit 2026-10-13 request as PLAN_MODEL above,
+// same CLAUDE_HAIKU_PLAN_PROVIDER object (one Haiku config, reused, not two
+// separately-tuned ones). QUIZ_MODEL=gemini or =deepseek are the rollbacks.
 const QUIZ_PROVIDERS = {
-  gemini: GEMINI_COURSE_PLAN_PROVIDER,
+  gemini: GEMINI_FLASH_PLAN_PROVIDER,
   deepseek: DEEPSEEK_QUIZ_PROVIDER,
+  haiku: CLAUDE_HAIKU_PLAN_PROVIDER,
 };
-const QUIZ_MODEL_KEY = QUIZ_PROVIDERS[process.env.QUIZ_MODEL] ? process.env.QUIZ_MODEL : "gemini";
+const QUIZ_MODEL_KEY = QUIZ_PROVIDERS[process.env.QUIZ_MODEL] ? process.env.QUIZ_MODEL : "haiku";
 const QUIZ_PROVIDER = QUIZ_PROVIDERS[QUIZ_MODEL_KEY];
 
-console.log(`[codegen] quiz → ${QUIZ_PROVIDER.model} (set QUIZ_MODEL=gemini | deepseek to switch)`);
+console.log(`[codegen] plan → ${PLAN_PROVIDER.model} (set PLAN_MODEL=gemini | haiku to switch)`);
+console.log(`[codegen] quiz → ${QUIZ_PROVIDER.model} (set QUIZ_MODEL=gemini | deepseek | haiku to switch)`);
 console.log(
   `[codegen] lesson code → ${LESSON_CODE_PROVIDER.model} (set LESSON_CODE_MODEL=fable | glm | claude | deepseek | minimax | gpt56 | mimo | fusion | qwen | gemini | geminilite | glmflash | oxalpha | gemini36 | deepseek41 | glm53 | gpt56luna to switch)`
 );
@@ -1068,9 +1142,9 @@ function safeParseJson(text) {
 // parse, caller-supplied shape validation, and corrective feedback on retry
 // (a shape-validation failure message rides into the next attempt's prompt
 // exactly like code-gen does). `provider`/`limiter` are overridable (used to
-// route course-plan/scene-plan generation to Gemini — see
-// GEMINI_COURSE_PLAN_PROVIDER above) but remedial/next-course use the
-// GLM defaults.
+// route course-plan/scene-plan generation off the GLM default — currently
+// Haiku, see PLAN_PROVIDERS/CLAUDE_HAIKU_PLAN_PROVIDER above) but remedial/
+// next-course use the GLM defaults.
 // `onUsage(usage)` is optional — fires with the raw OpenAI-SDK `usage`
 // object right before returning, once validation has already succeeded, so
 // callers can feed the AI cost ledger (recordAiUsage) without generateJson
