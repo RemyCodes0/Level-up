@@ -108,12 +108,19 @@ export async function joinRoomByLink(shareToken: string): Promise<{ roomId: stri
 export interface DashboardMember {
   userId: string;
   name: string;
+  email: string;
   lessonsWatched: number;
   totalLessons: number;
   watchPct: number;
   quizPct: number | null;
   quizSubmitted: boolean;
   completed: boolean;
+  // When, not just whether — powers "first to finish"/"fastest quiz" badges.
+  completedAt: string | null;
+  quizSubmittedAt: string | null;
+  // Server-computed ranking number (watchPct×0.4 + quizPct×0.6) — see
+  // collabController.js's getDashboard for the formula and why.
+  score: number;
 }
 
 export interface DashboardTopic {

@@ -211,7 +211,12 @@ exports.listMyRooms = async (req, res) => {
 exports.getDashboard = async (req, res) => {
   try {
     const room = await CollabRoom.findById(req.params.roomId)
-      .populate("participants.userId", "name")
+      // email added alongside the gamified leaderboard redesign — lets the
+      // frontend match the logged-in user against a member by email (the
+      // one identifier it reliably has via its own session storage; it has
+      // no user _id to compare against, and matching by `name` isn't safe —
+      // two members could share one) to highlight "you" in the rankings.
+      .populate("participants.userId", "name email")
       .populate("courseId")
       .lean();
     if (!room) return res.status(404).json({ error: "Room not found" });
@@ -240,15 +245,34 @@ exports.getDashboard = async (req, res) => {
       const progress = progressByUser.get(uid);
       const watchedCount = progress ? progress.lessons.filter((l) => l.watched).length : 0;
       const attempt = latestAttemptByUser.get(uid);
+      const watchPct = totalLessons > 0 ? Math.round((watchedCount / totalLessons) * 100) : 0;
+      const quizPct = attempt ? attempt.pct : null;
       return {
         userId: uid,
         name: p.userId.name,
+        email: p.userId.email,
         lessonsWatched: watchedCount,
         totalLessons,
-        watchPct: totalLessons > 0 ? Math.round((watchedCount / totalLessons) * 100) : 0,
-        quizPct: attempt ? attempt.pct : null,
+        watchPct,
+        quizPct,
         quizSubmitted: !!attempt,
         completed: !!progress?.completedAt,
+        // Added for the gamified leaderboard: WHEN, not just whether — lets
+        // the frontend award "first to finish" / "fastest quiz" the way a
+        // real leaderboard does, not just rank by score with ties broken
+        // arbitrarily.
+        completedAt: progress?.completedAt || null,
+        quizSubmittedAt: attempt?.submittedAt || null,
+        // Single ranking number the leaderboard sorts on — computed here so
+        // there's exactly one formula, not a client-side copy that could
+        // drift from a server-side one. Weighted toward the quiz (0.6) over
+        // raw watch progress (0.4): finishing every lesson without
+        // understanding any of them shouldn't outrank someone who scored
+        // well on fewer — watching is necessary but isn't the competition.
+        // A member who hasn't taken the quiz yet is scored on watch
+        // progress alone (quizPct treated as 0), which is a real penalty,
+        // not a data gap being hidden.
+        score: Math.round(watchPct * 0.4 + (quizPct ?? 0) * 0.6),
       };
     });
 

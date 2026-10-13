@@ -8,7 +8,7 @@ import { PageMeta } from "@/components/PageMeta";
 import {
   Loader2, AlertCircle, ChevronLeft, ChevronRight, Check, X, ClipboardList, Trophy, Users,
   TrendingUp, TrendingDown, Copy, Sparkles, RotateCcw, ArrowUp, ArrowDown, Minus, Play,
-  Film, Keyboard, Repeat, Target, Eye, ArrowLeft,
+  Film, Keyboard, Repeat, Target, Eye, ArrowLeft, Crown, Medal, Flag, Zap,
 } from "lucide-react";
 import { DynamicPlayer } from "@/remotion/DynamicPlayer";
 import { LessonGeneratingView } from "@/components/LessonGeneratingView";
@@ -40,7 +40,11 @@ const PAGE_CSS = `
 @keyframes cr-sweep { 0% { background-position: 150% 0; } 100% { background-position: -50% 0; } }
 @keyframes cr-rec { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
 @keyframes cr-wave { 0%,100% { transform: scaleY(.22); } 50% { transform: scaleY(1); } }
+@keyframes cr-pop { 0% { opacity: 0; transform: translateY(16px) scale(.92); } 60% { opacity: 1; transform: translateY(-3px) scale(1.02); } 100% { transform: none; } }
+@keyframes cr-crown-glow { 0%,100% { filter: drop-shadow(0 0 6px rgba(255,181,71,.55)); } 50% { filter: drop-shadow(0 0 14px rgba(255,181,71,.85)); } }
 .cr-rise { animation: cr-rise .5s cubic-bezier(.2,.7,.2,1) both; }
+.cr-pop { animation: cr-pop .6s cubic-bezier(.2,.7,.2,1) both; }
+.cr-crown { animation: cr-crown-glow 2.4s ease-in-out infinite; }
 .cr-serif { font-family: 'Instrument Serif', ui-serif, Georgia, serif; font-weight: 400; letter-spacing: -0.012em; }
 .cr-mono { font-family: 'Geist Mono', ui-monospace, SFMono-Regular, monospace; }
 .cr-grain { background-image: radial-gradient(rgba(255,255,255,.04) 1px, transparent 1px); background-size: 3px 3px; }
@@ -800,6 +804,196 @@ function StatTile({ icon: Icon, label, value, sub, color }: { icon: typeof Users
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Gamified results — podium, leaderboard, "you vs the group"
+//
+// Everything here is derived from real DashboardMember fields the backend
+// already computes (watchPct, quizPct, completedAt, quizSubmittedAt, score —
+// see collabController.js's getDashboard for the score formula). No fake XP,
+// no invented streaks — the "first to X" badges are genuinely first-by-
+// timestamp, not a made-up speed metric this app doesn't actually measure.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Member = RoomDashboard["members"][number];
+
+interface MemberBadges {
+  firstToFinish: boolean;
+  firstToQuiz: boolean;
+  topScore: boolean;
+}
+
+function computeBadges(members: Member[]): Map<string, MemberBadges> {
+  const map = new Map<string, MemberBadges>();
+  members.forEach((m) => map.set(m.userId, { firstToFinish: false, firstToQuiz: false, topScore: false }));
+
+  const finishers = members.filter((m) => m.completedAt).sort((a, b) => new Date(a.completedAt!).getTime() - new Date(b.completedAt!).getTime());
+  if (finishers[0]) map.get(finishers[0].userId)!.firstToFinish = true;
+
+  const quizzers = members.filter((m) => m.quizSubmittedAt).sort((a, b) => new Date(a.quizSubmittedAt!).getTime() - new Date(b.quizSubmittedAt!).getTime());
+  if (quizzers[0]) map.get(quizzers[0].userId)!.firstToQuiz = true;
+
+  const maxScore = Math.max(0, ...members.map((m) => m.score));
+  if (maxScore > 0) members.forEach((m) => { if (m.score === maxScore) map.get(m.userId)!.topScore = true; });
+
+  return map;
+}
+
+/** Small icon row for whatever this member earned — nothing shown if nothing did. */
+function BadgeRow({ badges }: { badges?: MemberBadges }) {
+  if (!badges || (!badges.firstToFinish && !badges.firstToQuiz && !badges.topScore)) return null;
+  return (
+    <span className="flex items-center gap-1">
+      {badges.topScore && (
+        <span title="Top score in the group" className="flex h-4 w-4 items-center justify-center rounded-full bg-[#FFB547]/15"><Crown className="h-2.5 w-2.5 text-[#FFB547]" /></span>
+      )}
+      {badges.firstToFinish && (
+        <span title="First to finish the course" className="flex h-4 w-4 items-center justify-center rounded-full bg-[#3DDC97]/15"><Flag className="h-2.5 w-2.5 text-[#3DDC97]" /></span>
+      )}
+      {badges.firstToQuiz && (
+        <span title="First to submit the quiz" className="flex h-4 w-4 items-center justify-center rounded-full bg-[#5CE1FF]/15"><Zap className="h-2.5 w-2.5 text-[#5CE1FF]" /></span>
+      )}
+    </span>
+  );
+}
+
+/** Podium for the top 3 by score — centre-tallest, classic 2nd/1st/3rd order. */
+function Podium({ top3, meId, badgeMap }: { top3: Member[]; meId: string | null; badgeMap: Map<string, MemberBadges> }) {
+  if (top3.length === 0) return null;
+  // Visual order left→right is 2nd, 1st, 3rd; `top3` stays rank-ordered for
+  // everything else, so this only reorders the three slots being rendered.
+  const slots = [top3[1], top3[0], top3[2]].filter(Boolean) as Member[];
+  const HEIGHT = { 0: 108, 1: 148, 2: 88 }; // by rank-in-top3: 1st(idx0)=148, 2nd=108, 3rd=88
+  const MEDAL = [
+    { icon: Crown, color: "#FFB547", bg: "#FFB547", label: "1st" },
+    { icon: Medal, color: "#C7CCDC", bg: "#C7CCDC", label: "2nd" },
+    { icon: Medal, color: "#FF9D6C", bg: "#FF9D6C", label: "3rd" },
+  ];
+
+  return (
+    <div className={cx(SURFACE, "relative overflow-hidden p-5 sm:p-7")}>
+      <span
+        className="pointer-events-none absolute left-1/2 top-0 h-48 w-80 -translate-x-1/2 rounded-full opacity-20 blur-[80px]"
+        style={{ background: `radial-gradient(closest-side, ${C.amber}, transparent)` }}
+        aria-hidden="true"
+      />
+      <p className={cx(EYEBROW, "relative mb-6 text-center")}>This group's leaderboard</p>
+      <div className="relative flex items-end justify-center gap-3 sm:gap-6">
+        {slots.map((m) => {
+          const rank = top3.findIndex((t) => t.userId === m.userId);
+          const medal = MEDAL[rank];
+          const Icon = medal.icon;
+          const isMe = meId !== null && m.userId === meId;
+          const isFirst = rank === 0;
+          return (
+            <div key={m.userId} className={cx("cr-pop flex flex-col items-center", isFirst ? "order-2" : rank === 1 ? "order-1" : "order-3")} style={{ animationDelay: `${rank * 0.12}s` }}>
+              <Icon className={cx("mb-1.5 h-6 w-6", isFirst && "cr-crown")} style={{ color: medal.color }} />
+              <div className="relative">
+                <Avatar name={m.name} id={String(m.userId)} size={isFirst ? 56 : 44} ring="#11131A" />
+                {isMe && <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-[#8B7CFF] px-1.5 py-[1px] text-[8px] font-bold text-[#0A0B10]">YOU</span>}
+              </div>
+              <p className="mt-2.5 max-w-[84px] truncate text-center text-[12px] font-semibold text-white sm:max-w-[110px]">{m.name}</p>
+              <div className="mt-0.5"><BadgeRow badges={badgeMap.get(m.userId)} /></div>
+              <p className="cr-mono mt-1 text-[11px] font-semibold" style={{ color: medal.color }}>{m.score} pts</p>
+              <div
+                className="mt-2 flex w-16 items-start justify-center rounded-t-lg pt-2 sm:w-24"
+                style={{ height: HEIGHT[rank as 0 | 1 | 2], background: `linear-gradient(180deg, ${medal.bg}22, ${medal.bg}0A)`, boxShadow: `inset 0 1px 0 ${medal.bg}55` }}
+              >
+                <span className="cr-mono text-lg font-bold" style={{ color: medal.color }}>{medal.label}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** "Where do I stand" — only renders when the viewer is identifiable among members. */
+function YouVsGroup({ me, rank, total, avgScore }: { me: Member; rank: number; total: number; avgScore: number }) {
+  const delta = me.score - avgScore;
+  const leader = rank === 1;
+  return (
+    <div className={cx(SURFACE, "relative overflow-hidden p-5")}>
+      <span className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full opacity-20 blur-3xl" style={{ background: leader ? C.amber : C.iris }} aria-hidden="true" />
+      <div className="relative flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Avatar name={me.name} id={String(me.userId)} size={40} ring="#11131A" />
+          <div>
+            <p className={EYEBROW}>Your standing</p>
+            <p className="cr-serif text-2xl text-white">
+              {leader ? "You're in the lead" : `#${rank} of ${total}`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-6">
+          <div className="text-right">
+            <p className="cr-mono text-2xl font-bold text-white">{me.score}</p>
+            <p className="text-[11px] text-[#6E7389]">your score</p>
+          </div>
+          <div className="text-right">
+            <p className="cr-mono text-2xl font-bold" style={{ color: delta >= 0 ? C.mint : C.rose }}>
+              {delta > 0 ? "+" : ""}{delta}
+            </p>
+            <p className="text-[11px] text-[#6E7389]">vs. group avg ({avgScore})</p>
+          </div>
+        </div>
+      </div>
+      {!leader && (
+        <p className="relative mt-3 text-[12px] text-[#8A8FA3]">
+          Catch up on the next lesson or retake the quiz to climb past the group.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Full ranked list, podium included — the podium is the highlight reel, this is the scoreboard. */
+function Leaderboard({ ranked, meId, badgeMap }: { ranked: Member[]; meId: string | null; badgeMap: Map<string, MemberBadges> }) {
+  const topScore = Math.max(1, ...ranked.map((m) => m.score));
+  const RANK_STYLE = ["text-[#FFB547]", "text-[#C7CCDC]", "text-[#FF9D6C]"];
+  return (
+    <div className={cx(SURFACE, "p-5 sm:p-6")}>
+      <div className="mb-4 flex items-center justify-between">
+        <p className={EYEBROW}>Full leaderboard</p>
+        <span className="flex items-center gap-1.5 text-[11px] text-[#555A6E]">
+          <span className="h-1.5 w-1.5 rounded-full bg-[#3DDC97]" style={{ animation: "cr-rec 2s ease-in-out infinite" }} /> Live
+        </span>
+      </div>
+      <div className="divide-y divide-white/[0.05]">
+        {ranked.map((m, i) => {
+          const isMe = meId !== null && m.userId === meId;
+          return (
+            <div
+              key={m.userId}
+              className={cx(
+                "grid grid-cols-[28px_auto_1fr_auto] items-center gap-x-3 gap-y-2 rounded-xl px-2 py-3 sm:grid-cols-[28px_auto_minmax(0,1fr)_120px_64px] sm:gap-x-4",
+                isMe && "bg-[#8B7CFF]/[0.06] ring-1 ring-[#8B7CFF]/20"
+              )}
+            >
+              <span className={cx("cr-mono text-center text-[13px] font-bold", i < 3 ? RANK_STYLE[i] : "text-[#555A6E]")}>{i + 1}</span>
+              <Avatar name={m.name} id={String(m.userId)} size={32} ring="#11131A" />
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 truncate text-sm font-medium text-white">
+                  <span className="truncate">{m.name}</span>
+                  {isMe && <span className="shrink-0 rounded-full bg-[#8B7CFF]/20 px-1.5 py-[1px] text-[9px] font-bold text-[#B4A9FF]">YOU</span>}
+                  <BadgeRow badges={badgeMap.get(m.userId)} />
+                </p>
+                <p className="mt-0.5 text-[11px] text-[#6E7389]">
+                  {m.lessonsWatched}/{m.totalLessons} lessons · {m.quizSubmitted ? `quiz ${m.quizPct}%` : "no quiz yet"}
+                </p>
+              </div>
+              <div className="col-span-3 row-start-3 sm:col-span-1 sm:row-start-auto">
+                <Bar pct={(m.score / topScore) * 100} color={m.completed ? C.mint : C.iris} />
+              </div>
+              <p className="cr-mono justify-self-end text-right text-sm font-bold text-white">{m.score}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function DashboardTab({ roomId }: { roomId: string }) {
   const [dashboard, setDashboard] = useState<RoomDashboard | null>(null);
   const [error, setError] = useState(false);
@@ -832,6 +1026,7 @@ function DashboardTab({ roomId }: { roomId: string }) {
   if (!dashboard) {
     return (
       <div className="space-y-4">
+        <Shimmer className="h-72" />
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[0, 1, 2, 3].map((i) => <Shimmer key={i} className="h-32" delay={i * 0.1} />)}</div>
         <Shimmer className="h-64" delay={0.3} />
       </div>
@@ -843,9 +1038,32 @@ function DashboardTab({ roomId }: { roomId: string }) {
   const avgWatch = members.length ? Math.round(members.reduce((s, m) => s + m.watchPct, 0) / members.length) : 0;
   const quizzed = members.filter((m) => m.quizSubmitted);
   const avgQuiz = quizzed.length ? Math.round(quizzed.reduce((s, m) => s + (m.quizPct ?? 0), 0) / quizzed.length) : null;
-  const sortedMembers = [...members].sort((a, b) => Number(b.completed) - Number(a.completed) || b.watchPct - a.watchPct);
   const maxLessonReplay = Math.max(1, ...dashboard.mostReplayedLessons.map((l) => l.replayCount));
   const maxSceneReplay = Math.max(1, ...dashboard.mostReplayedScenes.map((s) => s.replayCount));
+
+  // Ranked by score (the real competitive metric), tie-broken by who finished
+  // first — two people tied on points, the one who actually got there first
+  // deserves the higher spot.
+  const ranked = [...members].sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.completedAt && b.completedAt) return new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime();
+    return a.completedAt ? -1 : b.completedAt ? 1 : 0;
+  });
+  const top3 = ranked.slice(0, 3);
+  const badgeMap = computeBadges(members);
+  const avgScore = members.length ? Math.round(members.reduce((s, m) => s + m.score, 0) / members.length) : 0;
+
+  // No user _id is available client-side (see SessionUser's own comment on
+  // AiTutor.tsx) — email is the one identifier both this session and the
+  // dashboard response reliably carry, so it's what "you" is matched on.
+  let meEmail: string | null = null;
+  try {
+    const stored = localStorage.getItem("user");
+    meEmail = stored ? JSON.parse(stored)?.email ?? null : null;
+  } catch { /* malformed storage — just means "you" won't highlight */ }
+  const me = meEmail ? members.find((m) => m.email?.toLowerCase() === meEmail!.toLowerCase()) ?? null : null;
+  const meId = me?.userId ?? null;
+  const meRank = me ? ranked.findIndex((m) => m.userId === me.userId) + 1 : 0;
 
   return (
     <div className="cr-rise space-y-5">
@@ -859,6 +1077,10 @@ function DashboardTab({ roomId }: { roomId: string }) {
         </div>
       )}
 
+      {members.length >= 2 && quizzed.length > 0 && <Podium top3={top3} meId={meId} badgeMap={badgeMap} />}
+
+      {me && <YouVsGroup me={me} rank={meRank} total={ranked.length} avgScore={avgScore} />}
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile icon={Users} label="Members" value={String(members.length)} color={C.iris} />
         <StatTile icon={Check} label="Completed" value={`${completed}/${members.length}`} color={C.mint} />
@@ -866,41 +1088,7 @@ function DashboardTab({ roomId }: { roomId: string }) {
         <StatTile icon={Target} label="Avg. quiz score" value={avgQuiz === null ? "—" : `${avgQuiz}%`} sub={`${quizzed.length} submitted`} color={C.amber} />
       </div>
 
-      <div className={cx(SURFACE, "p-5 sm:p-6")}>
-        <div className="mb-4 flex items-center justify-between">
-          <p className={EYEBROW}>Members</p>
-          <span className="flex items-center gap-1.5 text-[11px] text-[#555A6E]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#3DDC97]" style={{ animation: "cr-rec 2s ease-in-out infinite" }} /> Live
-          </span>
-        </div>
-        <div className="divide-y divide-white/[0.05]">
-          {sortedMembers.map((m) => (
-            <div key={m.userId} className="grid grid-cols-[auto_1fr_auto] items-center gap-x-3 gap-y-2 py-3 sm:grid-cols-[auto_minmax(0,1.2fr)_minmax(0,1.4fr)_80px_110px] sm:gap-x-5">
-              <Avatar name={m.name} id={String(m.userId)} size={34} ring="#11131A" />
-              <p className="truncate text-sm font-medium text-white">{m.name}</p>
-              <div className="col-span-3 row-start-2 sm:col-span-1 sm:row-start-auto">
-                <div className="mb-1 flex justify-between text-[11px] text-[#8A8FA3]">
-                  <span>{m.lessonsWatched}/{m.totalLessons} lessons</span>
-                  <span className="cr-mono">{m.watchPct}%</span>
-                </div>
-                <Bar pct={m.watchPct} color="#5CE1FF" />
-              </div>
-              <p className="cr-mono hidden text-right text-sm sm:block" style={{ color: m.quizSubmitted ? readinessTone(m.quizPct ?? 0) : "#555A6E" }}>
-                {m.quizSubmitted ? `${m.quizPct}%` : "—"}
-              </p>
-              <span className="justify-self-end">
-                {m.completed ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-[#3DDC97]/10 px-2.5 py-1 text-[11px] font-semibold text-[#7BE8B8] ring-1 ring-[#3DDC97]/25"><Check className="h-3 w-3" /> Completed</span>
-                ) : (
-                  <span className="inline-flex items-center rounded-full bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-[#8A8FA3] ring-1 ring-white/[0.08]">
-                    <span className="sm:hidden">{m.quizSubmitted ? `Quiz ${m.quizPct}% · ` : ""}</span>In progress
-                  </span>
-                )}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
+      <Leaderboard ranked={ranked} meId={meId} badgeMap={badgeMap} />
 
       <div className={cx(SURFACE, "p-5 sm:p-6")}>
         <p className={EYEBROW}>Group topic strengths & weaknesses</p>
