@@ -92,8 +92,8 @@ function AuthShell({ children }: { children: ReactNode }) {
       </Helmet>
       <style>{PAGE_CSS}</style>
       <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-        <div className="absolute -top-56 left-1/2 h-[560px] w-[760px] -translate-x-1/2 rounded-full opacity-30 blur-[120px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)", animation: "rp-aurora 18s ease-in-out infinite" }} />
-        <div className="absolute -bottom-40 -right-32 h-[420px] w-[520px] rounded-full opacity-[0.15] blur-[120px]" style={{ background: "radial-gradient(closest-side, #FF7A45, transparent)", animation: "rp-aurora 22s ease-in-out infinite reverse" }} />
+        <div className="absolute -top-56 left-1/2 h-[560px] w-[760px] -translate-x-1/2 rounded-full opacity-30 blur-[120px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)" }} />
+        <div className="absolute -bottom-40 -right-32 h-[420px] w-[520px] rounded-full opacity-[0.15] blur-[120px]" style={{ background: "radial-gradient(closest-side, #FF7A45, transparent)" }} />
         <div className="rp-grain absolute inset-0 opacity-60" />
       </div>
       <header className="relative flex h-16 items-center px-5 sm:px-8">

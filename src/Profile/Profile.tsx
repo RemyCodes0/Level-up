@@ -198,8 +198,8 @@ export default function ProfilePage() {
       <Navbar />
 
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[520px] overflow-hidden" aria-hidden="true">
-        <div className="absolute -top-56 left-1/3 h-[480px] w-[760px] -translate-x-1/2 rounded-full opacity-25 blur-[110px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)", animation: "pf-aurora 18s ease-in-out infinite" }} />
-        <div className="absolute -right-32 top-10 h-[320px] w-[440px] rounded-full opacity-[0.12] blur-[110px]" style={{ background: "radial-gradient(closest-side, #FF7A45, transparent)", animation: "pf-aurora 22s ease-in-out infinite reverse" }} />
+        <div className="absolute -top-56 left-1/3 h-[480px] w-[760px] -translate-x-1/2 rounded-full opacity-25 blur-[110px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)" }} />
+        <div className="absolute -right-32 top-10 h-[320px] w-[440px] rounded-full opacity-[0.12] blur-[110px]" style={{ background: "radial-gradient(closest-side, #FF7A45, transparent)" }} />
         <div className="pf-grain absolute inset-0 opacity-60" />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[#0A0B10]" />
       </div>

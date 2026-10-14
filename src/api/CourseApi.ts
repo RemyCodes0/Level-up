@@ -450,15 +450,40 @@ export async function listPublicCourses(
 }
 
 // ── Poll repeatedly until the whole course is done ───────────────────────────
+// FIX: used to poll unconditionally, every intervalMs, forever — including
+// while the tab was hidden. This is the instance behind BOTH the foreground
+// poll AND every background watcher (AiTutor.tsx's watchCourseInBackground
+// calls this directly), and a course can be background-watched for several
+// minutes of real generation time — so a user with several Level Up tabs
+// open, or several courses mid-generation, was running that many independent
+// 5s network+React-state-update loops that never backed off just because
+// nobody was looking at them. More open tabs means more total CPU/GC/network
+// contention across the whole browser process, which is exactly the "a lot
+// of tabs open and Level Up gets slow" symptom — a hidden tab's timers don't
+// get paused by the browser, only throttled to roughly once a second at
+// best, so the work kept happening at near-full rate regardless.
+//
+// Now: fully paused while the tab is hidden (no fetch, no state update, no
+// re-render — zero work), and catches up with one immediate poll the instant
+// the tab becomes visible again, via visibilitychange, rather than waiting
+// out whatever's left of the last scheduled interval. A course that finishes
+// while its tab is hidden just shows the correct status the moment someone
+// actually looks — there was never a desktop notification/toast on
+// completion to begin with, so nothing user-visible is lost by not polling
+// toward an audience that isn't watching.
 export function pollCourse(
   courseId: string,
   onUpdate: (course: CourseFromAPI) => void,
   intervalMs = 5000
 ): () => void {
   let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight = false;
 
   const tick = async () => {
-    if (stopped) return;
+    if (stopped || inFlight) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    inFlight = true;
     try {
       const course = await getCourseStatus(courseId);
       onUpdate(course);
@@ -468,10 +493,28 @@ export function pollCourse(
       }
     } catch (err) {
       console.error("Polling error:", err);
+    } finally {
+      inFlight = false;
     }
-    if (!stopped) setTimeout(tick, intervalMs);
+    if (!stopped) timer = setTimeout(tick, intervalMs);
   };
 
+  const onVisibilityChange = () => {
+    if (stopped || document.visibilityState !== "visible") return;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    tick();
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onVisibilityChange);
+  }
+
   tick();
-  return () => { stopped = true; };
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    }
+  };
 }

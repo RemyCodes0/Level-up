@@ -106,8 +106,8 @@ export default function JoinCollabRoom() {
       <style>{PAGE_CSS}</style>
 
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-        <div className="absolute left-1/2 top-1/3 h-[520px] w-[720px] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-25 blur-[120px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)", animation: "jc-aurora 18s ease-in-out infinite" }} />
-        <div className="absolute bottom-0 right-0 h-[380px] w-[480px] rounded-full opacity-[0.12] blur-[110px]" style={{ background: "radial-gradient(closest-side, #3DDC97, transparent)", animation: "jc-aurora 22s ease-in-out infinite reverse" }} />
+        <div className="absolute left-1/2 top-1/3 h-[520px] w-[720px] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-25 blur-[120px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)" }} />
+        <div className="absolute bottom-0 right-0 h-[380px] w-[480px] rounded-full opacity-[0.12] blur-[110px]" style={{ background: "radial-gradient(closest-side, #3DDC97, transparent)" }} />
         <div className="jc-grain absolute inset-0 opacity-60" />
       </div>
 

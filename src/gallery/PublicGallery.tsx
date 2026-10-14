@@ -302,11 +302,11 @@ export default function PublicGallery() {
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[520px] overflow-hidden" aria-hidden="true">
           <div
             className="absolute -top-48 left-1/2 h-[520px] w-[820px] -translate-x-1/2 rounded-full opacity-30 blur-[110px]"
-            style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)", animation: "pg-aurora 18s ease-in-out infinite" }}
+            style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)" }}
           />
           <div
             className="absolute -right-40 top-20 h-[360px] w-[460px] rounded-full opacity-15 blur-[110px]"
-            style={{ background: "radial-gradient(closest-side, #FF7A45, transparent)", animation: "pg-aurora 22s ease-in-out infinite reverse" }}
+            style={{ background: "radial-gradient(closest-side, #FF7A45, transparent)" }}
           />
           <div className="pg-grain absolute inset-0 opacity-60" />
           <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-[#0A0B10]" />

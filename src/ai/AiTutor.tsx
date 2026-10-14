@@ -390,11 +390,11 @@ function Aurora() {
     <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
       <div
         className="absolute -top-40 left-1/2 h-[560px] w-[760px] -translate-x-1/2 rounded-full opacity-[0.35] blur-[110px]"
-        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "lu-aurora 18s ease-in-out infinite" }}
+        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }}
       />
       <div
         className="absolute top-1/3 -right-40 h-[420px] w-[520px] rounded-full opacity-[0.18] blur-[110px]"
-        style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)`, animation: "lu-aurora 22s ease-in-out infinite reverse" }}
+        style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)` }}
       />
       <div className="absolute inset-0 lu-grain opacity-60" />
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_40%,#0A0B10_85%)]" />
@@ -854,7 +854,7 @@ function GeneratingStage() {
     <div className="relative flex aspect-video flex-col items-center justify-center overflow-hidden rounded-2xl bg-[#07080C] px-4 text-center ring-1 ring-white/[0.08]">
       <div
         className="pointer-events-none absolute left-1/2 top-1/2 h-[120%] w-[80%] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-25 blur-3xl"
-        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "lu-aurora 10s ease-in-out infinite" }}
+        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }}
       />
       <div className="absolute inset-0 lu-grain opacity-50" />
 

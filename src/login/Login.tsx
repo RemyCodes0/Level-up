@@ -165,8 +165,8 @@ export default function LoginPage() {
       {/* ── Brand panel (desktop) ── */}
       <aside className="relative hidden w-[46%] max-w-[680px] shrink-0 overflow-hidden border-r border-white/[0.06] lg:flex lg:flex-col">
         <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-          <div className="absolute -left-40 -top-40 h-[620px] w-[620px] rounded-full opacity-40 blur-[120px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)", animation: "au-aurora 18s ease-in-out infinite" }} />
-          <div className="absolute -bottom-40 right-[-120px] h-[460px] w-[460px] rounded-full opacity-25 blur-[120px]" style={{ background: "radial-gradient(closest-side, #FF7A45, transparent)", animation: "au-aurora 22s ease-in-out infinite reverse" }} />
+          <div className="absolute -left-40 -top-40 h-[620px] w-[620px] rounded-full opacity-40 blur-[120px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)" }} />
+          <div className="absolute -bottom-40 right-[-120px] h-[460px] w-[460px] rounded-full opacity-25 blur-[120px]" style={{ background: "radial-gradient(closest-side, #FF7A45, transparent)" }} />
           <div className="au-grain absolute inset-0 opacity-60" />
         </div>
 
@@ -232,7 +232,7 @@ export default function LoginPage() {
       {/* ── Form ── */}
       <main className="relative flex flex-1 flex-col">
         <div className="pointer-events-none absolute inset-0 overflow-hidden lg:hidden" aria-hidden="true">
-          <div className="absolute -top-48 left-1/2 h-[480px] w-[640px] -translate-x-1/2 rounded-full opacity-30 blur-[110px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)", animation: "au-aurora 18s ease-in-out infinite" }} />
+          <div className="absolute -top-48 left-1/2 h-[480px] w-[640px] -translate-x-1/2 rounded-full opacity-30 blur-[110px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)" }} />
           <div className="au-grain absolute inset-0 opacity-60" />
         </div>
 

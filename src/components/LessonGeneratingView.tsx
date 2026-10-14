@@ -64,7 +64,7 @@ function GeneratingStage() {
     <div className="relative flex aspect-video flex-col items-center justify-center overflow-hidden rounded-2xl bg-[#07080C] px-4 text-center ring-1 ring-white/[0.08]">
       <div
         className="pointer-events-none absolute left-1/2 top-1/2 h-[120%] w-[80%] -translate-x-1/2 -translate-y-1/2 rounded-full opacity-25 blur-3xl"
-        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "lgv-aurora 10s ease-in-out infinite" }}
+        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }}
       />
       <div className="absolute inset-0 lgv-grain opacity-50" />
 

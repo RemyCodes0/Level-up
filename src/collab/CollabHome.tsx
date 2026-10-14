@@ -122,8 +122,8 @@ export default function CollabHome() {
       <style>{PAGE_CSS}</style>
 
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[560px] overflow-hidden" aria-hidden="true">
-        <div className="absolute -top-56 left-1/3 h-[520px] w-[760px] -translate-x-1/2 rounded-full opacity-25 blur-[110px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)", animation: "ch-aurora 18s ease-in-out infinite" }} />
-        <div className="absolute -right-32 top-16 h-[360px] w-[460px] rounded-full opacity-[0.14] blur-[110px]" style={{ background: "radial-gradient(closest-side, #3DDC97, transparent)", animation: "ch-aurora 22s ease-in-out infinite reverse" }} />
+        <div className="absolute -top-56 left-1/3 h-[520px] w-[760px] -translate-x-1/2 rounded-full opacity-25 blur-[110px]" style={{ background: "radial-gradient(closest-side, #8B7CFF, transparent)" }} />
+        <div className="absolute -right-32 top-16 h-[360px] w-[460px] rounded-full opacity-[0.14] blur-[110px]" style={{ background: "radial-gradient(closest-side, #3DDC97, transparent)" }} />
         <div className="ch-grain absolute inset-0 opacity-60" />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[#0A0B10]" />
       </div>

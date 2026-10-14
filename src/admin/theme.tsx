@@ -98,11 +98,11 @@ export function Aurora() {
     <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden" aria-hidden="true">
       <div
         className="absolute -left-40 -top-56 h-[520px] w-[620px] rounded-full opacity-[0.16] blur-[120px]"
-        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "ad-aurora 24s ease-in-out infinite" }}
+        style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }}
       />
       <div
         className="absolute -right-48 top-1/3 h-[420px] w-[520px] rounded-full opacity-[0.10] blur-[120px]"
-        style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)`, animation: "ad-aurora 30s ease-in-out infinite reverse" }}
+        style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)` }}
       />
       <div className="ad-grain absolute inset-0 opacity-[0.35]" />
     </div>

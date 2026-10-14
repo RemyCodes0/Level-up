@@ -746,8 +746,8 @@ export default function LandingPage() {
         {/* ── Hero ── */}
         <header id="top" className="relative overflow-hidden pt-16">
           <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-            <div className="absolute -top-60 left-1/2 h-[640px] w-[980px] -translate-x-1/2 rounded-full opacity-35 blur-[120px]" style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "lp-aurora 18s ease-in-out infinite" }} />
-            <div className="absolute right-[-200px] top-40 h-[420px] w-[560px] rounded-full opacity-[0.18] blur-[120px]" style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)`, animation: "lp-aurora 22s ease-in-out infinite reverse" }} />
+            <div className="absolute -top-60 left-1/2 h-[640px] w-[980px] -translate-x-1/2 rounded-full opacity-35 blur-[120px]" style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }} />
+            <div className="absolute right-[-200px] top-40 h-[420px] w-[560px] rounded-full opacity-[0.18] blur-[120px]" style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)` }} />
           </div>
           <div className="absolute inset-x-0 top-0 h-[760px]"><LightField /></div>
           <div className="pointer-events-none absolute inset-x-0 top-[560px] h-[300px] bg-gradient-to-b from-transparent to-[#0A0B10]" />
@@ -1087,7 +1087,7 @@ export default function LandingPage() {
           <Reveal>
             <div className="relative overflow-hidden rounded-[32px] px-6 py-16 text-center ring-1 ring-white/[0.08] sm:px-12 sm:py-24">
               <div className="absolute inset-0 bg-[#0D0F15]" />
-              <div className="absolute -top-40 left-1/2 h-[480px] w-[760px] -translate-x-1/2 rounded-full opacity-40 blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "lp-aurora 16s ease-in-out infinite" }} />
+              <div className="absolute -top-40 left-1/2 h-[480px] w-[760px] -translate-x-1/2 rounded-full opacity-40 blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }} />
               <div className="absolute -bottom-40 right-0 h-[360px] w-[520px] rounded-full opacity-25 blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)` }} />
               <div className="lp-grain absolute inset-0 opacity-60" />
               <div className="relative mx-auto max-w-2xl">

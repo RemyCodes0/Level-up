@@ -130,8 +130,8 @@ function Shell({ children, title }: { children: ReactNode; title?: string }) {
       </Helmet>
       <style>{PAGE_CSS}</style>
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[520px] overflow-hidden" aria-hidden="true">
-        <div className="absolute -top-56 left-1/3 h-[480px] w-[760px] -translate-x-1/2 rounded-full opacity-25 blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "cr-aurora 18s ease-in-out infinite" }} />
-        <div className="absolute -right-32 top-10 h-[320px] w-[440px] rounded-full opacity-[0.12] blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.mint}, transparent)`, animation: "cr-aurora 22s ease-in-out infinite reverse" }} />
+        <div className="absolute -top-56 left-1/3 h-[480px] w-[760px] -translate-x-1/2 rounded-full opacity-25 blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }} />
+        <div className="absolute -right-32 top-10 h-[320px] w-[440px] rounded-full opacity-[0.12] blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.mint}, transparent)` }} />
         <div className="cr-grain absolute inset-0 opacity-60" />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[#0A0B10]" />
       </div>
@@ -998,10 +998,18 @@ function DashboardTab({ roomId }: { roomId: string }) {
   const [dashboard, setDashboard] = useState<RoomDashboard | null>(null);
   const [error, setError] = useState(false);
 
+  // Paused while the tab is hidden, same fix and same reason as
+  // CourseApi.ts's pollCourse — a dashboard left open in a background tab
+  // used to keep hitting the network every 8s regardless of whether anyone
+  // was looking, which is exactly the kind of per-tab background work that
+  // compounds into "the browser gets slow with a lot of tabs open." Catches
+  // up with one immediate poll the moment the tab becomes visible again.
   useEffect(() => {
     let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
+      if (stopped) return;
+      if (document.visibilityState === "hidden") return;
       try {
         const d = await getDashboard(roomId);
         if (!stopped) setDashboard(d);
@@ -1010,8 +1018,19 @@ function DashboardTab({ roomId }: { roomId: string }) {
       }
       if (!stopped) timer = setTimeout(poll, 8000);
     };
+    const onVisibilityChange = () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      poll();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     poll();
-    return () => { stopped = true; clearTimeout(timer); };
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [roomId]);
 
   if (error && !dashboard) {

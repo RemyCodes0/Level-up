@@ -83,8 +83,8 @@ function Shell({ children }: { children: ReactNode }) {
       </Helmet>
       <style>{PAGE_CSS}</style>
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[560px] overflow-hidden" aria-hidden="true">
-        <div className="absolute -top-56 left-1/2 h-[520px] w-[820px] -translate-x-1/2 rounded-full opacity-25 blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)`, animation: "sc-aurora 18s ease-in-out infinite" }} />
-        <div className="absolute -right-40 top-24 h-[340px] w-[440px] rounded-full opacity-[0.12] blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)`, animation: "sc-aurora 22s ease-in-out infinite reverse" }} />
+        <div className="absolute -top-56 left-1/2 h-[520px] w-[820px] -translate-x-1/2 rounded-full opacity-25 blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.iris}, transparent)` }} />
+        <div className="absolute -right-40 top-24 h-[340px] w-[440px] rounded-full opacity-[0.12] blur-[110px]" style={{ background: `radial-gradient(closest-side, ${C.ember}, transparent)` }} />
         <div className="sc-grain absolute inset-0 opacity-60" />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[#0A0B10]" />
       </div>

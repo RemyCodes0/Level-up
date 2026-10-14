@@ -124,15 +124,25 @@ export function initAnalytics(): void {
     capture_pageview: "history_change",
     capture_pageleave: true, // gives time-on-page and bounce
 
-    // Session replay — watch real sessions (anonymous included). Genuinely useful
-    // for seeing the animation glitches users hit. Free tier: 5,000 replays/mo.
-    // NOTE: you must ALSO turn on "Record user sessions" in your PostHog project
-    // settings for this to take effect.
-    disable_session_recording: false,
-    session_recording: {
-      maskAllInputs: false,                    // keep most inputs visible for context…
-      maskInputOptions: { password: true },    // …but never capture password fields
-    },
+    // Session replay — DISABLED (was on, unconditionally, for every visitor,
+    // on every page, for the whole time a tab stayed open). This is the real
+    // explanation for "the whole app is slow with a lot of tabs open," not
+    // just one screen's polling: PostHog's recorder continuously observes
+    // DOM mutations and batches/serializes snapshots the entire time a tab
+    // is open, not just once — and it's a genuinely heavy, GLOBAL cost (this
+    // file runs from main.tsx, before any route even renders), so every open
+    // Level Up tab was running its own independent copy of that overhead at
+    // the same time, compounding exactly the way more tabs made it worse.
+    //
+    // A per-session SAMPLE RATE (record some visits, not every visit, on
+    // every tab) would keep most of the value at a fraction of the cost —
+    // but that's NOT a client-side option here: PostHog's own docs put
+    // sampling under the project's "recording triggers" in the PostHog
+    // dashboard itself (Session replay settings → triggers), not something
+    // this file can set reliably. If partial replay data is wanted back,
+    // that's the place to turn it on at, say, 10-20%, rather than flipping
+    // this boolean — re-enabling it here would be back to 100%/every-tab.
+    disable_session_recording: true,
 
     // Core Web Vitals + basic network performance.
     capture_performance: true,
