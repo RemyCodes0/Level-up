@@ -766,8 +766,8 @@ export default function LandingPage() {
               </a>
 
               <h1 className="lp-serif mt-8 text-[52px] leading-[0.98] text-white sm:text-[84px] lg:text-[96px]">
-                Any topic.<br />
-                Animated. <span className="lp-gradient-text italic">Mastered.</span>
+                Stop Cramming,<br />
+                Learn <span className="lp-gradient-text italic">Visually.</span>
               </h1>
               <p className="mx-auto mt-6 max-w-xl text-[16px] leading-relaxed text-[#8A8FA3] sm:text-lg">
                 Tell Level Up what you're studying. It writes, narrates and animates a full video course — then quizzes you until you're ready.
