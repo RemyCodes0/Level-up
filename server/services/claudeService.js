@@ -809,11 +809,20 @@ const DEEPSEEK_QUIZ_PROVIDER = {
 // (course-plan and quiz both report real OpenRouter-billed cost via
 // onUsage, not an estimate) against what Gemini was producing, not just
 // this provider's advertised per-token rate.
+// extraParams was { reasoning: { enabled: false } } until a real production
+// failure (2026-10-15): course-plan generation failed all 3/3 retry
+// attempts, each returning only 53-96 output tokens of unparseable JSON for
+// what should be a large multi-lesson plan. Anthropic's own docs flag this
+// exact failure mode for this model family — disabling thinking outright
+// (vs. just lowering effort) can make the model leak partial/malformed
+// scaffolding instead of the clean structured output. Fixed by keeping
+// thinking ON at low effort instead, same pattern withReasoningOff already
+// uses for Gemini/Ox Alpha's own mandatory-reasoning exemptions above.
 const CLAUDE_HAIKU_PLAN_PROVIDER = {
   client: openRouterClient,
   model: "anthropic/claude-haiku-5.5",
   providerName: "anthropic",
-  extraParams: { reasoning: { enabled: false } },
+  extraParams: { reasoning: { effort: "low" } },
   maxTokens: 128000,
   keyEnv: "OPENROUTER_API_KEY",
 };
