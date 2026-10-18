@@ -358,7 +358,7 @@ exports.loginUser = async (req, res) => {
 // itself — verifyIdToken below is what actually proves it's real and was
 // issued for THIS app (checked against GOOGLE_CLIENT_ID as the audience).
 exports.googleAuth = async (req, res) => {
-  const { credential } = req.body;
+  const { credential, ref } = req.body;
   if (!credential) return res.status(400).json({ message: "Missing Google credential" });
   if (!process.env.GOOGLE_CLIENT_ID) {
     // Fails loudly rather than silently accepting unverifiable tokens —
@@ -397,12 +397,28 @@ exports.googleAuth = async (req, res) => {
         await user.save();
       } else {
         isNewUser = true;
+
+        // Same referrer-exists validation as registerUser — FIX: this was
+        // entirely missing on the Google path (both here and the frontend
+        // Google button, which never sent `ref` in the first place), so
+        // every referral where the invited friend signed up with Google
+        // instead of email/password silently vanished: referredBy was
+        // never set, so completeReferral had nothing to act on even once
+        // it ran. The referrer got no credits and no error — the referral
+        // just disappeared.
+        let referredBy = null;
+        if (ref) {
+          const referrer = await User.findOne({ referralCode: ref }).select("_id");
+          if (referrer) referredBy = ref;
+        }
+
         user = await User.create({
           name: name || email.split("@")[0],
           email,
           googleId,
           authProvider: "google",
           verified: true, // Google already verified this email — see email_verified check above
+          ...(referredBy ? { referredBy } : {}),
         });
 
         // Same 100-credit signup bonus as a regular signup — see
@@ -410,6 +426,13 @@ exports.googleAuth = async (req, res) => {
         grantCredits(user._id, 100, "signup_bonus", { reason: "new_account" }).catch((err) =>
           console.error("[signup] Failed to grant signup bonus credits for", user.email, "-", err.message)
         );
+
+        // registerUser's referral reward fires from verifyEmail — Google
+        // accounts are created already `verified: true` and never go
+        // through that route, so this is the only place that can award it
+        // for a Google-signup referral. Fire-and-forget, same as
+        // registerUser/verifyEmail — completeReferral is idempotent.
+        if (referredBy) completeReferral(user._id.toString());
       }
     }
 

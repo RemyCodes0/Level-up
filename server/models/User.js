@@ -46,6 +46,9 @@ const UserSchema = new mongoose.Schema({
   // Stripe webhook idempotency — a redelivered checkout.session.completed
   // event must never grant credits twice.
   processedStripeEvents: { type: [String], default: [] },
+  // Tap Payments webhook idempotency, same reasoning as processedStripeEvents
+  // above — keyed by the Tap charge id (Tap has no separate event id).
+  processedTapEvents: { type: [String], default: [] },
 
   // ── Email preferences ──────────────────────────────────────────────────────
   // When true, this user is excluded from broadcast/marketing emails. Set via

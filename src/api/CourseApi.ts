@@ -177,6 +177,20 @@ export async function getPricingConfig(): Promise<{ courseTiers: CourseTier[]; c
   return res.json();
 }
 
+// Starts a Tap Payments checkout for one credit pack — returns a hosted Tap
+// checkout URL to redirect the browser to (see server/controllers/tapController.js).
+export async function createTapCheckout(packKey: string): Promise<{ checkoutUrl: string }> {
+  const res = await fetch(`${BASE_URL}/api/payment/tap/checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ packKey }),
+  });
+  handleUnauthorized(res);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.message || "Failed to start checkout");
+  return data;
+}
+
 // ── Admin — course tiers + credit packs (requireAdmin-gated server-side) ─────
 export async function getAdminPricingConfig(): Promise<{ courseTiers: CourseTier[]; creditPacks: CreditPack[] }> {
   const res = await fetch(`${BASE_URL}/api/admin/pricing-config`, { headers: { ...authHeaders() } });

@@ -196,7 +196,10 @@ export default function SignupPage() {
     setError("");
     setLoading(true);
     try {
-      const res = await axios.post(`${BASE_URL}/api/auth/google`, { credential: credentialResponse.credential });
+      const res = await axios.post(`${BASE_URL}/api/auth/google`, {
+        credential: credentialResponse.credential,
+        ...(refCode ? { ref: refCode } : {}),
+      });
       const { token, ...user } = res.data;
       localStorage.setItem("token", token);
       localStorage.setItem("user", JSON.stringify(user));

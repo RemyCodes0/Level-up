@@ -11,6 +11,10 @@ const {
   createCheckoutSession: stripeCheckoutHandler,
   webhookHandler: stripeWebhookHandler,
 } = require("../controllers/stripeController");
+const {
+  createCheckoutSession: tapCheckoutHandler,
+  webhookHandler: tapWebhookHandler,
+} = require("../controllers/tapController");
 const { getTransactions } = require("../controllers/creditsController");
 
 // POST /api/payment/checkout — authenticated, JSON body
@@ -42,7 +46,17 @@ router.get("/transactions", protect, getTransactions);
 // ── Stripe — credit-pack purchases (new, additive; NotchPay/Whop above are
 // left untouched) ────────────────────────────────────────────────────────
 // POST /api/payment/stripe/checkout — authenticated, JSON body { packKey }.
-router.post("/stripe/checkout", protect, stripeCheckoutHandler);
+// FIX (found 2026-10-18, while wiring up Tap below): this whole router is
+// mounted BEFORE app.js's global express.json() and never falls through to
+// the second post-json() mount once a route here matches — so without its
+// own body-parser, req.body was always undefined here, and
+// stripeCheckoutHandler's `req.body.packKey` destructure threw on every
+// single call (caught by its try/catch, surfacing as a generic 502 "Failed
+// to create checkout session" with no indication the body was never parsed).
+// Confirmed via an isolated reproduction of this exact double-mount/ordering
+// pattern before changing it. express.json() here is scoped to this one
+// route, same way express.raw() below is scoped to the webhook route only.
+router.post("/stripe/checkout", express.json(), protect, stripeCheckoutHandler);
 
 // POST /api/payment/stripe/webhook — NO auth, raw body required for Stripe's
 // signature verification, same reasoning/placement as the NotchPay webhook
@@ -52,5 +66,15 @@ router.post(
   express.raw({ type: "application/json" }),
   stripeWebhookHandler
 );
+
+// ── Tap Payments — credit-pack purchases (new, additive) ─────────────────
+// POST /api/payment/tap/checkout — authenticated, JSON body { packKey }.
+router.post("/tap/checkout", express.json(), protect, tapCheckoutHandler);
+
+// POST /api/payment/tap/webhook — NO auth. Tap signs a hand-built string
+// (not a raw-body HMAC — see tapController.verifyTapWebhookSignature), so
+// this needs ordinary JSON parsing, not express.raw() like the webhooks
+// above.
+router.post("/tap/webhook", express.json(), tapWebhookHandler);
 
 module.exports = router;
