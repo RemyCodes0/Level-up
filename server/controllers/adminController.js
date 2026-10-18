@@ -561,7 +561,13 @@ exports.getCourseGenerationTime = async (req, res) => {
       status: r.status,
       attempts: r.attempts,
     }));
-    const totalSec = lessons.reduce((sum, l) => sum + l.durationSec, 0);
+    // FIX: was a sum of every lesson's own duration, which is wrong —
+    // buildLessonsConcurrently generates every lesson in a course AT THE
+    // SAME TIME, so the real wall-clock wait is set by whichever lesson
+    // took longest, not the total of all of them added together (that
+    // number could be 6x too high for a 6-lesson course). max() is what the
+    // user actually waited.
+    const totalSec = lessons.length > 0 ? Math.max(...lessons.map((l) => l.durationSec)) : 0;
 
     res.json({ totalSec, lessons });
   } catch (err) {
@@ -578,11 +584,13 @@ exports.getCourseGenerationTime = async (req, res) => {
 // :courseId value.
 //
 // Same per-lesson terminal-duration logic as getCourseGenerationTime above,
-// just carried one level further: sum each course's lessons into that
-// course's own total, then average those totals across courses. Only
-// courses that have actually FINISHED (status "ready" or "failed", i.e.
-// not still "generating") are counted — an in-progress course's lessons so
-// far would understate its eventual total and bias the average down.
+// just carried one level further: take each course's SLOWEST lesson (not a
+// sum — see getCourseGenerationTime's own comment on why; lessons build
+// concurrently, so the real wait is set by the longest one, not the total
+// of all of them), then average that across courses. Only courses that
+// have actually FINISHED (status "ready" or "failed", i.e. not still
+// "generating") are counted — an in-progress course's lessons so far would
+// understate its eventual max and bias the average down.
 exports.getCourseGenerationStats = async (req, res) => {
   try {
     const result = await GenerationLog.aggregate([
@@ -593,7 +601,7 @@ exports.getCourseGenerationStats = async (req, res) => {
           durationSec: { $first: "$durationSec" },
         },
       },
-      { $group: { _id: "$_id.courseId", courseTotalSec: { $sum: "$durationSec" } } },
+      { $group: { _id: "$_id.courseId", courseMaxSec: { $max: "$durationSec" } } },
       {
         $lookup: {
           from: "courses",
@@ -604,7 +612,7 @@ exports.getCourseGenerationStats = async (req, res) => {
         },
       },
       { $match: { "course.0.status": { $in: ["ready", "failed"] } } },
-      { $group: { _id: null, avgSec: { $avg: "$courseTotalSec" }, coursesCounted: { $sum: 1 } } },
+      { $group: { _id: null, avgSec: { $avg: "$courseMaxSec" }, coursesCounted: { $sum: 1 } } },
     ]);
 
     const avgSec = result[0]?.avgSec ?? null;

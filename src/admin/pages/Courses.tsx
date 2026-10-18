@@ -343,13 +343,12 @@ function CourseDetailPage({ courseId }: { courseId: string }) {
                 <span className={EYEBROW}>Generation time</span>
               </div>
               <div className="mt-1.5 text-2xl font-semibold leading-none text-white tabular-nums">{fmtDuration(genTime.totalSec)}</div>
-              {/* Sum of each lesson's own generation time, not literal
-                  wall-clock — lessons build concurrently (see
-                  buildLessonsConcurrently), so what the user actually
-                  waited is shorter than this total. See
+              {/* The slowest lesson's own generation time, not a sum —
+                  lessons build concurrently (see buildLessonsConcurrently),
+                  so that's what sets the real wall-clock wait. See
                   getCourseGenerationTime's own comment. */}
               <p className="mt-1.5 text-[11px] leading-relaxed text-[#6E7389]">
-                Sum of each lesson's own time — lessons build concurrently, so the real wait was shorter.
+                Slowest lesson's time — lessons build concurrently, so this is close to the real wait, not a sum of all of them.
               </p>
               <div className="mt-2.5 flex flex-wrap gap-1.5">
                 {genTime.lessons.map((l) => (
