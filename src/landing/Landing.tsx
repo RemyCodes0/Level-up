@@ -725,8 +725,8 @@ export default function LandingPage() {
               <Link to="/gallery" className="rounded-lg px-3 py-2 text-[13px] text-[#8A8FA3] transition-colors hover:text-white">Gallery</Link>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <button onClick={() => navigate("/login")} className="hidden h-9 rounded-xl px-3.5 text-[13px] font-medium text-[#B9BCCB] transition-colors hover:text-white sm:block">Log in</button>
-              <button onClick={() => navigate("/ai_tutor")} className="h-9 rounded-xl bg-white px-4 text-[13px] font-semibold text-[#0A0B10] transition-all hover:bg-[#E3E0FF]">
+              <button onClick={() => navigate(loggedIn() ? "/ai_tutor" : "/login")} className="hidden h-9 rounded-xl px-3.5 text-[13px] font-medium text-[#B9BCCB] transition-colors hover:text-white sm:block">Log in</button>
+              <button onClick={goApp} className="h-9 rounded-xl bg-white px-4 text-[13px] font-semibold text-[#0A0B10] transition-all hover:bg-[#E3E0FF]">
                 Start free
               </button>
               <button onClick={() => setMenuOpen((o) => !o)} className="flex h-9 w-9 items-center justify-center rounded-xl text-[#B9BCCB] hover:bg-white/[0.06] md:hidden" aria-label="Menu" aria-expanded={menuOpen}>
@@ -736,7 +736,11 @@ export default function LandingPage() {
           </div>
           {menuOpen && (
             <div className="border-t border-white/[0.06] bg-[#0A0B10]/95 px-4 py-3 backdrop-blur-xl md:hidden">
-              {[...navLinks, { href: "/gallery", label: "Gallery" }, { href: "/login", label: "Log in" }].map((l) => (
+              {[
+                ...navLinks,
+                { href: "/gallery", label: "Gallery" },
+                loggedIn() ? { href: "/ai_tutor", label: "Open app" } : { href: "/login", label: "Log in" },
+              ].map((l) => (
                 <a key={l.href} href={l.href} onClick={() => setMenuOpen(false)} className="block rounded-lg px-3 py-3 text-[15px] text-[#D6D8E2] hover:bg-white/[0.04]">{l.label}</a>
               ))}
             </div>
