@@ -1,45 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
-  Search, Trash2, Pencil, Loader2, Activity, CheckCircle2, Circle, Coins, BadgeCheck,
+  Search, Trash2, Pencil, Loader2, Activity, Coins, BadgeCheck,
   ArrowUp, ArrowDown, ArrowUpDown, Film, Gift, Ticket, Mail,
 } from "lucide-react";
 import { adminApi } from "../adminApi";
 import {
-  Page, PageHeader, Card, Modal, LoadingBlock, ErrorBlock, EmptyState, fmtDate, fmtPosition,
+  Page, PageHeader, Card, Modal, LoadingBlock, ErrorBlock, EmptyState, fmtDate,
 } from "../components";
 import { INPUT, LABEL, BTN_PRIMARY, BTN_MINT, BTN_DANGER, EYEBROW, cx } from "../theme";
-
-interface User {
-  _id: string;
-  name: string;
-  email: string;
-  verified: boolean;
-  courseCredits: number;
-  signupBonusCredits?: number;
-  signupBonusExpiresAt?: string | null;
-  createdAt: string;
-  // Added alongside this richer view — see authController.js's getUsers.
-  authProvider?: "local" | "google";
-  freeTrialUsed?: boolean;
-  referralCount?: number;
-  referralCreditsEarned?: number;
-  emailUnsubscribed?: boolean;
-  // Aggregated server-side from the Course collection, not stored on the
-  // user document itself — real counts, not an estimate.
-  courseCount?: number;
-}
-
-// Mirrors creditService.js's getSpendableBalance — the signup bonus only
-// counts while unexpired. Admins should see (and adjust against) the same
-// number the user's own dashboard shows, not the raw courseCredits field
-// alone, which was the old behavior here and undercounted anyone still
-// sitting on signup-bonus credits.
-function spendableBalance(u: User): number {
-  const bonusValid = !!u.signupBonusExpiresAt && new Date(u.signupBonusExpiresAt).getTime() > Date.now();
-  return (bonusValid ? u.signupBonusCredits || 0 : 0) + (u.courseCredits || 0);
-}
+import { type User, spendableBalance } from "../userTypes";
 
 function initials(name: string): string {
   return (name || "?")
@@ -99,12 +71,12 @@ function SortableTh({
 }
 
 export default function Users() {
+  const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<User | null>(null);
-  const [viewingProgress, setViewingProgress] = useState<User | null>(null);
   const [adjustingCredits, setAdjustingCredits] = useState<User | null>(null);
   // Default: newest account first (explicit request, 2026-10-18 — was
   // oldest-first before). The server already returns users sorted this way
@@ -220,7 +192,7 @@ export default function Users() {
                           </span>
                           <div className="min-w-0">
                             <button
-                              onClick={() => setViewingProgress(u)}
+                              onClick={() => navigate(`/admin/users/${u._id}`)}
                               title="View their generated courses"
                               className="flex items-center gap-1.5 truncate text-[13px] font-medium text-[#ECEDF2] hover:text-[#B4A9FF] hover:underline"
                             >
@@ -278,7 +250,7 @@ export default function Users() {
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
-                          <RowAction onClick={() => setViewingProgress(u)} title="View course progress" hover="#3DDC97">
+                          <RowAction onClick={() => navigate(`/admin/users/${u._id}`)} title="View profile" hover="#3DDC97">
                             <Activity className="h-3.5 w-3.5" />
                           </RowAction>
                           <RowAction onClick={() => setAdjustingCredits(u)} title="Add or remove credits" hover="#FFB547">
@@ -312,14 +284,6 @@ export default function Users() {
         />
       )}
 
-      {viewingProgress && (
-        <UserProgressModal
-          userId={viewingProgress._id}
-          userName={viewingProgress.name}
-          onClose={() => setViewingProgress(null)}
-        />
-      )}
-
       {adjustingCredits && (
         <AdjustCreditsModal
           user={adjustingCredits}
@@ -348,105 +312,6 @@ function RowAction({
     >
       {children}
     </button>
-  );
-}
-
-interface LessonProgressRow {
-  lessonNumber: number;
-  title: string;
-  totalFrames: number | null;
-  watched: boolean;
-  watchedAt: string | null;
-  replayCount: number;
-  lastPositionFrame: number;
-  lastPlayedAt: string | null;
-}
-
-interface CourseProgressRow {
-  courseId: string;
-  topic: string;
-  completedAt: string | null;
-  lessons: LessonProgressRow[];
-}
-
-function UserProgressModal({ userId, userName, onClose }: { userId: string; userName: string; onClose: () => void }) {
-  const [courses, setCourses] = useState<CourseProgressRow[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    adminApi
-      .get<{ user: { _id: string; name: string; email: string }; courses: CourseProgressRow[] }>(
-        `/api/admin/users/${userId}/progress`
-      )
-      .then((res) => setCourses(res.courses))
-      .catch((err) => setError(err.message || "Failed to load progress."))
-      .finally(() => setLoading(false));
-  }, [userId]);
-
-  return (
-    <Modal title={`${userName}'s progress`} sub="Watch state across every course they own" onClose={onClose}>
-      <div className="p-6">
-        {loading ? (
-          <LoadingBlock />
-        ) : error ? (
-          <ErrorBlock message={error} />
-        ) : !courses || courses.length === 0 ? (
-          <EmptyState label="courses" />
-        ) : (
-          <div className="space-y-4">
-            {courses.map((c) => {
-              const watched = c.lessons.filter((l) => l.watched).length;
-              return (
-                <div key={c.courseId} className="overflow-hidden rounded-2xl ring-1 ring-white/[0.07]">
-                  <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] bg-white/[0.02] px-4 py-3">
-                    <span className="min-w-0 truncate text-[13px] font-medium text-[#ECEDF2]">{c.topic}</span>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="text-[11px] tabular-nums text-[#6E7389]">{watched}/{c.lessons.length} watched</span>
-                      {c.completedAt && (
-                        <span className="rounded-full bg-[#3DDC97]/10 px-2 py-0.5 text-[10px] font-medium text-[#3DDC97] ring-1 ring-inset ring-[#3DDC97]/25">
-                          Completed {fmtDate(c.completedAt)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="divide-y divide-white/[0.04]">
-                    {c.lessons
-                      .slice()
-                      .sort((a, b) => a.lessonNumber - b.lessonNumber)
-                      .map((l) => (
-                        <div key={l.lessonNumber} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                          <div className="flex min-w-0 items-center gap-2.5">
-                            {l.watched ? (
-                              <CheckCircle2 className="h-4 w-4 shrink-0 text-[#3DDC97]" />
-                            ) : (
-                              <Circle className="h-4 w-4 shrink-0 text-white/[0.14]" />
-                            )}
-                            <span className="truncate text-[13px] text-[#D6D8E2]">
-                              <span className="font-mono text-[11px] text-[#4A4F63]">{String(l.lessonNumber).padStart(2, "0")}</span>{" "}
-                              {l.title}
-                            </span>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-3 text-[11px] text-[#6E7389]">
-                            {l.watchedAt && <span className="hidden sm:inline">watched {fmtDate(l.watchedAt)}</span>}
-                            {l.lastPositionFrame > 0 && (
-                              <span className="font-medium tabular-nums text-[#8A8FA3]">
-                                {fmtPosition(l.lastPositionFrame, l.totalFrames)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </Modal>
   );
 }
 

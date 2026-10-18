@@ -18,6 +18,7 @@ const Progress = require("../models/Progress");
 const GenerationLog = require("../models/GenerationLog");
 const CreditTransaction = require("../models/CreditTransaction");
 const CollabRoom = require("../models/CollabRoom");
+const QuizAttempt = require("../models/QuizAttempt");
 const { grantCredits, spendCredits, getSpendableBalance, InsufficientCreditsError } = require("../services/creditService");
 const { getPricingConfig } = require("../services/pricingConfigService");
 
@@ -676,10 +677,67 @@ exports.getCourseDetail = async (req, res) => {
 
     if (!course) return res.status(404).json({ error: "Course not found" });
 
-    res.json({ course });
+    // Every quiz submission for this course, newest first — a course has
+    // exactly one owner (course.userId), so these are all that one user's
+    // attempts; QuizAttempt isn't overwritten on retake (see its own
+    // comment), so this can be more than one row.
+    const quizAttempts = await QuizAttempt.find({ courseId: course._id })
+      .sort({ submittedAt: -1 })
+      .select("-answers")
+      .lean();
+
+    res.json({ course, quizAttempts });
   } catch (err) {
     console.error("admin getCourseDetail error:", err);
     res.status(500).json({ error: "Failed to load course detail" });
+  }
+};
+
+// GET /api/admin/courses/:courseId/lineage
+// Same ancestors/descendants walk as courseController.getCourseLineageHandler,
+// just without that one's `userId: req.user._id` ownership filter — an admin
+// needs to see lineage across every user's courses, not just their own.
+const ADMIN_LINEAGE_EXCLUDED_FIELDS = "-lessons.code -lessons.narrationScript -lessons.audioUrl -lessons.sceneProgress";
+const ADMIN_MAX_LINEAGE_DEPTH = 10;
+const ADMIN_MAX_LINEAGE_DESCENDANTS = 40;
+exports.getCourseLineage = async (req, res) => {
+  try {
+    const course = await Course.findById(req.params.courseId).select("parentCourseId");
+    if (!course) return res.status(404).json({ error: "Course not found" });
+
+    const ancestors = [];
+    const seen = new Set([String(course._id)]);
+    let cursor = course.parentCourseId;
+    while (cursor && ancestors.length < ADMIN_MAX_LINEAGE_DEPTH && !seen.has(String(cursor))) {
+      seen.add(String(cursor));
+      const ancestor = await Course.findById(cursor).select(ADMIN_LINEAGE_EXCLUDED_FIELDS);
+      if (!ancestor) break;
+      ancestors.unshift(ancestor);
+      cursor = ancestor.parentCourseId;
+    }
+
+    const descendants = [];
+    const queue = [String(course._id)];
+    const visited = new Set(queue);
+    while (queue.length > 0 && descendants.length < ADMIN_MAX_LINEAGE_DESCENDANTS) {
+      const batch = await Course.find({ parentCourseId: { $in: queue.splice(0, queue.length) } })
+        .select(ADMIN_LINEAGE_EXCLUDED_FIELDS)
+        .sort({ createdAt: 1 })
+        .limit(ADMIN_MAX_LINEAGE_DESCENDANTS - descendants.length);
+      if (batch.length === 0) break;
+      for (const child of batch) {
+        const id = String(child._id);
+        if (visited.has(id)) continue;
+        visited.add(id);
+        descendants.push(child);
+        queue.push(id);
+      }
+    }
+
+    res.json({ ancestors, descendants });
+  } catch (err) {
+    console.error("admin getCourseLineage error:", err);
+    res.status(500).json({ error: "Failed to load course lineage" });
   }
 };
 
@@ -737,6 +795,60 @@ exports.getUserProgress = async (req, res) => {
   } catch (err) {
     console.error("admin getUserProgress error:", err);
     res.status(500).json({ error: "Failed to load user progress" });
+  }
+};
+
+// GET /api/admin/users/:userId/profile — powers the dedicated admin user-
+// profile page. Deliberately separate from getUserProgress above:
+// getUserProgress only returns courses that have a Progress doc (i.e. the
+// user opened a lesson at least once), which misses courses that are still
+// generating, failed outright, or were simply never watched — "the courses
+// he has generated" means every Course.userId match, not just watched ones.
+exports.getUserCourses = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId)
+      .select("-password")
+      .lean();
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const courses = await Course.find({ userId })
+      .select("topic status isFreeTrialCourse lessons.status createdAt parentCourseId followUpKind")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const courseIds = courses.map((c) => c._id);
+    // Latest attempt per course — a course can be retaken, so group in JS
+    // rather than a second query per course.
+    const attempts = await QuizAttempt.find({ courseId: { $in: courseIds } })
+      .sort({ submittedAt: -1 })
+      .select("courseId score total pct submittedAt")
+      .lean();
+    const latestQuizByCourse = new Map();
+    for (const a of attempts) {
+      const key = String(a.courseId);
+      if (!latestQuizByCourse.has(key)) latestQuizByCourse.set(key, a);
+    }
+
+    const result = courses.map((c) => ({
+      _id: c._id,
+      topic: c.topic,
+      status: c.status,
+      isFreeTrial: c.isFreeTrialCourse,
+      lessonsReady: (c.lessons || []).filter((l) => l.status === "ready").length,
+      lessonsFailed: (c.lessons || []).filter((l) => l.status === "failed").length,
+      lessonsTotal: (c.lessons || []).length,
+      createdAt: c.createdAt,
+      parentCourseId: c.parentCourseId || null,
+      followUpKind: c.followUpKind || null,
+      latestQuiz: latestQuizByCourse.get(String(c._id)) || null,
+    }));
+
+    res.json({ user, courses: result });
+  } catch (err) {
+    console.error("admin getUserCourses error:", err);
+    res.status(500).json({ error: "Failed to load user courses" });
   }
 };
 

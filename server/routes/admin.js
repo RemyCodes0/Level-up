@@ -8,9 +8,11 @@ const {
   getCourseCosts,
   getCourseGenerationTime,
   getCourseGenerationStats,
+  getCourseLineage,
   getPageViewStats,
   adminDeleteCourse,
   getUserProgress,
+  getUserCourses,
   adjustUserCredits,
   getRevenue,
   getReferralStats,
@@ -52,8 +54,10 @@ router.get("/courses/generation-stats", getCourseGenerationStats);
 router.get("/courses/:courseId", getCourseDetail);
 router.get("/courses/:courseId/costs", getCourseCosts);
 router.get("/courses/:courseId/generation-time", getCourseGenerationTime);
+router.get("/courses/:courseId/lineage", getCourseLineage);
 router.delete("/courses/:courseId", adminDeleteCourse);
 router.get("/users/:userId/progress", getUserProgress);
+router.get("/users/:userId/courses", getUserCourses);
 router.post("/users/:userId/credits", adjustUserCredits);
 
 // Course tiers + credit packs — admin-adjustable, not hardcoded (see

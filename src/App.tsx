@@ -19,6 +19,7 @@ import AdminReferralsPage from './admin/pages/Referrals'
 import AdminCoursesPage from './admin/pages/Courses'
 import AdminComponentLibraryPage from './admin/pages/ComponentLibrary'
 import AdminUsersPage from './admin/pages/Users'
+import AdminUserProfilePage from './admin/pages/UserProfile'
 import AdminFeedbackAndReviewsPage from './admin/pages/FeedbackAndReviews'
 import AdminTrafficPage from './admin/pages/Traffic'
 import AdminPricingConfigPage from './admin/pages/PricingConfigPage'
@@ -107,6 +108,7 @@ function App() {
         <Route path="courses/:courseId" element={<AdminCoursesPage/>}/>
         <Route path="component-library" element={<AdminComponentLibraryPage/>}/>
         <Route path="users" element={<AdminUsersPage/>}/>
+        <Route path="users/:userId" element={<AdminUserProfilePage/>}/>
         <Route path="feedback-reviews" element={<AdminFeedbackAndReviewsPage/>}/>
         <Route path="traffic" element={<AdminTrafficPage/>}/>
         <Route path="pricing" element={<AdminPricingConfigPage/>}/>

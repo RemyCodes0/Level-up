@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { CheckCircle, XCircle, Clock, Loader2, Play, Trash2, DollarSign, Code2, Copy, Check, Timer, ArrowLeft } from "lucide-react";
+import { useNavigate, useParams, Link } from "react-router-dom";
+import {
+  CheckCircle, XCircle, Clock, Loader2, Play, Trash2, DollarSign, Code2, Copy, Check, Timer,
+  ArrowLeft, GitBranch, Award,
+} from "lucide-react";
 import { adminApi } from "../adminApi";
 import {
-  Page, PageHeader, Card, RowList, ROW_HOVER, Segmented, Modal, Chip,
+  Page, PageHeader, Card, RowList, ROW_HOVER, Segmented, Chip,
   LoadingBlock, ErrorBlock, EmptyState, StatusBadge, Pagination,
   fmtDate, fmtUsd, fmtPosition, fmtDuration,
 } from "../components";
@@ -33,6 +36,11 @@ const STATUS_FILTERS = [
 
 export default function Courses() {
   const { courseId } = useParams();
+  if (courseId) return <CourseDetailPage courseId={courseId} />;
+  return <CoursesList />;
+}
+
+function CoursesList() {
   const navigate = useNavigate();
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [page, setPage] = useState(1);
@@ -119,8 +127,6 @@ export default function Courses() {
           <Pagination page={page} pages={pages} onChange={setPage} />
         </Card>
       )}
-
-      {courseId && <CourseDetailModal courseId={courseId} onClose={() => navigate("/admin/courses")} onDeleted={load} />}
     </Page>
   );
 }
@@ -157,8 +163,32 @@ interface LessonProgressInfo {
   totalFrames: number | null;
 }
 
-function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string; onClose: () => void; onDeleted: () => void }) {
+interface QuizAttemptInfo {
+  _id: string;
+  score: number;
+  total: number;
+  pct: number;
+  submittedAt: string;
+  topicBreakdown?: { topic: string; correct: number; total: number; pct: number }[];
+}
+
+interface LineageCourse {
+  _id: string;
+  topic: string;
+  status: string;
+  followUpKind: "repair" | "extend" | null;
+  createdAt: string;
+}
+
+// Dedicated page (not an overlay) — a modal here used to open layered over
+// whatever scroll position the course list happened to be at, and because
+// nothing reset scroll on open, it could visually "land" below the fold.
+// A plain page + explicit scroll-to-top on mount can't do that.
+function CourseDetailPage({ courseId }: { courseId: string }) {
+  const navigate = useNavigate();
   const [course, setCourse] = useState<any | null>(null);
+  const [quizAttempts, setQuizAttempts] = useState<QuizAttemptInfo[]>([]);
+  const [lineage, setLineage] = useState<{ ancestors: LineageCourse[]; descendants: LineageCourse[] } | null>(null);
   const [costs, setCosts] = useState<{
     totalUsd: number;
     realUsd: number;
@@ -185,19 +215,24 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
   const [progressByLesson, setProgressByLesson] = useState<Map<number, LessonProgressInfo> | null>(null);
 
   useEffect(() => {
+    window.scrollTo(0, 0);
     setLoading(true);
     setPreviewLesson(null);
     setProgressByLesson(null);
     setGenTime(null);
+    setLineage(null);
     Promise.all([
-      adminApi.get<{ course: any }>(`/api/admin/courses/${courseId}`),
+      adminApi.get<{ course: any; quizAttempts: QuizAttemptInfo[] }>(`/api/admin/courses/${courseId}`),
       adminApi.get<{ totalUsd: number; realUsd: number; estimatedUsd: number; byKind: any[] }>(`/api/admin/courses/${courseId}/costs`),
       adminApi.get<{ totalSec: number; lessons: any[] }>(`/api/admin/courses/${courseId}/generation-time`),
+      adminApi.get<{ ancestors: LineageCourse[]; descendants: LineageCourse[] }>(`/api/admin/courses/${courseId}/lineage`),
     ])
-      .then(([c, costData, genTimeData]) => {
+      .then(([c, costData, genTimeData, lineageData]) => {
         setCourse(c.course);
+        setQuizAttempts(c.quizAttempts || []);
         setCosts(costData);
         setGenTime(genTimeData.lessons.length > 0 ? genTimeData : null);
+        setLineage(lineageData);
         const ownerId = c.course?.userId?._id;
         if (!ownerId) return;
         adminApi
@@ -217,45 +252,63 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
     setDeleting(true);
     try {
       await adminApi.delete(`/api/admin/courses/${courseId}`);
-      onDeleted();
-      onClose();
+      navigate("/admin/courses");
     } catch (err: any) {
       alert(err.message || "Failed to delete course.");
-    } finally {
       setDeleting(false);
     }
   };
 
-  if (loading) {
-    return (
-      <Modal title="Loading…" onClose={onClose} width="xl">
-        <div className="flex items-center justify-center p-16">
-          <Loader2 className="h-6 w-6 animate-spin text-[#8B7CFF]" />
-        </div>
-      </Modal>
-    );
-  }
-  if (!course) return null;
+  if (loading) return <Page><LoadingBlock /></Page>;
+  if (!course) return <Page><ErrorBlock message="Course not found." /></Page>;
+
+  const latestQuiz = quizAttempts[0] || null;
 
   return (
-    <Modal
-      title={course.topic}
-      sub={course.userId ? `${course.userId.name} · ${course.userId.email}` : "Unknown owner"}
-      onClose={onClose}
-      width="xl"
-      actions={
+    <Page max="7xl">
+      <div className="mb-5 flex items-center justify-between gap-3">
+        <Link to="/admin/courses" className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#B4A9FF] transition-colors hover:text-white">
+          <ArrowLeft className="h-3.5 w-3.5" /> All courses
+        </Link>
         <button
           onClick={handleDelete}
           disabled={deleting}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#6E7389] transition-colors hover:bg-[#FF5C6C]/10 hover:text-[#FF8A95] disabled:opacity-40"
-          title="Delete course permanently"
+          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-[#6E7389] transition-colors hover:bg-[#FF5C6C]/10 hover:text-[#FF8A95] disabled:opacity-40"
         >
-          {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+          {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Delete course
         </button>
-      }
-    >
-      {(costs || genTime) && (
-        <div className="grid gap-px bg-white/[0.06] sm:grid-cols-2">
+      </div>
+
+      <PageHeader
+        title={course.topic}
+        sub={course.userId ? `${course.userId.name} · ${course.userId.email} · ${fmtDate(course.createdAt)}` : "Unknown owner"}
+        right={<StatusBadge status={course.status} />}
+      />
+
+      {lineage && (lineage.ancestors.length > 0 || lineage.descendants.length > 0) && (
+        <div className={cx(EYEBROW, "mb-5")}>
+          <div className="flex items-center gap-2 text-[11px] text-[#6E7389]">
+            <GitBranch className="h-3.5 w-3.5 shrink-0" />
+            <span>Continuous-learning chain</span>
+          </div>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            {lineage.ancestors.map((a) => (
+              <LineageLink key={a._id} course={a} />
+            ))}
+            {lineage.ancestors.length > 0 && <span className="text-[#4A4F63]">→</span>}
+            <span className="rounded-full bg-[#8B7CFF]/15 px-2.5 py-1 text-[11px] font-medium text-[#B4A9FF] ring-1 ring-inset ring-[#8B7CFF]/30">
+              {course.topic}
+            </span>
+            {lineage.descendants.length > 0 && <span className="text-[#4A4F63]">→</span>}
+            {lineage.descendants.map((d) => (
+              <LineageLink key={d._id} course={d} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(costs || genTime || latestQuiz) && (
+        <div className="grid gap-px overflow-hidden rounded-2xl bg-white/[0.06] ring-1 ring-white/[0.06] sm:grid-cols-3">
           {costs && (
             <div className="bg-[#0E1016] px-6 py-4">
               <div className="flex items-center gap-2">
@@ -309,100 +362,148 @@ function CourseDetailModal({ courseId, onClose, onDeleted }: { courseId: string;
               </div>
             </div>
           )}
+
+          <div className="bg-[#0E1016] px-6 py-4">
+            <div className="flex items-center gap-2">
+              <Award className="h-3.5 w-3.5 text-[#6E7389]" />
+              <span className={EYEBROW}>Quiz score</span>
+            </div>
+            {latestQuiz ? (
+              <>
+                <div className="mt-1.5 text-2xl font-semibold leading-none text-white tabular-nums">
+                  {latestQuiz.score}/{latestQuiz.total} <span className="text-[14px] font-normal text-[#8A8FA3]">({Math.round(latestQuiz.pct)}%)</span>
+                </div>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-[#6E7389]">
+                  Submitted {fmtDate(latestQuiz.submittedAt)}
+                  {quizAttempts.length > 1 && ` · ${quizAttempts.length} attempts total`}
+                </p>
+                {quizAttempts.length > 1 && (
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {quizAttempts.map((a, i) => (
+                      <Chip key={a._id}>
+                        Attempt {quizAttempts.length - i}: {Math.round(a.pct)}%
+                      </Chip>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="mt-2 text-[13px] text-[#4A4F63]">Not taken yet</p>
+            )}
+          </div>
         </div>
       )}
 
-      <div className="p-6">
-        {previewLesson !== null && course.lessons[previewLesson]?.code ? (
-          <div>
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <button
-                onClick={() => { setPreviewLesson(null); setShowCode(false); }}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-[#B4A9FF] transition-colors hover:text-white"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" /> All lessons
-              </button>
-              <button
-                onClick={() => setShowCode((v) => !v)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-3 py-1.5 text-xs font-medium text-[#D6D8E2] ring-1 ring-inset ring-white/[0.08] transition-colors hover:bg-white/[0.09]"
-              >
-                <Code2 className="h-3.5 w-3.5" /> {showCode ? "Hide code" : "View code"}
-              </button>
-            </div>
-            <div className="overflow-hidden rounded-2xl ring-1 ring-white/[0.08]">
-              <DynamicPlayer
-                code={course.lessons[previewLesson].code}
-                durationInFrames={course.lessons[previewLesson].totalFrames ?? 3600}
-              />
-            </div>
-            {showCode && (
-              <div className="relative mt-3">
+      <div className="mt-5">
+        <Card pad={false}>
+          {previewLesson !== null && course.lessons[previewLesson]?.code ? (
+            <div className="p-6">
+              <div className="mb-3 flex items-center justify-between gap-3">
                 <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(course.lessons[previewLesson].code);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1500);
-                  }}
-                  className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-lg bg-white/[0.08] px-2.5 py-1 text-xs font-medium text-[#D6D8E2] ring-1 ring-inset ring-white/[0.1] backdrop-blur transition-colors hover:bg-white/[0.14] hover:text-white"
+                  onClick={() => { setPreviewLesson(null); setShowCode(false); }}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-[#B4A9FF] transition-colors hover:text-white"
                 >
-                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy"}
+                  <ArrowLeft className="h-3.5 w-3.5" /> All lessons
                 </button>
-                <pre className="ad-scroll max-h-[500px] overflow-auto whitespace-pre rounded-2xl bg-[#07080C] p-4 pt-10 text-[11px] leading-relaxed text-[#B9BCCB] ring-1 ring-inset ring-white/[0.07]">
-                  {course.lessons[previewLesson].code}
-                </pre>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            {course.lessons.map((l: any, i: number) => {
-              const progress = progressByLesson?.get(i + 1);
-              return (
-                <div
-                  key={i}
-                  className="flex items-center gap-3 rounded-xl bg-white/[0.02] px-3.5 py-3 ring-1 ring-inset ring-white/[0.05] transition-colors hover:bg-white/[0.04]"
+                <button
+                  onClick={() => setShowCode((v) => !v)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-3 py-1.5 text-xs font-medium text-[#D6D8E2] ring-1 ring-inset ring-white/[0.08] transition-colors hover:bg-white/[0.09]"
                 >
-                  <span className="shrink-0">
-                    {l.status === "ready" ? <CheckCircle className="h-4 w-4 text-[#3DDC97]" /> :
-                     l.status === "failed" ? <XCircle className="h-4 w-4 text-[#FF5C6C]" /> :
-                     l.status === "locked" ? <Clock className="h-4 w-4 text-[#FFB547]" /> :
-                     <Loader2 className="h-4 w-4 animate-spin text-[#8B7CFF]" />}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] text-[#ECEDF2]">
-                      <span className="font-mono text-[11px] text-[#4A4F63]">{String(i + 1).padStart(2, "0")}</span>{" "}
-                      {l.title}
-                    </p>
-                    {l.status === "failed" && l.error && <p className="truncate text-[11px] text-[#FF8A95]">{l.error}</p>}
-                  </div>
-                  {progress && (
-                    <div className="shrink-0 text-right text-[11px]">
-                      {progress.watched ? (
-                        <span className="font-medium text-[#3DDC97]">Watched</span>
-                      ) : progress.lastPositionFrame > 0 ? (
-                        <span className="font-medium text-[#FFB547]">In progress</span>
-                      ) : (
-                        <span className="text-[#4A4F63]">Not started</span>
-                      )}
-                      {progress.lastPositionFrame > 0 && (
-                        <p className="tabular-nums text-[#6E7389]">{fmtPosition(progress.lastPositionFrame, progress.totalFrames)}</p>
-                      )}
-                    </div>
-                  )}
-                  {l.status === "ready" && l.code && (
-                    <button
-                      onClick={() => setPreviewLesson(i)}
-                      className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#8B7CFF]/12 px-3 py-1.5 text-xs font-medium text-[#B4A9FF] ring-1 ring-inset ring-[#8B7CFF]/25 transition-colors hover:bg-[#8B7CFF]/20 hover:text-white"
-                    >
-                      <Play className="h-3 w-3" /> Preview
-                    </button>
-                  )}
+                  <Code2 className="h-3.5 w-3.5" /> {showCode ? "Hide code" : "View code"}
+                </button>
+              </div>
+              <div className="overflow-hidden rounded-2xl ring-1 ring-white/[0.08]">
+                <DynamicPlayer
+                  code={course.lessons[previewLesson].code}
+                  durationInFrames={course.lessons[previewLesson].totalFrames ?? 3600}
+                />
+              </div>
+              {showCode && (
+                <div className="relative mt-3">
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(course.lessons[previewLesson].code);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    }}
+                    className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-lg bg-white/[0.08] px-2.5 py-1 text-xs font-medium text-[#D6D8E2] ring-1 ring-inset ring-white/[0.1] backdrop-blur transition-colors hover:bg-white/[0.14] hover:text-white"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy"}
+                  </button>
+                  <pre className="ad-scroll max-h-[500px] overflow-auto whitespace-pre rounded-2xl bg-[#07080C] p-4 pt-10 text-[11px] leading-relaxed text-[#B9BCCB] ring-1 ring-inset ring-white/[0.07]">
+                    {course.lessons[previewLesson].code}
+                  </pre>
                 </div>
-              );
-            })}
-          </div>
-        )}
+              )}
+            </div>
+          ) : (
+            <div className="space-y-1.5 p-6">
+              {course.lessons.map((l: any, i: number) => {
+                const progress = progressByLesson?.get(i + 1);
+                return (
+                  <div
+                    key={i}
+                    className="flex items-center gap-3 rounded-xl bg-white/[0.02] px-3.5 py-3 ring-1 ring-inset ring-white/[0.05] transition-colors hover:bg-white/[0.04]"
+                  >
+                    <span className="shrink-0">
+                      {l.status === "ready" ? <CheckCircle className="h-4 w-4 text-[#3DDC97]" /> :
+                       l.status === "failed" ? <XCircle className="h-4 w-4 text-[#FF5C6C]" /> :
+                       l.status === "locked" ? <Clock className="h-4 w-4 text-[#FFB547]" /> :
+                       <Loader2 className="h-4 w-4 animate-spin text-[#8B7CFF]" />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[13px] text-[#ECEDF2]">
+                        <span className="font-mono text-[11px] text-[#4A4F63]">{String(i + 1).padStart(2, "0")}</span>{" "}
+                        {l.title}
+                      </p>
+                      {l.status === "failed" && l.error && <p className="truncate text-[11px] text-[#FF8A95]">{l.error}</p>}
+                    </div>
+                    {progress && (
+                      <div className="shrink-0 text-right text-[11px]">
+                        {progress.watched ? (
+                          <span className="font-medium text-[#3DDC97]">Watched</span>
+                        ) : progress.lastPositionFrame > 0 ? (
+                          <span className="font-medium text-[#FFB547]">In progress</span>
+                        ) : (
+                          <span className="text-[#4A4F63]">Not started</span>
+                        )}
+                        {progress.lastPositionFrame > 0 && (
+                          <p className="tabular-nums text-[#6E7389]">{fmtPosition(progress.lastPositionFrame, progress.totalFrames)}</p>
+                        )}
+                      </div>
+                    )}
+                    {l.status === "ready" && l.code && (
+                      <button
+                        onClick={() => setPreviewLesson(i)}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#8B7CFF]/12 px-3 py-1.5 text-xs font-medium text-[#B4A9FF] ring-1 ring-inset ring-[#8B7CFF]/25 transition-colors hover:bg-[#8B7CFF]/20 hover:text-white"
+                      >
+                        <Play className="h-3 w-3" /> Preview
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
       </div>
-    </Modal>
+    </Page>
+  );
+}
+
+function LineageLink({ course }: { course: LineageCourse }) {
+  return (
+    <Link
+      to={`/admin/courses/${course._id}`}
+      className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-[#D6D8E2] ring-1 ring-inset ring-white/[0.08] transition-colors hover:bg-white/[0.08] hover:text-white"
+      title={course.topic}
+    >
+      {course.followUpKind && (
+        <span className={course.followUpKind === "repair" ? "text-[#FFB547]" : "text-[#3DDC97]"}>
+          {course.followUpKind === "repair" ? "Repair" : "Extend"}
+        </span>
+      )}
+      <span className="max-w-[160px] truncate">{course.topic}</span>
+    </Link>
   );
 }
