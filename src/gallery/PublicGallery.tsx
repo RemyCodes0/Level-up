@@ -144,7 +144,13 @@ function CourseCard({ course, index, featured = false }: { course: PublicGallery
       style={{ animationDelay: `${Math.min(index, 11) * 45}ms` }}
     >
       <div className={cx("relative overflow-hidden", featured ? "aspect-[16/9] sm:aspect-auto sm:flex-1 sm:min-h-[300px]" : "aspect-[16/9]")}>
-        <div className="absolute inset-0 transition-transform duration-700 group-hover:scale-[1.06]">
+        {/* will-change-transform: without it, the browser re-rasterizes this
+            SVG at each intermediate frame of the scale transition instead of
+            transforming one cached bitmap — on an SVG using
+            preserveAspectRatio="slice", that shows up as a thin seam at the
+            card's midline for the duration of the hover transition (visible
+            only while scaling, gone once it settles — exactly this bug). */}
+        <div className="absolute inset-0 origin-center transition-transform duration-700 will-change-transform group-hover:scale-[1.06]">
           <PosterArt id={course._id} />
         </div>
         <div className="absolute inset-0 bg-gradient-to-t from-[#11131A] via-[#11131A]/20 to-transparent" />
