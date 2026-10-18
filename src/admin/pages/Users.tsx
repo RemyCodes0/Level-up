@@ -106,12 +106,13 @@ export default function Users() {
   const [editing, setEditing] = useState<User | null>(null);
   const [viewingProgress, setViewingProgress] = useState<User | null>(null);
   const [adjustingCredits, setAdjustingCredits] = useState<User | null>(null);
-  // Default: oldest account first — the server already returns users sorted
-  // this way (see getUsers' explicit sort({createdAt:1})), so this default
-  // doesn't even need a client-side re-sort on first load, only once the
-  // admin clicks a different column.
+  // Default: newest account first (explicit request, 2026-10-18 — was
+  // oldest-first before). The server already returns users sorted this way
+  // (see getUsers' explicit sort({createdAt:-1})), so this default doesn't
+  // even need a client-side re-sort on first load, only once the admin
+  // clicks a different column.
   const [sortKey, setSortKey] = useState<SortKey>("createdAt");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -120,10 +121,10 @@ export default function Users() {
     }
     setSortKey(key);
     // First click on a new column picks the direction that's actually
-    // useful to see first: oldest-first for "Joined" (the whole point of
-    // this default), A→Z for "Name", but highest-first for every numeric
-    // metric — nobody clicks "Credits" wanting to see the $0 accounts.
-    setSortDir(key === "createdAt" || key === "name" ? "asc" : "desc");
+    // useful to see first: newest-first for "Joined" (matches the default
+    // above), A→Z for "Name", but highest-first for every numeric metric —
+    // nobody clicks "Credits" wanting to see the $0 accounts.
+    setSortDir(key === "name" ? "asc" : "desc");
   };
 
   const load = () => {
@@ -218,14 +219,18 @@ export default function Users() {
                             {initials(u.name)}
                           </span>
                           <div className="min-w-0">
-                            <p className="flex items-center gap-1.5 truncate text-[13px] font-medium text-[#ECEDF2]">
+                            <button
+                              onClick={() => setViewingProgress(u)}
+                              title="View their generated courses"
+                              className="flex items-center gap-1.5 truncate text-[13px] font-medium text-[#ECEDF2] hover:text-[#B4A9FF] hover:underline"
+                            >
                               {u.name}
                               {u.authProvider === "google" && (
                                 <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold text-[#8A8FA3]" title="Signed up with Google">
                                   Google
                                 </span>
                               )}
-                            </p>
+                            </button>
                             <p className="truncate text-[11px] text-[#6E7389]">{u.email}</p>
                           </div>
                         </div>

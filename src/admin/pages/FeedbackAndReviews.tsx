@@ -32,6 +32,7 @@ export default function FeedbackAndReviews() {
   const [items, setItems] = useState<Feedback[]>([]);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
+  const [globalStats, setGlobalStats] = useState<{ avgRating: number | null; count: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,8 +40,10 @@ export default function FeedbackAndReviews() {
     setLoading(true);
     setError(null);
     adminApi
-      .get<{ feedback: Feedback[]; pagination: { pages: number } }>(`/api/feedback/admin?page=${page}&limit=20`)
-      .then((res) => { setItems(res.feedback); setPages(res.pagination.pages); })
+      .get<{ feedback: Feedback[]; pagination: { pages: number }; globalStats: { avgRating: number | null; count: number } }>(
+        `/api/feedback/admin?page=${page}&limit=20`
+      )
+      .then((res) => { setItems(res.feedback); setPages(res.pagination.pages); setGlobalStats(res.globalStats); })
       .catch((err) => setError(err.message || "Failed to load feedback."))
       .finally(() => setLoading(false));
   };
@@ -56,22 +59,18 @@ export default function FeedbackAndReviews() {
     }
   };
 
-  // Average over the page in view — the endpoint paginates and returns no
-  // aggregate, so this is deliberately labelled "this page", not "all time".
-  const avg = items.length > 0 ? items.reduce((s, f) => s + f.rating, 0) / items.length : null;
-
   return (
     <Page max="5xl">
       <PageHeader
         title="Feedback"
         sub="What learners said after finishing a course, newest first."
         right={
-          avg !== null && (
+          globalStats?.avgRating != null && (
             <div className="rounded-xl bg-[#11131A] px-4 py-2.5 ring-1 ring-white/[0.07]">
-              <span className={cx(EYEBROW, "text-[10px]")}>Avg · this page</span>
+              <span className={cx(EYEBROW, "text-[10px]")}>Avg rating · all time ({globalStats.count})</span>
               <div className="mt-1 flex items-center gap-2">
-                <span className="text-lg font-semibold leading-none text-white tabular-nums">{avg.toFixed(1)}</span>
-                <Stars n={Math.round(avg)} />
+                <span className="text-lg font-semibold leading-none text-white tabular-nums">{globalStats.avgRating.toFixed(1)}</span>
+                <Stars n={Math.round(globalStats.avgRating)} />
               </div>
             </div>
           )

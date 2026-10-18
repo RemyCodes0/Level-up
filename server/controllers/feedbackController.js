@@ -102,16 +102,25 @@ exports.adminGetFeedback = async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
 
-    const [feedback, total] = await Promise.all([
+    const [feedback, total, globalAgg] = await Promise.all([
       Feedback.find({})
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
       Feedback.countDocuments({}),
+      // True all-time average across every feedback row, not just the page
+      // in view — the admin UI used to compute an average client-side over
+      // whatever 20 rows happened to be on screen and label it "this page"
+      // because there was no real aggregate to show instead.
+      Feedback.aggregate([{ $group: { _id: null, avgRating: { $avg: "$rating" }, count: { $sum: 1 } } }]),
     ]);
 
-    res.json({ feedback, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+    const globalStats = globalAgg[0]
+      ? { avgRating: globalAgg[0].avgRating, count: globalAgg[0].count }
+      : { avgRating: null, count: 0 };
+
+    res.json({ feedback, pagination: { page, limit, total, pages: Math.ceil(total / limit) }, globalStats });
   } catch (err) {
     console.error("adminGetFeedback error:", err);
     res.status(500).json({ message: "Failed to load feedback" });

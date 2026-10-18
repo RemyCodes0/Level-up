@@ -461,8 +461,9 @@ exports.getUsers = async (req, res) => {
     // whole collection turns into a full scan + full-collection
     // serialization as the user count grows.
     //
-    // .sort({createdAt: 1}): the admin Users page's default view is "oldest
-    // account first" — explicit here rather than relying on Mongo's natural
+    // .sort({createdAt: -1}): the admin Users page's default view is "newest
+    // account first" (explicit request, 2026-10-18 — was oldest-first
+    // before) — explicit here rather than relying on Mongo's natural
     // insertion-order default, which isn't a documented guarantee the way an
     // actual sort is.
     //
@@ -471,7 +472,7 @@ exports.getUsers = async (req, res) => {
     // Course's own {userId:1, createdAt:-1} index already covers, so this
     // doesn't add a collection scan on top of the existing find().
     const [users, courseCounts] = await Promise.all([
-      User.find().select("-password").sort({ createdAt: 1 }).limit(1000).lean(),
+      User.find().select("-password").sort({ createdAt: -1 }).limit(1000).lean(),
       Course.aggregate([{ $group: { _id: "$userId", count: { $sum: 1 } } }]),
     ]);
     const courseCountByUser = new Map(courseCounts.map((c) => [String(c._id), c.count]));
