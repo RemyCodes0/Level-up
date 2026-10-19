@@ -141,6 +141,25 @@ const TTS_MODEL_KEY = TTS_PROVIDERS[process.env.TTS_MODEL] ? process.env.TTS_MOD
 const TTS_PROVIDER = TTS_PROVIDERS[TTS_MODEL_KEY];
 console.log(`[tts] voice provider → ${TTS_PROVIDER.model} (set TTS_MODEL=kokoro | gemini to switch)`);
 
+// Kokoro's ONE hardcoded voice (af_nova) is an English voice — it has no
+// way to correctly pronounce a course generated in another language (see
+// Course.courseLanguage, set by generateCoursePlan from the student's own
+// input — named courseLanguage, not language, to avoid colliding with
+// MongoDB's reserved text-index language-override field; see Course.js).
+// Gemini's TTS is genuinely multilingual from the same voice name, so a
+// non-English course is auto-upgraded to it for just that course's audio,
+// regardless of the TTS_MODEL default above — an explicit TTS_MODEL=gemini
+// still always wins (an admin who already opted into paying Gemini's real
+// per-course cost everywhere shouldn't get silently switched back for an
+// English course). Only the default ("kokoro", unset) case auto-upgrades.
+function resolveTtsProvider(language) {
+  if (TTS_MODEL_KEY === "gemini") return { provider: TTS_PROVIDERS.gemini, modelKey: "gemini" };
+  if (language && language.toLowerCase() !== "english") {
+    return { provider: TTS_PROVIDERS.gemini, modelKey: "gemini" };
+  }
+  return { provider: TTS_PROVIDER, modelKey: TTS_MODEL_KEY };
+}
+
 // Kokoro (via this OpenRouter hosting) silently TRUNCATES any single call's
 // audio past roughly 240-290 characters (~36-52 words) — measured directly:
 // a 36-word/240-char input played fully at a natural ~150-165 words/minute
@@ -311,7 +330,7 @@ function splitIntoTtsChunks(rawText, maxChars = TTS_CHUNK_MAX_CHARS) {
 // needing more than one chunk. Raw PCM has no such per-chunk framing at all
 // — chunks concatenate byte-for-byte with zero ambiguity — so this crosses
 // that entire failure class off, not just patches around it.
-async function generateChunkAudio(chunkText) {
+async function generateChunkAudio(chunkText, provider = TTS_PROVIDER) {
   // Queue time (waiting for a free slot on the pool above) vs. call time
   // (the provider actually responding) are reported separately, same split
   // as claudeService.js's generateJson — a slow course could be either "the
@@ -322,8 +341,8 @@ async function generateChunkAudio(chunkText) {
   return limitTtsChunkCall(async () => {
     const startedAt = Date.now();
     const request = {
-      model: TTS_PROVIDER.model,
-      voice: TTS_PROVIDER.voice,
+      model: provider.model,
+      voice: provider.voice,
       input: chunkText,
       response_format: "pcm", // required either way — see the concatenation comment below
     };
@@ -334,7 +353,7 @@ async function generateChunkAudio(chunkText) {
     // today, but omitting it for an unconfirmed provider is the version of
     // this that doesn't quietly break the day Gemini's behavior here does
     // turn out to differ.
-    if (TTS_PROVIDER.supportsSpeed) request.speed = 1.0;
+    if (provider.supportsSpeed) request.speed = 1.0;
     const response = await openai.audio.speech.create(request);
     const buffer = Buffer.from(await response.arrayBuffer());
     const queuedMs = startedAt - queuedAt;
@@ -360,9 +379,10 @@ async function generateChunkAudio(chunkText) {
 // config/modelPricing.js's estimateTokensFromChars for why that's an
 // estimate, not an exact figure).
 async function generateSceneAudio(scene, retries = 3, context = {}) {
+  const { provider, modelKey } = resolveTtsProvider(context.language);
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      console.log(`  [tts] Scene ${scene.id}: generating audio (attempt ${attempt}/${retries})...`);
+      console.log(`  [tts] Scene ${scene.id}: generating audio (attempt ${attempt}/${retries})${modelKey === "gemini" && TTS_MODEL_KEY !== "gemini" ? ` [auto-upgraded to Gemini for ${context.language}]` : ""}...`);
 
       const chunks = splitIntoTtsChunks(stripLatexForSpeech(scene.narration));
       // Chunks are independent TTS calls — fire them in parallel (order of
@@ -379,7 +399,7 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
       // concurrently, not just the one scene that failed). allSettled
       // attaches its own handler to EVERY promise regardless of order, so
       // this can't happen — the retry/throw behavior below is unchanged.
-      const settledChunks = await Promise.allSettled(chunks.map((chunk) => generateChunkAudio(chunk)));
+      const settledChunks = await Promise.allSettled(chunks.map((chunk) => generateChunkAudio(chunk, provider)));
       const firstRejected = settledChunks.find((s) => s.status === "rejected");
       if (firstRejected) throw firstRejected.reason;
       const chunkResults = settledChunks.map((s) => s.value);
@@ -396,13 +416,13 @@ async function generateSceneAudio(scene, retries = 3, context = {}) {
       // final scene duration below uses) rather than waiting for the
       // concatenated buffer, which isn't built until after this call.
       const completionTokens =
-        TTS_PROVIDER === TTS_PROVIDERS.gemini
+        modelKey === "gemini"
           ? estimateGeminiAudioTokens(chunkResults.reduce((sum, c) => sum + c.durationSeconds, 0))
           : 0;
       recordAiUsage({
         kind: "tts",
-        provider: TTS_MODEL_KEY === "gemini" ? "gemini-tts" : "kokoro-tts",
-        model: TTS_PROVIDER.model,
+        provider: modelKey === "gemini" ? "gemini-tts" : "kokoro-tts",
+        model: provider.model,
         userId: context.userId ?? null,
         courseId: context.courseId ?? null,
         lessonNumber: context.lessonNumber ?? null,

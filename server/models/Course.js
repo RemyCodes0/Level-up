@@ -86,6 +86,23 @@ const courseSchema = new mongoose.Schema(
       index: true,
     },
     topic: String,
+    // The language this course's lessons/narration/quiz are written and
+    // spoken in — detected from the student's own input by generateCoursePlan
+    // (claudeService.js) and threaded through scene-plan/TTS/quiz generation
+    // from here, rather than every stage re-detecting it independently.
+    // Plain English name ("French", "Arabic", ...), not an ISO code — that's
+    // what the prompts actually need to say. Defaults to "English" for any
+    // course generated before this field existed.
+    //
+    // NAMED courseLanguage, NOT "language" — this collection has a text
+    // index (topic: "text" below), and MongoDB reserves a field literally
+    // named "language" on ANY collection with a text index as a per-document
+    // text-search stemmer override. It only accepts its own fixed list of
+    // ~15 stemmer names, which does not include most real languages — a
+    // document with "language": "Arabic" hard-fails every update/insert
+    // with "language override unsupported: Arabic", nothing to do with this
+    // field's actual purpose. Real, hit live the day this field shipped.
+    courseLanguage: { type: String, default: "English" },
     // True if this course was generated using the user's free trial.
     // Kept for analytics and for the frontend's "was this the free trial"
     // feedback-prompt logic — no longer gates lesson generation itself

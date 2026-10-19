@@ -110,7 +110,7 @@ async function maybeTriggerRemedial(roomId) {
       title: plan.title,
       description: plan.description,
       keyPoints: plan.keyPoints,
-    }, course.userId);
+    }, course.userId, course.courseLanguage);
 
     console.log(`[remedial] Room ${roomId}: remedial lesson ${lessonNumber} ready`);
   } catch (err) {

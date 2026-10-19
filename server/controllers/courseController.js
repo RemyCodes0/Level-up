@@ -223,7 +223,7 @@ async function generateCourseHandler(req, res) {
 }
 
 // ── Builds one lesson: scenes → audio → code → save to DB ───────────────────
-async function buildLesson(courseId, lesson, userId = null) {
+async function buildLesson(courseId, lesson, userId = null, language = "English") {
   const MAX_ATTEMPTS = 2;
   const lessonStart = Date.now();
 
@@ -308,7 +308,7 @@ async function buildLesson(courseId, lesson, userId = null) {
   let scenePlan, scenePromises, headerPromise;
   try {
     console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
-    scenePlan = await generateScenePlan(lesson, 3, { userId, courseId });
+    scenePlan = await generateScenePlan(lesson, 3, { userId, courseId, language });
 
     // Scene count/labels are known immediately — initialize a placeholder
     // progress entry per scene right away, before audio or code generation
@@ -357,7 +357,7 @@ async function buildLesson(courseId, lesson, userId = null) {
       } catch (progressErr) {
         console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: failed to save audio progress for scene ${index + 1} (non-fatal):`, progressErr.message);
       }
-    }, { userId, courseId, lessonNumber: lesson.lessonNumber }));
+    }, { userId, courseId, lessonNumber: lesson.lessonNumber, language }));
   } catch (err) {
     const stage = "scenes";
     const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
@@ -543,8 +543,8 @@ async function buildLesson(courseId, lesson, userId = null) {
 // with no queuing. A lesson that fails doesn't block its siblings —
 // buildLesson handles its own errors internally and never rethrows for a
 // content failure, only Promise.allSettled below needs to know it settled.
-async function buildLessonsConcurrently(courseId, lessons, userId = null) {
-  await Promise.allSettled(lessons.map((lesson) => buildLesson(courseId, lesson, userId)));
+async function buildLessonsConcurrently(courseId, lessons, userId = null, language = "English") {
+  await Promise.allSettled(lessons.map((lesson) => buildLesson(courseId, lesson, userId, language)));
 }
 
 // ── Orchestrates the whole course ────────────────────────────────────────────
@@ -581,7 +581,7 @@ async function processCourse(
     // down, AFTER buildLessonsConcurrently, so it can be grounded in what
     // the lessons actually say (their real narration) instead of just this
     // plan's title/description/keyPoints.
-    const { lessons } = await generateCoursePlan(
+    const { lessons, language } = await generateCoursePlan(
       topic,
       null,
       pdfBuffer,
@@ -593,6 +593,7 @@ async function processCourse(
     );
 
     await Course.findByIdAndUpdate(courseId, {
+      courseLanguage: language,
       lessons: lessons.map((l) => ({
         ...l,
         // Every lesson renders now, trial or not — no "locked" status.
@@ -618,7 +619,7 @@ async function processCourse(
     // Build all of this course's lessons one at a time, regardless of trial
     // status — how many that is now depends on the selected tier (or the
     // free trial's fixed 6), not a hardcoded count.
-    await buildLessonsConcurrently(courseId, lessons, userId);
+    await buildLessonsConcurrently(courseId, lessons, userId, language);
 
     // Quiz generation, now that every lesson has (attempted to) build and
     // narrationScript is populated for whichever ones succeeded. Wrapped so
@@ -668,7 +669,7 @@ async function processCourse(
         console.warn(`[${courseId}] Skipping quiz — no lesson produced any narration to build questions from.`);
       } else {
         const quizStart = Date.now();
-        const questions = await generateCourseQuiz(topic, builtCourse.lessons, mcqCount, undefined, { userId, courseId });
+        const questions = await generateCourseQuiz(topic, builtCourse.lessons, mcqCount, undefined, { userId, courseId, language });
         await Course.findByIdAndUpdate(courseId, { questions });
         console.log(`[${courseId}] Quiz stage took ${((Date.now() - quizStart) / 1000).toFixed(1)}s.`);
         if (questions.length < mcqCount) {
@@ -1043,6 +1044,7 @@ async function regenerateQuizHandler(req, res) {
     const questions = await generateCourseQuiz(course.topic, course.lessons, mcqCount, QUIZ_RETRY_ATTEMPTS, {
       userId: req.user._id,
       courseId: req.params.courseId,
+      language: course.courseLanguage,
     });
     // Also lands the course, so a stalled quiz can't leave it "generating"
     // forever once the user has rebuilt the missing piece themselves.
@@ -1257,7 +1259,7 @@ async function retryLessonHandler(req, res) {
     // "generating" forever after a retry, since nothing else ever flips it
     // back — the opposite failure mode from the bug this whole change fixes
     // (pollCourse would never stop, instead of stopping too early).
-    buildLesson(courseId, lessonData, req.user._id)
+    buildLesson(courseId, lessonData, req.user._id, course.courseLanguage)
       .then(() => Course.findByIdAndUpdate(courseId, { status: "ready" }))
       .catch((err) => {
         console.error(`[${courseId}] Retry lesson ${idx + 1} failed:`, err.message);
@@ -1551,7 +1553,7 @@ async function unlockRemainingLessonsHandler(req, res) {
       keyPoints: l.keyPoints,
     }));
 
-    buildLessonsConcurrently(courseId, lessonsToBuild, req.user._id)
+    buildLessonsConcurrently(courseId, lessonsToBuild, req.user._id, course.courseLanguage)
       .then(() => Course.findByIdAndUpdate(courseId, { status: "ready" }))
       .then(() => sendCourseReadyEmail(courseId, req.user._id))
       .catch((err) => {
