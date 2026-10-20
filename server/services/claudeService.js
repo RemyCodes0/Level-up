@@ -247,7 +247,7 @@ const CODE_PROVIDERS = {
     // monotonic here either: "low" measured WORSE than "minimal" (3374
     // reasoning tokens) — another reason not to reach for a tier name
     // assuming it's conservative.
-    extraParams: { reasoning: { effort:"high"},
+    extraParams: { reasoning: { effort:"medium"},
      preferred_min_throughput: {
         p99: 400
       }
