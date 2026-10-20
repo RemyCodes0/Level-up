@@ -11,6 +11,12 @@ const sceneMetaSchema = new mongoose.Schema(
     startFrame: Number,
     endFrame: Number,
     label: String,       // onScreenText — short human-readable identifier
+    // The scene's actual spoken narration — kept here (not just the short
+    // onScreenText label) specifically to power the player's optional
+    // caption/subtitle overlay. Everything else about a scene
+    // (visualDescription, mechanism) still gets discarded after code
+    // generation, same as before this field existed.
+    narration: String,
   },
   { _id: false }
 );

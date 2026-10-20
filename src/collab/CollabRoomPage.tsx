@@ -403,6 +403,7 @@ function WatchTab({
                 durationInFrames={lesson.totalFrames ?? 3600}
                 onEnded={onEnded}
                 onSeekBack={onSeekBack}
+                scenes={lesson.scenes}
               />
             ) : lesson?.status === "failed" ? (
               <div className="cr-grain flex aspect-video flex-col items-center justify-center gap-3 bg-[#07080C] text-center">

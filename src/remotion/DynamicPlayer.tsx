@@ -1,6 +1,6 @@
 import { Player } from "@remotion/player";
 import type { PlayerRef } from "@remotion/player";
-import { Component as ReactComponent, useRef, useEffect, useState, useCallback } from "react";
+import { Component as ReactComponent, useRef, useEffect, useState, useCallback, useMemo } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import {
   Loader2, RefreshCw, Play, Pause,
@@ -59,7 +59,10 @@ interface DynamicPlayerProps {
   // the whole lesson on a permanent error screen. Absent/empty just means
   // "no skip data available" — falls back to the previous permanent-error
   // behavior, never a hard requirement.
-  scenes?: { startFrame: number; endFrame: number }[];
+  // narration powers the optional caption/subtitle overlay (see
+  // CAPTIONS_STORAGE_KEY below) — absent/null for a scene with no narration
+  // on record, which just means no caption shows for that stretch.
+  scenes?: { startFrame: number; endFrame: number; narration?: string | null }[];
   // One-shot signal for a caller-driven "move to the next lesson" transition
   // (the "Up next" overlay's Play next button, or its auto-advance
   // countdown — see VideoPlayer in AiTutor.tsx) — a mutable ref rather than
@@ -75,6 +78,94 @@ interface DynamicPlayerProps {
 const FPS = 30;
 const SKIP_SECONDS = 10;
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+// One global on/off preference across every lesson/course — same as
+// YouTube remembering your CC setting between videos, not a per-video
+// toggle the user has to repeat.
+const CAPTIONS_STORAGE_KEY = "lu-captions-enabled";
+// A sentence longer than this still gets split further by word count —
+// purely a safety cap so one caption line never runs on indefinitely (a
+// single very long sentence would otherwise overflow the fixed-height row).
+// Normal chunking is by SENTENCE, not a flat word count — see
+// splitNarrationIntoGroups below.
+const CAPTION_MAX_WORDS_PER_CHUNK = 12;
+// Tight line height for the two-row caption ticker — just enough for the
+// sm:text-base line at the larger breakpoint without clipping it; kept
+// small on purpose so the two lines sit close together instead of with a
+// visible gap between them.
+const CAPTION_ROW_HEIGHT = 26;
+
+interface CaptionChunk {
+  text: string;
+  startFrame: number;
+  endFrame: number;
+}
+
+// Same sentence-boundary-with-protected-dots approach as ttsService.js's
+// splitIntoTtsChunks (decimals like "5.4" and abbreviations like "e.g."
+// must not be read as sentence ends) — duplicated here in miniature rather
+// than imported, since this runs in the browser and that one's server-only.
+const CAPTION_ABBREVIATIONS = ["e.g.", "i.e.", "etc.", "vs.", "approx.", "Dr.", "Mr.", "Mrs.", "Ms.", "Prof.", "St.", "No."];
+const CAPTION_DOT_SENTINEL = "\u0000dot\u0000";
+
+function protectCaptionDots(text: string): string {
+  let out = text.replace(/(\d)\.(?=\d)/g, `$1${CAPTION_DOT_SENTINEL}`);
+  for (const abbr of CAPTION_ABBREVIATIONS) {
+    out = out.split(abbr).join(abbr.replace(/\./g, CAPTION_DOT_SENTINEL));
+    const lower = abbr.toLowerCase();
+    if (lower !== abbr) out = out.split(lower).join(lower.replace(/\./g, CAPTION_DOT_SENTINEL));
+  }
+  return out;
+}
+const restoreCaptionDots = (text: string) => text.split(CAPTION_DOT_SENTINEL).join(".");
+
+// Splits narration the way a listener actually hears it pause — at sentence
+// boundaries (., !, ?) — instead of an arbitrary fixed word count. Only a
+// sentence that runs past CAPTION_MAX_WORDS_PER_CHUNK gets split further,
+// and even then by word count as a last resort, not as the normal rule.
+function splitNarrationIntoGroups(narration: string): string[] {
+  const protectedText = protectCaptionDots(narration);
+  const sentences = (protectedText.match(/[^.!?]+[.!?]*\s*/g) || [protectedText])
+    .map((s) => restoreCaptionDots(s.trim()))
+    .filter(Boolean);
+
+  const groups: string[] = [];
+  for (const sentence of sentences) {
+    const words = sentence.split(/\s+/).filter(Boolean);
+    if (words.length <= CAPTION_MAX_WORDS_PER_CHUNK) {
+      groups.push(sentence);
+      continue;
+    }
+    for (let i = 0; i < words.length; i += CAPTION_MAX_WORDS_PER_CHUNK) {
+      groups.push(words.slice(i, i + CAPTION_MAX_WORDS_PER_CHUNK).join(" "));
+    }
+  }
+  return groups;
+}
+
+// Splits every scene's narration into sentence-shaped chunks, each given a
+// slice of its scene's [startFrame, endFrame) proportional to its own word
+// count (a longer sentence gets more screen time than a short one, rather
+// than every chunk getting a flat equal share).
+function buildCaptionChunks(scenes: { startFrame: number; endFrame: number; narration?: string | null }[]): CaptionChunk[] {
+  const chunks: CaptionChunk[] = [];
+  for (const scene of scenes) {
+    const narration = scene.narration || "";
+    const totalWords = narration.trim().split(/\s+/).filter(Boolean).length;
+    if (totalWords === 0) continue;
+    const sceneSpan = scene.endFrame - scene.startFrame;
+    const groups = splitNarrationIntoGroups(narration);
+    let frameCursor = scene.startFrame;
+    groups.forEach((text, i) => {
+      const isLast = i === groups.length - 1;
+      const groupWords = text.split(/\s+/).filter(Boolean).length;
+      const share = groupWords / totalWords;
+      const end = isLast ? scene.endFrame : Math.min(scene.endFrame, frameCursor + Math.max(1, Math.round(sceneSpan * share)));
+      chunks.push({ text, startFrame: frameCursor, endFrame: end });
+      frameCursor = end;
+    });
+  }
+  return chunks;
+}
 // How long controls stay visible after the last tap/move, while playing.
 const AUTO_HIDE_MS = 3000;
 // How long a render-time crash's countdown-to-auto-skip runs for, in
@@ -192,6 +283,9 @@ function VideoControls({
   visible,
   isFullscreen,
   onToggleFullscreen,
+  captionsAvailable,
+  captionsEnabled,
+  onToggleCaptions,
 }: {
   playerRef: React.RefObject<PlayerRef | null>;
   durationInFrames: number;
@@ -203,6 +297,9 @@ function VideoControls({
   visible: boolean;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
+  captionsAvailable: boolean;
+  captionsEnabled: boolean;
+  onToggleCaptions: () => void;
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -333,6 +430,30 @@ function VideoControls({
 
         <div className="flex-1" />
 
+        {/* Captions toggle — a literal "CC" badge, same as YouTube's, not an
+            abstract icon: the lucide Captions/CaptionsOff glyphs are subtle
+            enough at this button size (~14px) that they were effectively
+            invisible/unrecognizable to a real viewer (reported live — the
+            button was THERE and clickable, just not visually legible as
+            "captions"). Hidden entirely when this lesson has no narration on
+            record to caption (older courses generated before this field
+            existed), rather than showing a button that does nothing. */}
+        {captionsAvailable && (
+          <button
+            onClick={onToggleCaptions}
+            className={`flex h-5 items-center justify-center rounded border px-1 text-[10px] font-bold tracking-tight transition-colors sm:h-5.5 sm:text-[11px] ${
+              captionsEnabled
+                ? "border-blue-400 bg-blue-400 text-[#0A0B10]"
+                : "border-white/40 text-white/70 hover:border-white hover:text-white"
+            }`}
+            aria-label={captionsEnabled ? "Turn off captions" : "Turn on captions"}
+            aria-pressed={captionsEnabled}
+            title="Captions"
+          >
+            CC
+          </button>
+        )}
+
         {/* Loop toggle */}
         <button
           onClick={() => setLoop(!loop)}
@@ -397,6 +518,48 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Captions — one global on/off preference (see CAPTIONS_STORAGE_KEY),
+  // read lazily so a server-rendered/first-paint mismatch never happens
+  // (this component only ever runs client-side anyway, inside the Player).
+  const [captionsEnabled, setCaptionsEnabled] = useState(() => {
+    try {
+      return localStorage.getItem(CAPTIONS_STORAGE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const toggleCaptions = useCallback(() => {
+    setCaptionsEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(CAPTIONS_STORAGE_KEY, String(next));
+      } catch {
+        // Private browsing / storage disabled — the toggle still works for
+        // the rest of this session, it just won't be remembered next time.
+      }
+      return next;
+    });
+  }, []);
+  const captionChunks = useMemo(() => (scenes ? buildCaptionChunks(scenes) : []), [scenes]);
+  const captionsAvailable = captionChunks.length > 0;
+  const [captionFrame, setCaptionFrame] = useState(0);
+  const activeChunkIndex = captionsEnabled
+    ? captionChunks.findIndex((c) => captionFrame >= c.startFrame && captionFrame < c.endFrame)
+    : -1;
+  const currentCaption = activeChunkIndex >= 0 ? captionChunks[activeChunkIndex] : null;
+
+  // Only subscribes to frame updates while captions are actually on and
+  // this lesson has narration to show — no extra per-frame state churn for
+  // every viewer who leaves captions off (the default).
+  useEffect(() => {
+    if (!captionsEnabled || !captionsAvailable) return;
+    const player = playerRef.current;
+    if (!player) return;
+    const onFrame = (e: { detail: { frame: number } }) => setCaptionFrame(e.detail.frame);
+    player.addEventListener("frameupdate", onFrame as any);
+    return () => player.removeEventListener("frameupdate", onFrame as any);
+  }, [captionsEnabled, captionsAvailable, Component]);
 
   // Tracks fullscreen state by watching the actual document, since we now
   // fullscreen containerRef directly (via requestFullscreen/exitFullscreen)
@@ -1034,6 +1197,46 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
           leveluppedu.app
         </span>
       </div>
+      {/* Caption overlay — a sibling of VideoControls, not a descendant, so
+          it stays visible even while the controls bar auto-hides during
+          playback (same as YouTube: captions don't fade with the controls).
+          A two-row scrolling window, not a single swapped block: every chunk
+          is laid out as its own fixed-height line in one tall column, and
+          the column's own translateY animates by one row each time
+          activeChunkIndex advances — the just-finished line scrolls up and
+          out while the next one scrolls up INTO view underneath it, in one
+          continuous motion, rather than each line popping in/out on its own. */}
+      {currentCaption && (
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-16 sm:bottom-20 flex justify-center px-4"
+          aria-live="polite"
+        >
+          {/* Clips to exactly 2 rows — transparent itself; the black
+              background lives on each row's own inline span below, so it
+              hugs just that line's words instead of spanning a fixed-width
+              bar. */}
+          <div className="overflow-hidden" style={{ height: CAPTION_ROW_HEIGHT * 2 }}>
+            <div
+              className="flex flex-col items-center transition-transform duration-300 ease-out"
+              style={{ transform: `translateY(-${activeChunkIndex * CAPTION_ROW_HEIGHT}px)` }}
+            >
+              {captionChunks.map((chunk, i) => (
+                <div key={i} className="flex items-center justify-center" style={{ height: CAPTION_ROW_HEIGHT }}>
+                  <span
+                    className={`inline-block max-w-[85vw] rounded px-2 py-0.5 text-center text-sm font-medium leading-tight sm:text-base ${
+                      i === activeChunkIndex ? "text-white" : "text-white/40"
+                    }`}
+                    style={{ background: "rgba(0,0,0,0.75)", textShadow: "0 1px 2px rgba(0,0,0,0.6)" }}
+                  >
+                    {chunk.text}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <VideoControls
         playerRef={playerRef}
         durationInFrames={durationInFrames}
@@ -1045,6 +1248,9 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
         visible={controlsVisible}
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
+        captionsAvailable={captionsAvailable}
+        captionsEnabled={captionsEnabled}
+        onToggleCaptions={toggleCaptions}
       />
 
       {/* Contained-scene-crash pill — the quiet replacement for the old red

@@ -21,6 +21,7 @@ interface SharedLesson {
   keyPoints: string[];
   code: string | null;
   totalFrames: number | null;
+  scenes?: { startFrame: number; endFrame: number; narration?: string | null }[];
 }
 interface SharedQuestion {
   id: number;
@@ -298,6 +299,7 @@ export default function SharedCoursePage() {
                         code={lesson.code}
                         durationInFrames={lesson.totalFrames ?? 3600}
                         onEnded={() => setWatched((prev) => new Set(prev).add(activeLesson))}
+                        scenes={lesson.scenes}
                       />
                     ) : (
                       <div className="sc-grain flex aspect-video flex-col items-center justify-center gap-2 bg-[#07080C] text-center">

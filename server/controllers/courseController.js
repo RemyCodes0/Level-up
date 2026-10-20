@@ -466,7 +466,14 @@ async function buildLesson(courseId, lesson, userId = null, language = "English"
       const sceneMeta = measuredScenes.map((s, i) => {
         const startFrame = cursor;
         cursor += s.durationInFrames;
-        return { index: i, startFrame, endFrame: cursor, label: s.onScreenText || `Scene ${i + 1}` };
+        return {
+          index: i,
+          startFrame,
+          endFrame: cursor,
+          label: s.onScreenText || `Scene ${i + 1}`,
+          // Powers the player's optional caption overlay — see sceneMetaSchema.
+          narration: s.narration || null,
+        };
       });
 
       // measuredScenes still carries each scene's full spoken `.narration`
@@ -974,7 +981,7 @@ async function getSharedCourseHandler(req, res) {
 // it. The frontend (AiTutor.tsx's restoreEntry) lazily fetches the full
 // course — code included — via getCourseStatus only when a course is
 // actually opened, not on every initial sidebar load.
-const COURSE_LIST_EXCLUDED_FIELDS = "-lessons.code -lessons.narrationScript -lessons.audioUrl -lessons.sceneProgress";
+const COURSE_LIST_EXCLUDED_FIELDS = "-lessons.code -lessons.narrationScript -lessons.audioUrl -lessons.sceneProgress -lessons.scenes.narration";
 
 async function listCoursesHandler(req, res) {
   try {

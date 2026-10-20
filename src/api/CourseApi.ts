@@ -55,6 +55,9 @@ export interface SceneMetaItem {
   startFrame: number;
   endFrame: number;
   label: string;
+  // The scene's actual spoken narration — powers DynamicPlayer's optional
+  // caption overlay. null for a course generated before this field existed.
+  narration?: string | null;
 }
 
 export interface LessonFromAPI {
