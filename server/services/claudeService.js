@@ -249,7 +249,7 @@ const CODE_PROVIDERS = {
     // assuming it's conservative.
     extraParams: { reasoning: { effort:"medium"},
      preferred_min_throughput: {
-        p99: 400
+        p50: 400
       }
     },
     maxTokens: 500000,
