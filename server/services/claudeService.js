@@ -2238,6 +2238,17 @@ each scene that needs it, or as an S{N}_-prefixed const if only your scenes use 
    movement. Drive it with Math.sin(frame / k), Math.cos(frame / k), or (frame * speed) % 360.
 10. Animate the EXACT mechanism described for the scene: start state → end state → the visible
     action between them. Generic drifting particles do not count as the mechanism.
+10b. PACE IT TO THE NARRATION, NOT JUST THE DURATION (explicit request, 2026-10-21 — tighter
+    sync between what's being said and what's moving is the whole point of this rule). The
+    scene spec below includes its actual narration text. Mentally split it into sentences, in
+    the order they're spoken, and estimate each one's position in the scene by its share of the
+    TOTAL WORD COUNT (a sentence starting at word 20 of 50 starts at roughly the 40% mark). The
+    driver's visible sub-beats should reach their own key moments at roughly that SAME
+    proportional position in durationInFrames — if the sentence naming the pivotal change is
+    the 2nd of 3 (roughly the 35-70% word range), the matching visual change should peak in
+    that same ~35-70% window of the frame count, not bunched at the very start or end
+    regardless of when it's actually described. A multi-step mechanism gets each of its
+    sub-actions paced to the sentence that names it, not evenly spread by default.
 11. Minimum bar per scene: 3+ animated elements, one spring() entrance, one continuous sin/cos
     motion, and one emphasis glow. A static or near-empty scene with no real diagram is
     rejected — the fixed title band is not a substitute for an actual animation.
@@ -2798,7 +2809,8 @@ visualType: ${s.visualType}${s.domainSkill && s.domainSkill !== "none" ? `
 domainSkill: ${s.domainSkill}` : ""}
 onScreenText (context only — no separate title/caption to render, informs what the diagram should be doing): ${s.onScreenText}
 ${mechanismBlock}
-visualDescription: ${s.visualDescription}`;
+visualDescription: ${s.visualDescription}
+narration (the exact words spoken during this scene, in order — use this to PACE the mechanism's sub-beats against durationInFrames, see rule 10b): ${s.narration || "(not available)"}`;
     })
     .join("\n\n");
 
