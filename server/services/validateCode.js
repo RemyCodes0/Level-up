@@ -327,6 +327,82 @@ function checkSpringFpsCalls(ast) {
   return errors;
 }
 
+// Every id inside an SVG <defs>-style element (gradient/filter/mask/pattern)
+// must be prefixed with ITS OWN scene's number (rule 13 in both code-gen
+// prompts: id="s3-glow", referenced as url(#s3-glow)) — scenes generate in
+// PARALLEL, blind to each other's actual ids, so an unprefixed/mismatched id
+// silently collides with another scene's and renders the WRONG gradient/
+// filter for one of them at runtime. Reported live (2026-10-23) as exactly
+// this symptom: a stray, flickering duplicate shape/line that "comes and
+// goes like a glitch" — the prompt rule already said not to do this, but
+// nothing enforced it, so this turns it into a hard, retried validation
+// failure instead of a maybe-followed instruction.
+//
+// Works for both a single-scene fragment and a multi-scene chunk file:
+// each JSX element found is attributed to whichever top-level SceneN
+// declaration actually contains it (walking up past any nested helper
+// functions), and checked against THAT scene's own derived prefix — never
+// a single prefix for the whole file.
+const SVG_DEF_ELEMENTS = new Set([
+  "linearGradient", "radialGradient", "filter", "mask", "clipPath", "pattern",
+]);
+
+function checkDefsIdPrefix(ast) {
+  const errors = [];
+
+  traverse(ast, {
+    JSXOpeningElement(path) {
+      const el = path.node;
+      const elName = el.name.type === "JSXIdentifier" ? el.name.name : null;
+      if (!elName || !SVG_DEF_ELEMENTS.has(elName)) return;
+
+      const idAttr = el.attributes.find(
+        (a) => a.type === "JSXAttribute" && a.name.type === "JSXIdentifier" && a.name.name === "id"
+      );
+      if (!idAttr || !idAttr.value) return;
+
+      // Only a plain string literal is checkable — a template literal or
+      // other expression could still resolve to a correctly-prefixed
+      // string, so it's skipped rather than guessed at.
+      let idValue = null;
+      if (idAttr.value.type === "StringLiteral") idValue = idAttr.value.value;
+      else if (idAttr.value.type === "JSXExpressionContainer" && idAttr.value.expression.type === "StringLiteral") {
+        idValue = idAttr.value.expression.value;
+      }
+      if (idValue === null) return;
+
+      // Walk up to the top-level Program-body statement this JSX actually
+      // lives inside (handles any depth of nested helper functions — it
+      // still bottoms out at exactly one top-level statement).
+      let topLevel = path;
+      while (topLevel.parentPath && !topLevel.parentPath.isProgram()) {
+        topLevel = topLevel.parentPath;
+      }
+      if (!topLevel.parentPath || !topLevel.parentPath.isProgram()) return;
+
+      let sceneName = null;
+      if (topLevel.isFunctionDeclaration() && topLevel.node.id) {
+        sceneName = topLevel.node.id.name;
+      } else if (topLevel.isVariableDeclaration()) {
+        const decl = topLevel.node.declarations[0];
+        if (decl && decl.id.type === "Identifier") sceneName = decl.id.name;
+      }
+      const match = sceneName && sceneName.match(/^Scene(\d+)$/);
+      if (!match) return; // not inside a SceneN declaration (shared data const, etc.) — not this check's concern
+
+      const expectedPrefix = `s${match[1]}-`;
+      if (!idValue.startsWith(expectedPrefix)) {
+        const loc = el.loc ? ` (line ${el.loc.start.line})` : "";
+        errors.push(
+          `${sceneName}: <${elName} id="${idValue}">${loc} is not prefixed with "${expectedPrefix}" — every <defs> id must be unique per scene (e.g. id="${expectedPrefix}glow"), since scenes generate in parallel with no visibility into each other's ids`
+        );
+      }
+    },
+  });
+
+  return errors;
+}
+
 // Only imports from `allowedSources` are permitted. An empty array means NO
 // imports are allowed at all (used for scene fragments — everything they
 // need is already in scope from the header).
@@ -879,6 +955,17 @@ function validateGeneratedCode(tsxCode, componentName, expectedTotalFrames) {
     throw new Error(`Invalid spring() usage:\n${springErrors.join("\n")}`);
   }
 
+  // The one place this matters MOST: every scene from every chunk is
+  // combined into ONE file here, so this is where a TRUE cross-chunk id
+  // collision (two separately-generated chunks both picking "glow") is
+  // actually visible — validateChunkFragment below only ever sees one
+  // chunk's own scenes at a time and can't catch a collision with a
+  // DIFFERENT chunk's scene.
+  const defsIdErrors = checkDefsIdPrefix(ast);
+  if (defsIdErrors.length > 0) {
+    throw new Error(`Unprefixed/colliding <defs> id(s):\n${defsIdErrors.join("\n")}`);
+  }
+
   const importErrors = checkImportRestriction(ast, ["react", "remotion"]);
   if (importErrors.length > 0) {
     throw new Error(importErrors.join("\n"));
@@ -1322,6 +1409,11 @@ function validateSceneFragment(code, sceneName, { headerAvailableNames = [] } = 
     throw new Error(`Invalid spring() usage in ${sceneName}:\n${springErrors.join("\n")}`);
   }
 
+  const defsIdErrors = checkDefsIdPrefix(ast);
+  if (defsIdErrors.length > 0) {
+    throw new Error(`Unprefixed/colliding <defs> id(s) in ${sceneName}:\n${defsIdErrors.join("\n")}`);
+  }
+
   const declared = checkTopLevelDeclarationNames(ast);
   if (declared.length !== 1 || declared[0].name !== sceneName) {
     throw new Error(
@@ -1417,6 +1509,16 @@ function validateChunkFragment(code, expectedSceneNames, { availableNames = [] }
   const springErrors = checkSpringFpsCalls(ast);
   if (springErrors.length > 0) {
     throw new Error(`Invalid spring() usage in chunk:\n${springErrors.join("\n")}`);
+  }
+
+  // Catches a collision WITHIN this chunk (e.g. two of the chunk's own
+  // scenes both reusing "glow") — a cross-CHUNK collision (this chunk vs. a
+  // DIFFERENT, separately-generated chunk) isn't visible here since each
+  // chunk is validated in isolation; that case is caught by the same check
+  // in validateGeneratedCode once every chunk is stitched together.
+  const defsIdErrors = checkDefsIdPrefix(ast);
+  if (defsIdErrors.length > 0) {
+    throw new Error(`Unprefixed/colliding <defs> id(s) in chunk:\n${defsIdErrors.join("\n")}`);
   }
 
   // Every requested scene must be declared. Extra top-level declarations ARE
