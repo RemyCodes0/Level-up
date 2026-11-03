@@ -235,7 +235,7 @@ const CODE_PROVIDERS = {
   // that host is under sustained load.
   deepseek41: {
     client: openRouterClient,
-    model: "deepseek/deepseek-v4.1-flash:floor",
+    model: "anthropic/claude-haiku-5.5:nitro",
     providerName: "deepseek41",
     // Was {effort: "minimal"} — drifted out of sync with this entry's OWN
     // comment above, which documents the decision as genuine {enabled:
@@ -247,8 +247,10 @@ const CODE_PROVIDERS = {
     // monotonic here either: "low" measured WORSE than "minimal" (3374
     // reasoning tokens) — another reason not to reach for a tier name
     // assuming it's conservative.
-    extraParams: { reasoning: { effort:"minimal"},
-    
+    extraParams: { reasoning: { effort:"medium"},
+     preferred_min_throughput: {
+        p50: 400
+      }
     },
     maxTokens: 50000,
     keyEnv: "OPENROUTER_API_KEY",
