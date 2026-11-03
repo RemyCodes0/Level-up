@@ -519,18 +519,14 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Captions — ON by default (explicit request, 2026-10-21), one global
-  // preference (see CAPTIONS_STORAGE_KEY) read lazily so a server-rendered/
-  // first-paint mismatch never happens (this component only ever runs
-  // client-side anyway, inside the Player). No stored value yet = default
-  // on; a stored value (from the user having actually toggled it, either
-  // way) always wins over the default from then on.
+  // Captions — one global on/off preference (see CAPTIONS_STORAGE_KEY),
+  // read lazily so a server-rendered/first-paint mismatch never happens
+  // (this component only ever runs client-side anyway, inside the Player).
   const [captionsEnabled, setCaptionsEnabled] = useState(() => {
     try {
-      const stored = localStorage.getItem(CAPTIONS_STORAGE_KEY);
-      return stored === null ? true : stored === "true";
+      return localStorage.getItem(CAPTIONS_STORAGE_KEY) === "true";
     } catch {
-      return true;
+      return false;
     }
   });
   const toggleCaptions = useCallback(() => {

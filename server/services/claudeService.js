@@ -2,7 +2,7 @@ const OpenAI = require("openai");
 const Anthropic = require("@anthropic-ai/sdk");
 const pdfParse = require("pdf-parse");
 const JSZip = require("jszip");
-const { validateGeneratedCode, validateHeaderFragment, validateChunkFragment, validateSceneFragment, getHeaderExposedNames, compactHeaderForPrompt } = require("./validateCode");
+const { validateGeneratedCode, validateHeaderFragment, validateChunkFragment, validateSceneFragment, getHeaderExposedNames, compactHeaderForPrompt, nestExtraTopLevelDeclarations } = require("./validateCode");
 const { LESSON_COMPONENT_LIBRARY_SOURCE, LESSON_COMPONENT_NAMES } = require("./lessonComponentLibrary");
 const {
   extractReusableCandidates,
@@ -192,9 +192,9 @@ const CODE_PROVIDERS = {
   // treated as different strings).
   deepseek: {
     client: openRouterClient,
-    model: "z-ai/glm-5.3-flashx:nitro",
+    model: "deepseek/deepseek-v4.1-flash-1017:nitro",
     providerName: "deepseek",
-    extraParams:  { reasoning: { effort: "high"},
+    extraParams:  { reasoning: { effort: "minimal"},
       preferred_min_throughput: {
         p99: 280
       },
@@ -235,7 +235,7 @@ const CODE_PROVIDERS = {
   // that host is under sustained load.
   deepseek41: {
     client: openRouterClient,
-    model: "anthropic/claude-haiku-5.5:nitro",
+    model: "deepseek/deepseek-v4.1-flash:floor",
     providerName: "deepseek41",
     // Was {effort: "minimal"} — drifted out of sync with this entry's OWN
     // comment above, which documents the decision as genuine {enabled:
@@ -247,12 +247,10 @@ const CODE_PROVIDERS = {
     // monotonic here either: "low" measured WORSE than "minimal" (3374
     // reasoning tokens) — another reason not to reach for a tier name
     // assuming it's conservative.
-    extraParams: { reasoning: { effort: "medium"},
-     preferred_min_throughput: {
-        p50: 400
-      }
+    extraParams: { reasoning: { effort:"minimal"},
+    
     },
-    maxTokens: 500000,
+    maxTokens: 50000,
     keyEnv: "OPENROUTER_API_KEY",
   },
   // Model-quality spike (see LESSON_CODE_MODEL=glm53): GLM 5.3 Flash,
@@ -1333,45 +1331,6 @@ function buildLevelGuidance(level) {
 
 const MAX_PDF_TEXT_CHARS = 6000;
 
-// Deterministic (no LLM involved) fallback for detecting a non-Latin
-// script in uploaded material — real incident, 2026-10-26: a PDF of Arabic
-// course material generated in English instead of Arabic. Tested pdf-parse
-// directly against a synthetic Arabic PDF: it DOES extract real Arabic
-// Unicode text, but with RTL line-reflow noise (word fragments landing out
-// of line order at wrap points) — enough mess, apparently, to make the
-// model's own "detect the input language and write in it" judgment call
-// unreliable for this case, even though the language signal is technically
-// present. This counts Unicode codepoints by script block instead of
-// asking the model to infer it — simple, but exact, and immune to the kind
-// of reflow noise that trips up inference. Only flags a script when it
-// clearly dominates the lettered content (not just a stray quoted term),
-// so normal Latin-script input (English, French, Spanish, ...) is left
-// alone exactly as before — the model's own inference already works fine
-// there and this isn't trying to replace it.
-const SCRIPT_RANGES = [
-  { name: "Arabic", re: /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/g },
-  { name: "Hebrew", re: /[֐-׿]/g },
-  // Checked before plain "Chinese" below — Japanese text mixes Han
-  // characters with its own Hiragana/Katakana syllabaries, so presence of
-  // either is a more specific signal than Han characters alone.
-  { name: "Japanese", re: /[぀-ゟ゠-ヿ]/g },
-  { name: "Korean", re: /[가-힯ᄀ-ᇿ]/g },
-  { name: "Chinese", re: /[一-鿿]/g },
-  { name: "Russian", re: /[Ѐ-ӿ]/g },
-  { name: "Hindi", re: /[ऀ-ॿ]/g },
-  { name: "Thai", re: /[฀-๿]/g },
-];
-function detectNonLatinScript(text) {
-  if (!text) return null;
-  const letters = text.match(/\p{L}/gu);
-  if (!letters || letters.length < 20) return null; // too little text to judge reliably
-  for (const { name, re } of SCRIPT_RANGES) {
-    const matches = text.match(re);
-    if (matches && matches.length / letters.length > 0.3) return name;
-  }
-  return null;
-}
-
 // A .pptx is a ZIP of XML parts; slide text lives in ppt/slides/slideN.xml as
 // <a:t>...</a:t> runs. Extracted text feeds the same plain-text course-plan
 // prompt used for PDFs/pasted text.
@@ -1469,19 +1428,10 @@ Rules:
     );
   }
 
-  // See detectNonLatinScript's own comment — stated as a flat fact rather
-  // than left for the model to infer, since inference is exactly what
-  // failed in the reported incident.
-  const detectedScript = detectNonLatinScript(effectivePdfText || topic);
-  const languageOverride = detectedScript
-    ? `\n\nDETECTED INPUT LANGUAGE: ${detectedScript}. The text above is confirmed (by direct character analysis, not a guess) to be written in ${detectedScript} — write the ENTIRE course plan (every title, every description, and the top-level "language" field) in ${detectedScript}, regardless of any noise, line-reflow artifacts, or formatting irregularities in the extracted text above. Do not translate to English.`
-    : "";
-
   const basePrompt = `
 You are an expert educational content designer.
 
 ${context}
-${languageOverride}
 
 Generate a ${lessonCount}-lesson course plan.
 
@@ -1537,22 +1487,6 @@ ${rules}
   });
 
   if (truncated) plan.__truncatedInput = true;
-  // Not validated/retried like the lessons shape above — a missing/odd
-  // value here isn't worth burning an attempt over. Default to English,
-  // the behavior every course had before this field existed.
-  if (!plan.language || typeof plan.language !== "string") plan.language = "English";
-  // Safety net for the exact failure this was reported for (2026-10-26): an
-  // Arabic PDF generated its course in English. Direct character analysis
-  // (detectNonLatinScript) is a higher-confidence signal than the model's
-  // own self-reported "language" field for a clearly non-Latin script — if
-  // they disagree, trust the analysis, not an inference that's already
-  // been observed defaulting to English on noisy/reflowed extracted text.
-  if (detectedScript && plan.language.toLowerCase() !== detectedScript.toLowerCase()) {
-    console.warn(
-      `  [plan] model reported language "${plan.language}" but detected script was "${detectedScript}" — overriding to ${detectedScript}.`
-    );
-    plan.language = detectedScript;
-  }
   return plan;
 }
 
@@ -2302,17 +2236,6 @@ each scene that needs it, or as an S{N}_-prefixed const if only your scenes use 
    movement. Drive it with Math.sin(frame / k), Math.cos(frame / k), or (frame * speed) % 360.
 10. Animate the EXACT mechanism described for the scene: start state → end state → the visible
     action between them. Generic drifting particles do not count as the mechanism.
-10b. PACE IT TO THE NARRATION, NOT JUST THE DURATION (explicit request, 2026-10-21 — tighter
-    sync between what's being said and what's moving is the whole point of this rule). The
-    scene spec below includes its actual narration text. Mentally split it into sentences, in
-    the order they're spoken, and estimate each one's position in the scene by its share of the
-    TOTAL WORD COUNT (a sentence starting at word 20 of 50 starts at roughly the 40% mark). The
-    driver's visible sub-beats should reach their own key moments at roughly that SAME
-    proportional position in durationInFrames — if the sentence naming the pivotal change is
-    the 2nd of 3 (roughly the 35-70% word range), the matching visual change should peak in
-    that same ~35-70% window of the frame count, not bunched at the very start or end
-    regardless of when it's actually described. A multi-step mechanism gets each of its
-    sub-actions paced to the sentence that names it, not evenly spread by default.
 11. Minimum bar per scene: 3+ animated elements, one spring() entrance, one continuous sin/cos
     motion, and one emphasis glow. A static or near-empty scene with no real diagram is
     rejected — the fixed title band is not a substitute for an actual animation.
@@ -2333,13 +2256,6 @@ each scene that needs it, or as an S{N}_-prefixed const if only your scenes use 
       WRONG: interpolate(frame, [0, dur], [10, 50, 90])
       RIGHT: interpolate(frame, [0, 60, 150], [10, 50, 90], CLAMP)
 16. Clamp entrance and exit animations with CLAMP. Continuous sin/cos motion does not need it.
-    THIS IS NOT OPTIONAL POLISH — an un-clamped interpolate() whose inputRange is a short local
-    window (the entrance ~[0,30] or exit ~[duration-30,duration] windows from rule 7, or any
-    other sub-range shorter than the scene) keeps EXTRAPOLATING past its intended output once
-    frame moves outside that window for the REST of the scene — a line/shape computed from it
-    overshoots, snaps, or flickers in and out for as long as the scene keeps playing. Reported
-    live as exactly this: a stray duplicate line that "comes and goes like a glitch." If
-    inputRange doesn't span the scene's FULL duration, add CLAMP — no exceptions.
 17. Guard against NaN in SVG attributes: no division by a value that can reach 0, and filter
     NaN out of any generated point list before rendering.
 18. Route every final x / y / cx / cy / top / left through clampPos() against SAFE as the last
@@ -2880,8 +2796,7 @@ visualType: ${s.visualType}${s.domainSkill && s.domainSkill !== "none" ? `
 domainSkill: ${s.domainSkill}` : ""}
 onScreenText (context only — no separate title/caption to render, informs what the diagram should be doing): ${s.onScreenText}
 ${mechanismBlock}
-visualDescription: ${s.visualDescription}
-narration (the exact words spoken during this scene, in order — use this to PACE the mechanism's sub-beats against durationInFrames, see rule 10b): ${s.narration || "(not available)"}`;
+visualDescription: ${s.visualDescription}`;
     })
     .join("\n\n");
 
@@ -3917,7 +3832,7 @@ async function patchSceneInChunk(lesson, targetSceneName, targetScene, brokenChu
     throw new Error(`Patch for ${targetSceneName} output wasn't code.`);
   }
 
-  const fixed = autoFixCode(code, { totalFrames: targetScene.durationInFrames });
+  const fixed = nestExtraTopLevelDeclarations(autoFixCode(code, { totalFrames: targetScene.durationInFrames }), targetSceneName);
   const validated = validateSceneFragment(fixed, targetSceneName, { headerAvailableNames: availableNames });
 
   const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
@@ -4317,7 +4232,7 @@ async function patchSceneFromRuntimeError(lesson, componentName, fullCode, scene
       }
 
       const patchedSceneCode = applyPatchBlocks(currentSceneCode, blocks);
-      const fixed = autoFixCode(patchedSceneCode, { totalFrames: durationInFrames });
+      const fixed = nestExtraTopLevelDeclarations(autoFixCode(patchedSceneCode, { totalFrames: durationInFrames }), targetSceneName);
       const validated = validateSceneFragment(fixed, targetSceneName, { headerAvailableNames });
 
       const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);

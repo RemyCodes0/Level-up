@@ -28,6 +28,7 @@ const User = require("../models/User");
 const QuizAttempt = require("../models/QuizAttempt");
 const AiUsageLog = require("../models/AiUsageLog");
 const { grantCredits } = require("../services/creditService");
+const { getFreeMode, rememberDeletedFreeCourse } = require("../services/freeModeService");
 const sendEmail = require("../services/emailService");
 
 // Same fallback/env-var convention as authController.js's
@@ -197,7 +198,7 @@ async function generateCourseHandler(req, res) {
       questions: [],
     });
 
-    if (!tierSnapshot.tier) {
+    if (!tierSnapshot.tier && !req.freeMode) {
       // Legacy no-tier caller — checkCredits didn't spend anything for this
       // path, so deduct the flat 1 credit here exactly as this always did.
       await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
@@ -1159,6 +1160,7 @@ async function deleteCourseById(course) {
     )
   );
 
+  await rememberDeletedFreeCourse(course);
   await Course.deleteOne({ _id: course._id });
 }
 
@@ -1517,8 +1519,9 @@ async function unlockRemainingLessonsHandler(req, res) {
       return res.status(400).json({ error: "This course has already been unlocked" });
     }
 
+    const { enabled: freeModeOn } = await getFreeMode();
     const user = await User.findById(req.user._id).select("courseCredits");
-    if (!user || user.courseCredits < 1) {
+    if (!user || (!freeModeOn && user.courseCredits < 1)) {
       return res.status(402).json({
         error: "no_credits",
         message: "You need at least 1 course credit to unlock the rest of this course.",
@@ -1532,7 +1535,7 @@ async function unlockRemainingLessonsHandler(req, res) {
     // pollCourse STOPS polling when status === "ready". Without flipping this
     // back to "generating", polling would quit immediately and the user
     // would have to refresh to see lessons 2-6 appear.
-    await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
+    if (!freeModeOn) await User.findByIdAndUpdate(req.user._id, { $inc: { courseCredits: -1 } });
     await Course.findByIdAndUpdate(courseId, { isFreeTrialCourse: false, status: "generating" });
 
     // Mark lessons 2-6 as rendering so the frontend shows the loading state

@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const User = require("../models/User");
 const { getSpendableBalance } = require("../services/creditService");
+const { getFreeMode, getFreeUsage } = require("../services/freeModeService");
 
 // ── Config ────────────────────────────────────────────────────────────────────
 // NOTCHPAY_PUBLIC_KEY  — from your NotchPay dashboard (Settings → Developer)
@@ -189,7 +190,10 @@ async function creditsHandler(req, res) {
     // their balance to zero but happened to still have freeTrialUsed:false
     // (a residual field, never actively set true anymore) would be told
     // they could still generate for free — stale/wrong under the new model.
-    const canGenerate = spendableBalance > 0;
+    // In free mode the daily limit decides, and checkCredits enforces it.
+    const freeMode = await getFreeMode();
+    const canGenerate = freeMode.enabled || spendableBalance > 0;
+    const freeUsage = freeMode.enabled ? await getFreeUsage(req.user._id, freeMode) : null;
 
     // feedbackCreditGranted is what hides the "+20" badge on the feedback
     // button once that one-time reward has been claimed (see feedbackController
@@ -208,6 +212,7 @@ async function creditsHandler(req, res) {
       signupBonusCredits: Math.max(user.signupBonusCredits || 0, 0),
       signupBonusExpiresAt: user.signupBonusExpiresAt,
       feedbackCreditGranted,
+      freeMode: { enabled: freeMode.enabled, limit: freeMode.dailyLessonLimit, remaining: freeUsage?.remaining ?? null },
     });
   } catch (err) {
     console.error("[credits] Error:", err);

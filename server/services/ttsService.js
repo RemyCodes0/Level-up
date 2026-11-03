@@ -84,6 +84,32 @@ const FPS = 30;
 const TTS_CHUNK_MAX_CONCURRENT = Number(process.env.TTS_CHUNK_MAX_CONCURRENT) || 8;
 const limitTtsChunkCall = createLimiter(TTS_CHUNK_MAX_CONCURRENT);
 
+// OpenRouter reserves a large fixed amount per in-flight Gemini TTS call against
+// a budget that scales with the account balance, and answers 402
+// "in_flight_budget_exhausted" past it. Measured live at a $4.05 balance
+// (2026-11-03): only 2-4 concurrent calls got through, even with 60-char inputs,
+// while Kokoro passed 40/40. It's a "wait a moment", not a failure. A Gemini call
+// settles in ~2-9s, while generateSceneAudio's 2s/4s retries burned all 3 attempts
+// before any call could settle and killed the lesson. Retry-After says 120, but a
+// call succeeded immediately once the others settled, so this polls instead.
+const IN_FLIGHT_402_MAX_WAIT_MS = 3 * 60 * 1000;
+function isInFlightBudget402(err) {
+  return err?.status === 402 && /in-flight/i.test(err.message || "");
+}
+async function createSpeechWaitingForBudget(request) {
+  const deadline = Date.now() + IN_FLIGHT_402_MAX_WAIT_MS;
+  for (let waitMs = 3000; ; waitMs = Math.min(waitMs * 1.5, 15000)) {
+    try {
+      return await openai.audio.speech.create(request);
+    } catch (err) {
+      if (!isInFlightBudget402(err) || Date.now() + waitMs > deadline) throw err;
+      console.warn(`  [tts] OpenRouter in-flight budget full, waiting ${(waitMs / 1000).toFixed(0)}s before retrying this chunk...`);
+      // Jitter so callers that got the 402 together don't all retry together.
+      await new Promise((r) => setTimeout(r, waitMs + Math.random() * 1000));
+    }
+  }
+}
+
 const AUDIO_DIR = process.env.NODE_ENV === "production"
   ? "/data/audio"
   : path.resolve(__dirname, "../../remotion-render/public/audio");
@@ -109,15 +135,20 @@ const openai = new OpenAI({
 // `process.env.TTS_MODEL` string, so a typo falls back to the default
 // instead of hitting OpenRouter with a model id that doesn't exist.
 //
-// Default is "kokoro" (explicit request, 2026-10-24 — briefly swapped to
-// "fish"/Sarah, reverted back to Kokoro the same day, now with voice
-// "af_jessica" instead of the original "af_nova"). Fish Audio's Drama 3
-// integration (the "fish" entry below) is left in place as a selectable
-// alternative, not removed — set TTS_MODEL=fish to use it.
+// Default stays "kokoro" — NOT a decision to make silently. Per-second math
+// (see modelPricing.js's GEMINI_TTS_AUDIO_TOKENS_PER_SECOND, verified live
+// against OpenRouter's own pricing API): a typical ~3-minute lesson costs
+// Kokoro a fraction of a cent (input-text-only billing, $0 for output audio)
+// versus roughly $0.03 for Gemini (billed for the AUDIO it generates too,
+// ~25 tokens/sec of output at $6/M) — on the order of 50-60x more expensive
+// per course for this swap, not a rounding difference. Gemini's real
+// upside is quality/naturalness (and a documented "instructions" param for
+// delivery tone this integration doesn't use yet) — set TTS_MODEL=gemini to
+// actually spend that tradeoff; nothing here makes it project-wide.
 const TTS_PROVIDERS = {
   kokoro: {
     model: "hexgrad/kokoro-82m",
-    voice: "af_jessica", // Kokoro's American Female "Jessica" (explicit request, 2026-10-24 — was "af_nova").
+    voice: "af_nova", // Kokoro's American Female "Nova" — closest equivalent to the old OpenAI "nova" voice.
     // true/false, not omitted: generateChunkAudio reads this to decide
     // whether to send `speed` at all (see its own comment on why Gemini
     // omits it rather than risk a 400 on an unconfirmed parameter).
@@ -131,34 +162,10 @@ const TTS_PROVIDERS = {
     voice: "Kore",
     supportsSpeed: false,
   },
-  fish: {
-    model: "fish-audio/drama-3",
-    // "Ethan" (explicit request, 2026-10-24 — was Sarah). Fish Audio's own
-    // voice-profile page (fish.audio/m/536d3a5e000945adb7038665781a4aca/)
-    // tags him "A curious explainer" — the actual stated request, not a
-    // guess — and he's by far their most-used voice (652,995+ creators vs.
-    // Sarah's/Adrian's/Hannah's far lower counts). None of this is in
-    // OpenRouter's or Fish Audio's docs; sourced by fetching Fish Audio's
-    // own public voice-profile pages directly, the only way to see named
-    // voices + real descriptions without a Fish Audio account (their voice-
-    // listing API needs one).
-    voice: "536d3a5e000945adb7038665781a4aca",
-    // Still needed with Ethan — his natural pace measured ~86 wpm (live
-    // test, same text/method as Sarah's), essentially identical to hers, so
-    // the slow pace is a Drama-3-wide trait, not specific to the voice that
-    // was swapped out. `speed` isn't in OpenRouter's documented request
-    // shape for this model, but tested live and genuinely works (near-
-    // linear: 1.5 -> ~1.4x shorter clip, 2.0 -> ~2.0x shorter, same input
-    // text). 1.5 lands around ~130 wpm — picked over 2.0 only because
-    // there's no way to listen here and confirm 2x doesn't introduce
-    // artifacts.
-    supportsSpeed: true,
-    speed: 1.5,
-  },
 };
 const TTS_MODEL_KEY = TTS_PROVIDERS[process.env.TTS_MODEL] ? process.env.TTS_MODEL : "kokoro";
 const TTS_PROVIDER = TTS_PROVIDERS[TTS_MODEL_KEY];
-console.log(`[tts] voice provider → ${TTS_PROVIDER.model} (set TTS_MODEL=kokoro | gemini | fish to switch)`);
+console.log(`[tts] voice provider → ${TTS_PROVIDER.model} (set TTS_MODEL=kokoro | gemini to switch)`);
 
 // Kokoro's ONE hardcoded voice (af_nova) is an English voice — it has no
 // way to correctly pronounce a course generated in another language (see
@@ -166,17 +173,14 @@ console.log(`[tts] voice provider → ${TTS_PROVIDER.model} (set TTS_MODEL=kokor
 // input — named courseLanguage, not language, to avoid colliding with
 // MongoDB's reserved text-index language-override field; see Course.js).
 // Gemini's TTS is genuinely multilingual from the same voice name, so a
-// non-English course run on the Kokoro default is auto-upgraded to Gemini
-// for just that course's audio. This is Kokoro's own workaround, not a
-// general rule — Fish Audio's Sarah and Gemini are both already multilingual
-// on their own, so neither needs it (relevant again if TTS_MODEL=fish is
-// ever set). An explicit TTS_MODEL=gemini still always wins over the
-// Kokoro-specific upgrade (an admin who already opted into paying Gemini's
-// cost everywhere shouldn't get silently switched back for an English
-// course).
+// non-English course is auto-upgraded to it for just that course's audio,
+// regardless of the TTS_MODEL default above — an explicit TTS_MODEL=gemini
+// still always wins (an admin who already opted into paying Gemini's real
+// per-course cost everywhere shouldn't get silently switched back for an
+// English course). Only the default ("kokoro", unset) case auto-upgrades.
 function resolveTtsProvider(language) {
   if (TTS_MODEL_KEY === "gemini") return { provider: TTS_PROVIDERS.gemini, modelKey: "gemini" };
-  if (TTS_MODEL_KEY === "kokoro" && language && language.toLowerCase() !== "english") {
+  if (language && language.toLowerCase() !== "english") {
     return { provider: TTS_PROVIDERS.gemini, modelKey: "gemini" };
   }
   return { provider: TTS_PROVIDER, modelKey: TTS_MODEL_KEY };
@@ -374,16 +378,9 @@ async function generateChunkAudio(chunkText, provider = TTS_PROVIDER) {
     // value — sending 1.0 (the default) happens to be harmless either way
     // today, but omitting it for an unconfirmed provider is the version of
     // this that doesn't quietly break the day Gemini's behavior here does
-    // turn out to differ. Per-provider value (provider.speed), not a flat
-    // 1.0 — Fish Audio's Sarah measured ~85 real words/minute at the
-    // default (confirmed live, well under this project's ~150-165 wpm
-    // target and the reported complaint), so her entry sets a faster value
-    // instead of 1.0; `speed` isn't in OpenRouter's documented param list
-    // for fish-audio/drama-3, but is confirmed live to actually work
-    // (1.5 -> ~1.4x shorter clip, 2.0 -> ~2.0x shorter, verified by
-    // measuring output duration for identical input text).
-    if (provider.supportsSpeed) request.speed = provider.speed ?? 1.0;
-    const response = await openai.audio.speech.create(request);
+    // turn out to differ.
+    if (provider.supportsSpeed) request.speed = 1.0;
+    const response = await createSpeechWaitingForBudget(request);
     const buffer = Buffer.from(await response.arrayBuffer());
     const queuedMs = startedAt - queuedAt;
     const callMs = Date.now() - startedAt;

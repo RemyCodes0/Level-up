@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { createCollabRoom } from "@/api/CollabApi";
 import { getPricingConfig, getCreditsBalance } from "@/api/CourseApi";
-import type { CourseTier } from "@/api/CourseApi";
+import type { CourseTier, FreeModeStatus } from "@/api/CourseApi";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Design primitives (dark studio)
@@ -95,10 +95,11 @@ export default function CreateCollabRoom() {
   const [tierKey, setTierKey] = useState<string | null>(null);
   const [courseTiers, setCourseTiers] = useState<CourseTier[] | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
+  const [freeMode, setFreeMode] = useState<FreeModeStatus | null>(null);
 
   useEffect(() => {
     getPricingConfig().then((cfg) => setCourseTiers(cfg.courseTiers)).catch((err) => console.error("Failed to fetch pricing config:", err));
-    getCreditsBalance().then((c) => setBalance(c.spendableBalance)).catch((err) => console.error("Failed to fetch credits:", err));
+    getCreditsBalance().then((c) => { setBalance(c.spendableBalance); setFreeMode(c.freeMode?.enabled ? c.freeMode : null); }).catch((err) => console.error("Failed to fetch credits:", err));
   }, []);
 
   const acceptFile = (f: File | null | undefined) => {
@@ -288,7 +289,10 @@ export default function CreateCollabRoom() {
                 <StepLabel n={2} title="How much depth?" />
                 {balance != null && (
                   <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-[#E3E5EE] ring-1 ring-white/[0.08]">
-                    <Zap className="h-3 w-3 text-[#FFB547]" /> {balance} credit{balance !== 1 ? "s" : ""} available
+                    <Zap className="h-3 w-3 text-[#FFB547]" />{" "}
+                    {freeMode
+                      ? `${freeMode.remaining ?? freeMode.limit} free lessons left today`
+                      : `${balance} credit${balance !== 1 ? "s" : ""} available`}
                   </span>
                 )}
               </div>
@@ -296,7 +300,9 @@ export default function CreateCollabRoom() {
                 {!courseTiers
                   ? [0, 1, 2].map((i) => <div key={i} className="h-[150px] animate-pulse rounded-xl bg-white/[0.03]" />)
                   : courseTiers.map((t) => {
-                      const affordable = balance == null || balance >= t.creditCost;
+                      const affordable = freeMode
+                        ? (freeMode.remaining ?? freeMode.limit) >= t.lessonCount
+                        : balance == null || balance >= t.creditCost;
                       const sel = tierKey === t.key;
                       return (
                         <button
@@ -325,8 +331,12 @@ export default function CreateCollabRoom() {
                             <p className="flex items-center gap-1.5"><Film className="h-3 w-3 text-[#6E7389]" />{t.lessonCount} video{t.lessonCount !== 1 ? "s" : ""}</p>
                             <p className="flex items-center gap-1.5"><ClipboardList className="h-3 w-3 text-[#6E7389]" />{t.mcqCount} quiz questions</p>
                           </div>
-                          <p className="mt-auto pt-3 text-lg font-bold text-white">{t.creditCost}<span className="ml-1 text-[10px] font-medium text-[#6E7389]">credits</span></p>
-                          {!affordable && <p className="mt-1 text-[10px] text-[#FF8A95]">Not enough credits</p>}
+                          {freeMode ? (
+                            <p className="mt-auto pt-3 text-lg font-bold text-[#3DDC97]">Free</p>
+                          ) : (
+                            <p className="mt-auto pt-3 text-lg font-bold text-white">{t.creditCost}<span className="ml-1 text-[10px] font-medium text-[#6E7389]">credits</span></p>
+                          )}
+                          {!affordable && <p className="mt-1 text-[10px] text-[#FF8A95]">{freeMode ? "Not enough free lessons today" : "Not enough credits"}</p>}
                         </button>
                       );
                     })}

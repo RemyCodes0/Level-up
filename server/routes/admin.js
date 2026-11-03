@@ -20,6 +20,7 @@ const {
 const {
   getAdminPricingConfig,
   updateAdminPricingConfig,
+  updateFreeMode,
 } = require("../controllers/pricingConfigController");
 const {
   getAdminMaintenanceConfig,
@@ -64,6 +65,7 @@ router.post("/users/:userId/credits", adjustUserCredits);
 // pricingConfigService.js's cache, invalidated on every PUT here).
 router.get("/pricing-config", getAdminPricingConfig);
 router.put("/pricing-config", updateAdminPricingConfig);
+router.put("/free-mode", updateFreeMode);
 
 router.get("/maintenance", getAdminMaintenanceConfig);
 router.put("/maintenance", updateAdminMaintenanceConfig);

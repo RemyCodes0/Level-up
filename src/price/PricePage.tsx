@@ -43,15 +43,21 @@ function FaqItem({ q, a }: { q: string; a: string }) {
 export default function PricingPage() {
   const navigate = useNavigate();
   const [courseTiers, setCourseTiers] = useState<CourseTier[]>([]);
+  const [freeMode, setFreeMode] = useState<{ enabled: boolean; dailyLessonLimit: number } | null>(null);
+  const isFree = !!freeMode?.enabled;
 
   useEffect(() => {
     analytics.pricingViewed();
     getPricingConfig()
-      .then((cfg) => setCourseTiers(cfg.courseTiers))
+      .then((cfg) => { setCourseTiers(cfg.courseTiers); setFreeMode(cfg.freeMode ?? null); })
       .catch((err) => console.error("Failed to load pricing config:", err));
   }, []);
 
-  const faqs = [
+  const faqs = isFree ? [
+    { q: "Is Level Up really free right now?", a: "Yes. Every course is free for everyone at the moment, with no card and no credits needed." },
+    { q: "Is there a limit?", a: `You can generate up to ${freeMode?.dailyLessonLimit} lessons every 24 hours, with up to 2 courses building at once. This keeps Level Up running well for everyone.` },
+    { q: "What happens to my credits?", a: "Nothing. They aren't used while Level Up is free, and they'll still be in your account if credits come back." },
+  ] : [
     { q: "Is the first lesson really free?", a: "Yes. Every new account gets one full 6-lesson course free, with no card required, so you can see exactly what you'd get before spending any credits." },
     { q: "Do I need a subscription?", a: "No. There's no recurring charge, ever." },
     { q: "Do credits expire?", a: "Credits you earn from referrals never expire. The only exception is the 100 free credits every new account gets on signup — those expire 30 days after signup if unused." },
@@ -103,18 +109,28 @@ export default function PricingPage() {
         {/* Heading */}
         <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-16 sm:pt-20 pb-10 text-center">
           <div className="inline-flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full mb-6" style={{ backgroundColor: "rgba(255,92,73,0.13)", color: CORAL }}>
-            <Sparkles className="h-3 w-3" /> No subscription, ever
+            <Sparkles className="h-3 w-3" /> {isFree ? "Free for everyone right now" : "No subscription, ever"}
           </div>
           <h1 className="text-4xl sm:text-5xl font-bold leading-[1.08] mb-4" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
-            Your first course is on us.
+            {isFree ? "Level Up is free right now." : "Your first course is on us."}
           </h1>
           <p className="text-base sm:text-lg leading-relaxed" style={{ color: MUTE }}>
-            No subscription, no card required. Need more after that? Just reach out.
+            {isFree
+              ? `No card and no credits. Generate up to ${freeMode?.dailyLessonLimit} lessons every 24 hours.`
+              : "No subscription, no card required. Need more after that? Just reach out."}
           </p>
         </div>
 
+        {isFree && (
+          <div className="flex justify-center px-4 pb-16">
+            <button onClick={() => navigate("/signup")} className="text-sm font-semibold px-6 py-3 rounded-xl transition-transform hover:scale-[1.02] flex items-center justify-center gap-2" style={{ backgroundColor: CORAL, color: "#fff" }}>
+              Start free <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         {/* Free Trial + WhatsApp contact, 2 columns */}
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 pb-16">
+        {!isFree && <div className="max-w-3xl mx-auto px-4 sm:px-6 pb-16">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 items-stretch">
             {/* Free Trial — entry point for new users */}
             <div className="rounded-2xl p-6 text-center border flex flex-col" style={{ backgroundColor: STAGE_2, borderColor: HAIR }}>
@@ -150,14 +166,14 @@ export default function PricingPage() {
           <p className="text-center text-xs mt-6" style={{ color: MUTE }}>
             The 100 free signup credits expire 30 days after signup if unused. MCQs are always included free — no hidden fees.
           </p>
-        </div>
+        </div>}
 
         {/* Course tiers explainer */}
         <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-16">
           <h2 className="text-xl sm:text-2xl font-bold mb-2 text-center" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
-            What your credits buy
+            {isFree ? "Pick your course size" : "What your credits buy"}
           </h2>
-          <p className="text-sm text-center mb-8" style={{ color: MUTE }}>Pick a course size right in the app when you generate — here's what each one costs.</p>
+          <p className="text-sm text-center mb-8" style={{ color: MUTE }}>{isFree ? "Pick a course size right in the app when you generate." : "Pick a course size right in the app when you generate — here's what each one costs."}</p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
             {courseTiers.map((t) => (
               <div key={t.key} className="rounded-2xl p-6 border" style={{ backgroundColor: STAGE_2, borderColor: HAIR }}>
@@ -167,7 +183,7 @@ export default function PricingPage() {
                   <div className="flex items-start gap-2.5"><Check className="h-4 w-4 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t.lessonCount} animated, narrated lesson{t.lessonCount !== 1 ? "s" : ""}</div>
                   <div className="flex items-start gap-2.5"><Check className="h-4 w-4 mt-0.5 shrink-0" style={{ color: PHOSPHOR }} /> {t.mcqCount}-question quiz ({t.timeAllocationMinutes} min), included free</div>
                 </div>
-                <p className="text-2xl font-bold" style={{ color: AMBER, fontFamily: "'Space Grotesk', sans-serif" }}>{t.creditCost} credits</p>
+                <p className="text-2xl font-bold" style={{ color: isFree ? PHOSPHOR : AMBER, fontFamily: "'Space Grotesk', sans-serif" }}>{isFree ? "Free" : `${t.creditCost} credits`}</p>
               </div>
             ))}
           </div>
@@ -176,7 +192,7 @@ export default function PricingPage() {
         {/* Billing FAQ */}
         <div className="max-w-2xl mx-auto px-4 sm:px-6 pb-20">
           <h2 className="text-xl sm:text-2xl font-bold mb-2 text-center" style={{ color: BEAM, fontFamily: "'Space Grotesk', sans-serif" }}>
-            Billing questions
+            {isFree ? "Questions" : "Billing questions"}
           </h2>
           <p className="text-sm text-center mb-8" style={{ color: MUTE }}>Everything about how pricing actually works.</p>
           <div>{faqs.map((f, i) => <FaqItem key={i} q={f.q} a={f.a} />)}</div>

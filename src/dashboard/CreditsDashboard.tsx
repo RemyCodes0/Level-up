@@ -100,6 +100,17 @@ export default function CreditsDashboardPage() {
           <p className="text-sm text-red-500">{error}</p>
         ) : (
           <>
+            {balance?.freeMode?.enabled && (
+              <Card className="border-0 shadow-md bg-emerald-50">
+                <CardContent className="p-5 sm:p-6">
+                  <p className="font-semibold text-emerald-900">Level Up is free right now</p>
+                  <p className="text-sm text-emerald-800 mt-1">
+                    Courses don't use credits at the moment, so your balance below stays exactly as it is. You have{" "}
+                    {balance.freeMode.remaining ?? balance.freeMode.limit} of {balance.freeMode.limit} free lessons left today.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
             <Card className="border-0 shadow-md">
               <CardContent className="p-5 sm:p-6">
                 <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">

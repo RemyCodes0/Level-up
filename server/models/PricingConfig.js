@@ -34,6 +34,13 @@ const pricingConfigSchema = new mongoose.Schema(
   {
     courseTiers: [courseTierSchema],
     creditPacks: [creditPackSchema],
+    // See services/freeModeService.js. The daily limit counts lessons, not
+    // courses, because lessons are what actually cost money to generate.
+    freeMode: {
+      enabled: { type: Boolean, default: false },
+      startedAt: { type: Date, default: null },
+      dailyLessonLimit: { type: Number, default: 6 },
+    },
   },
   { timestamps: true }
 );

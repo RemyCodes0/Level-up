@@ -53,14 +53,6 @@ const MODEL_PRICING = {
   // needs to actually count that cost instead of silently reporting $0 for
   // the expensive half of the call.
   "google/gemini-3.8-flash-lite-tts": { inputPerM: 0.50, outputPerM: 6.00 },
-
-  // Fish Audio Drama 3 TTS via OpenRouter — the default voice as of
-  // 2026-10-24 (TTS_MODEL=fish, see ttsService.js). Verified LIVE:
-  //   curl https://openrouter.ai/api/v1/models/fish-audio/drama-3/endpoints
-  //   → pricing.prompt "0.000002" ($2.00/M), pricing.completion "0" (free)
-  // Same input-text-only billing shape as Kokoro (not Gemini's billed-audio-
-  // output shape) — just ~3.2x Kokoro's $0.62/M, not a 50-60x jump.
-  "fish-audio/drama-3": { inputPerM: 2.00, outputPerM: 0 },
 };
 
 // Gemini's TTS output is billed as audio tokens, not raw seconds — Google

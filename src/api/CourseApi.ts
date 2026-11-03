@@ -174,7 +174,11 @@ export interface CreditPack {
   badge: string | null;
 }
 
-export async function getPricingConfig(): Promise<{ courseTiers: CourseTier[]; creditPacks: CreditPack[] }> {
+export async function getPricingConfig(): Promise<{
+  courseTiers: CourseTier[];
+  creditPacks: CreditPack[];
+  freeMode?: { enabled: boolean; dailyLessonLimit: number };
+}> {
   const res = await fetch(`${BASE_URL}/api/payment/pricing-config`);
   if (!res.ok) throw new Error("Failed to load pricing config");
   return res.json();
@@ -195,7 +199,29 @@ export async function createTapCheckout(packKey: string): Promise<{ checkoutUrl:
 }
 
 // ── Admin — course tiers + credit packs (requireAdmin-gated server-side) ─────
-export async function getAdminPricingConfig(): Promise<{ courseTiers: CourseTier[]; creditPacks: CreditPack[] }> {
+export interface AdminFreeMode {
+  enabled: boolean;
+  startedAt: string | null;
+  dailyLessonLimit: number;
+}
+
+export async function updateFreeMode(
+  patch: { enabled?: boolean; dailyLessonLimit?: number }
+): Promise<{ freeMode: AdminFreeMode; bonusesExtended: number }> {
+  const res = await fetch(`${BASE_URL}/api/admin/free-mode`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(patch),
+  });
+  handleUnauthorized(res);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({} as any));
+    throw new Error(data.error || "Failed to update free mode");
+  }
+  return res.json();
+}
+
+export async function getAdminPricingConfig(): Promise<{ courseTiers: CourseTier[]; creditPacks: CreditPack[]; freeMode: AdminFreeMode }> {
   const res = await fetch(`${BASE_URL}/api/admin/pricing-config`, { headers: { ...authHeaders() } });
   handleUnauthorized(res);
   if (!res.ok) throw new Error("Failed to load pricing config");
@@ -229,6 +255,14 @@ export interface CreditsBalance {
   // True once the one-time feedback reward has been claimed — what hides the
   // "+20" badge on the feedback button.
   feedbackCreditGranted: boolean;
+  freeMode?: FreeModeStatus;
+}
+
+// While on, nothing is charged and `remaining` is what's left of today's limit.
+export interface FreeModeStatus {
+  enabled: boolean;
+  limit: number;
+  remaining: number | null;
 }
 
 export async function getCreditsBalance(): Promise<CreditsBalance> {

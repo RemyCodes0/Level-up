@@ -42,7 +42,7 @@ const SURFACE = "rounded-3xl bg-[#11131A] ring-1 ring-white/[0.07]";
 const EYEBROW = "text-[11px] font-semibold uppercase tracking-[0.14em] text-[#6E7389]";
 const INPUT = "pf-input h-12 w-full rounded-xl bg-[#0E1016] pl-11 pr-4 text-[15px] text-white ring-1 ring-white/[0.1] transition-all placeholder:text-[#3E4253] focus:outline-none focus:ring-2 focus:ring-[#8B7CFF]/70";
 
-interface CreditsInfo { courseCredits: number; spendableBalance?: number; signupBonusCredits?: number; canGenerate: boolean }
+interface CreditsInfo { courseCredits: number; spendableBalance?: number; signupBonusCredits?: number; canGenerate: boolean; freeMode?: { enabled: boolean; limit: number; remaining: number | null } }
 interface ReferralInfo { link: string; totalReferrals: number; creditsEarned: number; creditsPerReferral: number }
 
 function Shimmer({ className }: { className?: string }) {
@@ -182,6 +182,7 @@ export default function ProfilePage() {
   const initial = displayName.charAt(0).toUpperCase();
   const balance = credits ? Math.max(credits.spendableBalance ?? credits.courseCredits, 0) : null;
   const bonus = Math.max(credits?.signupBonusCredits ?? 0, 0);
+  const freeMode = credits?.freeMode?.enabled ? credits.freeMode : null;
 
   return (
     <div
@@ -226,7 +227,11 @@ export default function ProfilePage() {
 
         {/* Stats */}
         <div className="pf-rise mt-10 grid grid-cols-2 gap-3 lg:grid-cols-4" style={{ animationDelay: "60ms" }}>
-          <Stat icon={Zap} label="Credits available" value={balance} color="#FFB547" loading={statsLoading && !credits} sub={bonus > 0 ? `${bonus} free signup credits left` : undefined} />
+          {freeMode ? (
+            <Stat icon={Zap} label="Free lessons left today" value={freeMode.remaining ?? freeMode.limit} color="#3DDC97" loading={false} />
+          ) : (
+            <Stat icon={Zap} label="Credits available" value={balance} color="#FFB547" loading={statsLoading && !credits} sub={bonus > 0 ? `${bonus} free signup credits left` : undefined} />
+          )}
           <Stat icon={Film} label="Courses created" value={courseCount} color="#8B7CFF" loading={statsLoading && courseCount === null} />
           <Stat icon={Users} label="Friends invited" value={referral?.totalReferrals ?? null} color="#3DDC97" loading={statsLoading && !referral} />
           <Stat icon={Gift} label="Credits from invites" value={referral?.creditsEarned ?? null} color="#FF7A45" loading={statsLoading && !referral} />
@@ -279,7 +284,7 @@ export default function ProfilePage() {
 
           <div className="space-y-6">
             {/* Credits */}
-            <div className={cx(SURFACE, "pf-rise relative overflow-hidden p-6")} style={{ animationDelay: "160ms" }}>
+            {!freeMode && <div className={cx(SURFACE, "pf-rise relative overflow-hidden p-6")} style={{ animationDelay: "160ms" }}>
               <span className="pointer-events-none absolute -right-16 -top-16 h-44 w-44 rounded-full bg-[#FFB547]/20 blur-3xl" />
               <div className="relative flex items-center justify-between">
                 <p className={EYEBROW}>Credits</p>
@@ -303,7 +308,7 @@ export default function ProfilePage() {
                   <MessageSquare className="h-3.5 w-3.5 text-[#3DDC97]" /> Get more
                 </a>
               </div>
-            </div>
+            </div>}
 
             {/* Referral */}
             {referral && (

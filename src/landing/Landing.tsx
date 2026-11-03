@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode, CSSProperties, FormEvent } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
+import { getPricingConfig } from "../api/CourseApi";
 import {
   ArrowRight, ArrowUp, Paperclip, Sparkles, Film, Mic, Target, Users, Share2, FileText,
   MessageSquare, Check, X, Play, Plus, Zap, BookOpen, GraduationCap, Brain, Clock,
@@ -618,6 +619,12 @@ export default function LandingPage() {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [heroIn, setHeroIn] = useState(false);
+  const [freeMode, setFreeMode] = useState<{ enabled: boolean; dailyLessonLimit: number } | null>(null);
+  const isFree = !!freeMode?.enabled;
+
+  useEffect(() => {
+    getPricingConfig().then((cfg) => setFreeMode(cfg.freeMode ?? null)).catch((err) => console.error("Failed to load pricing config:", err));
+  }, []);
 
   useEffect(() => { const id = requestAnimationFrame(() => setHeroIn(true)); return () => cancelAnimationFrame(id); }, []);
   useEffect(() => {
@@ -765,7 +772,7 @@ export default function LandingPage() {
                 <span className="flex items-center gap-1.5 rounded-full bg-[#FF7A45]/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#FFB08A]">
                   <span className="h-1.5 w-1.5 rounded-full bg-[#FF7A45]" style={{ animation: "lp-rec 1.4s ease-in-out infinite" }} /> Rec
                 </span>
-                100 free credits — no card needed
+                {isFree ? "Free for everyone right now" : "100 free credits — no card needed"}
                 <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
               </a>
 
@@ -941,7 +948,7 @@ export default function LandingPage() {
           <SectionHead
             eyebrow="Pick your depth"
             title={<>A quick explainer or <span className="italic text-[#B4A9FF]">full mastery</span>.</>}
-            sub="Choose the size of each course. Bigger courses spend more credits — and your first 100 are on us."
+            sub={isFree ? "Choose the size of each course. They're all free right now." : "Choose the size of each course. Bigger courses spend more credits — and your first 100 are on us."}
           />
           <div className="grid gap-4 md:grid-cols-3">
             {[
@@ -1076,7 +1083,10 @@ export default function LandingPage() {
           <SectionHead eyebrow="Questions" title="Everything you might be wondering." center />
           <Reveal>
             <div className="border-t border-white/[0.07]">
-              {FAQS.map((f, i) => (
+              {FAQS.map((f) => (isFree && f.q === "How much does it cost?"
+                ? { ...f, a: `Nothing right now. Level Up is free for everyone, with up to ${freeMode?.dailyLessonLimit} lessons every 24 hours. No card needed.` }
+                : f
+              )).map((f, i) => (
                 <FaqItem key={f.q} q={f.q} a={f.a} index={i} open={openFaq === i} onToggle={() => setOpenFaq(openFaq === i ? null : i)} />
               ))}
             </div>
@@ -1097,7 +1107,7 @@ export default function LandingPage() {
               <div className="relative mx-auto max-w-2xl">
                 <p className={EYEBROW} style={{ color: C.irisSoft }}>Your first course</p>
                 <h2 className="lp-serif mt-5 text-[44px] leading-[1.02] text-white sm:text-[72px]">One topic away.</h2>
-                <p className="mx-auto mt-4 max-w-md text-[15px] text-[#8A8FA3]">Type what you want to learn and watch it become a course. 100 free credits, no card needed.</p>
+                <p className="mx-auto mt-4 max-w-md text-[15px] text-[#8A8FA3]">Type what you want to learn and watch it become a course. {isFree ? "Free right now, no card needed." : "100 free credits, no card needed."}</p>
                 <div className="mx-auto mt-9 max-w-xl text-left">
                   <PromptBar value={finalPrompt} onChange={setFinalPrompt} onSubmit={onFinalSubmit} onUpload={goApp} />
                 </div>

@@ -7,14 +7,17 @@
 
 const { getPricingConfig, invalidatePricingConfigCache } = require("../services/pricingConfigService");
 const { PricingConfig } = require("../models/PricingConfig");
+const { getFreeMode, setFreeModeEnabled, setDailyLessonLimit } = require("../services/freeModeService");
 
 // ── GET /api/payment/pricing-config — public, no secret data ────────────────
 async function getPublicPricingConfig(req, res) {
   try {
     const config = await getPricingConfig();
+    const freeMode = await getFreeMode();
     res.json({
       courseTiers: config.courseTiers,
       creditPacks: config.creditPacks,
+      freeMode: { enabled: freeMode.enabled, dailyLessonLimit: freeMode.dailyLessonLimit },
     });
   } catch (err) {
     console.error("[pricingConfig] getPublicPricingConfig error:", err.message);
@@ -26,7 +29,7 @@ async function getPublicPricingConfig(req, res) {
 async function getAdminPricingConfig(req, res) {
   try {
     const config = await getPricingConfig();
-    res.json({ courseTiers: config.courseTiers, creditPacks: config.creditPacks });
+    res.json({ courseTiers: config.courseTiers, creditPacks: config.creditPacks, freeMode: await getFreeMode() });
   } catch (err) {
     console.error("[pricingConfig] getAdminPricingConfig error:", err.message);
     res.status(500).json({ error: "Failed to load pricing config" });
@@ -58,4 +61,25 @@ async function updateAdminPricingConfig(req, res) {
   }
 }
 
-module.exports = { getPublicPricingConfig, getAdminPricingConfig, updateAdminPricingConfig };
+// ── PUT /api/admin/free-mode ────────────────────────────────────────────────
+// Body: { enabled?: boolean, dailyLessonLimit?: number }
+async function updateFreeMode(req, res) {
+  try {
+    const { enabled, dailyLessonLimit } = req.body;
+    if (enabled !== undefined && typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be true or false" });
+    }
+    if (dailyLessonLimit !== undefined && (!Number.isInteger(dailyLessonLimit) || dailyLessonLimit < 1)) {
+      return res.status(400).json({ error: "dailyLessonLimit must be a whole number of at least 1" });
+    }
+    if (dailyLessonLimit !== undefined) await setDailyLessonLimit(dailyLessonLimit);
+    const { bonusesExtended } = enabled !== undefined ? await setFreeModeEnabled(enabled) : { bonusesExtended: 0 };
+    console.log(`[freeMode] ${req.user.email} set enabled=${enabled} dailyLessonLimit=${dailyLessonLimit} (bonuses extended: ${bonusesExtended})`);
+    res.json({ freeMode: await getFreeMode(), bonusesExtended });
+  } catch (err) {
+    console.error("[pricingConfig] updateFreeMode error:", err.message);
+    res.status(500).json({ error: "Failed to update free mode" });
+  }
+}
+
+module.exports = { getPublicPricingConfig, getAdminPricingConfig, updateAdminPricingConfig, updateFreeMode };

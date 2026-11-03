@@ -62,7 +62,7 @@ exports.createRoom = async (req, res) => {
 
     if (req.usingFreeTrial) {
       await User.findByIdAndUpdate(req.user._id, { freeTrialUsed: true });
-    } else if (!tierSnapshot.tier) {
+    } else if (!tierSnapshot.tier && !req.freeMode) {
       // Legacy no-tier request — checkCredits didn't spend anything for
       // this path, so deduct the flat 1 credit here exactly as this always
       // did. Tier path: checkCredits already atomically spent

@@ -1,6 +1,7 @@
 const User = require("../models/User");
 const { spendCredits, getSpendableBalance, InsufficientCreditsError } = require("../services/creditService");
 const { getCourseTier } = require("../services/pricingConfigService");
+const { getFreeMode, checkFreeLimit } = require("../services/freeModeService");
 
 // REMOVED (2026-08-21, per explicit request): the free-trial bypass — a
 // brand-new user's first course used to skip tier selection entirely and
@@ -37,8 +38,53 @@ const LEGACY_COURSE_SHAPE = {
 // caller goes through one of these two branches now — there is no more
 // free bypass; a brand-new user spends down their signup-bonus balance the
 // same way anyone else spends credits.
+// Two requests from one user could otherwise both pass the free limit before
+// either course exists. Held until the response is sent, which is right after the
+// course is created.
+const freeChecksInProgress = new Set();
+
+// Free mode: nothing is spent or checked against the balance, only the per-user
+// limit. creditCost 0 is what stops a failed course from refunding credits it
+// never took, and tells the legacy path not to deduct its flat 1 credit.
+async function handleFreeMode(req, res, next, freeMode) {
+  const tier = req.body.tier ? await getCourseTier(req.body.tier) : null;
+  if (req.body.tier && !tier) {
+    return res.status(400).json({
+      error: "invalid_tier",
+      message: "Select a valid course tier (Quick Explainer, Deeper Dive, or Full Mastery) to generate a course.",
+    });
+  }
+  const shape = tier
+    ? {
+        tier: tier.key,
+        tierName: tier.name,
+        lessonCount: tier.lessonCount,
+        mcqCount: tier.mcqCount,
+        timeAllocationMinutes: tier.timeAllocationMinutes,
+      }
+    : LEGACY_COURSE_SHAPE;
+
+  const userKey = String(req.user._id);
+  if (freeChecksInProgress.has(userKey)) {
+    return res.status(429).json({ error: "free_too_many_at_once", message: "Your last request is still starting. Try again in a moment." });
+  }
+  freeChecksInProgress.add(userKey);
+  res.once("close", () => freeChecksInProgress.delete(userKey));
+
+  const blocked = await checkFreeLimit(req.user._id, shape.lessonCount, freeMode);
+  if (blocked) return res.status(429).json({ error: blocked.code, message: blocked.message });
+
+  req.usingFreeTrial = false;
+  req.freeMode = true;
+  req.courseTierSnapshot = { ...shape, creditCost: 0 };
+  return next();
+}
+
 async function checkCredits(req, res, next) {
   try {
+    const freeMode = await getFreeMode();
+    if (freeMode.enabled) return await handleFreeMode(req, res, next, freeMode);
+
     const user = await User.findById(req.user._id).select(
       "courseCredits signupBonusCredits signupBonusExpiresAt"
     );

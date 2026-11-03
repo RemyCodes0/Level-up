@@ -21,7 +21,7 @@ import {
   getCourseLineage,
   regenerateQuiz,
 } from "../api/CourseApi";
-import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, SceneMetaItem, CourseTier } from "../api/CourseApi";
+import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, SceneMetaItem, CourseTier, FreeModeStatus } from "../api/CourseApi";
 import { getProgress, markLessonWatched, logPosition } from "../api/ProgressApi";
 import { submitQuiz as submitQuizApi, getLatestAttempt, getAttemptHistory } from "../api/QuizApi";
 import type { QuizResult } from "../api/QuizApi";
@@ -142,6 +142,7 @@ interface Credits {
   signupBonusCredits?: number;
   signupBonusExpiresAt?: string | null;
   feedbackCreditGranted?: boolean;
+  freeMode?: FreeModeStatus;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,13 +171,6 @@ function mergeLesson(l: Lesson, a: ApiLesson | undefined): Lesson {
     code: a.code ?? l.code,
     totalFrames: a.totalFrames ?? l.totalFrames,
     sceneProgress: a.sceneProgress ?? l.sceneProgress,
-    // FIX: missing here meant a lesson that finished generating during a
-    // LIVE poll (no page reload) never got its scene/narration data into
-    // local state — the player's captionsAvailable check always saw
-    // undefined, so the CC button silently never appeared until the next
-    // full reload re-fetched the course from scratch (which builds Lesson[]
-    // straight from the API response, scenes included).
-    scenes: a.scenes ?? l.scenes,
     error: a.error ?? null,
   };
 }
@@ -548,6 +542,7 @@ function Composer({ onGenerate, credits, courseTiers, onRequestTopUp }: {
             topic={pendingSubmission.name}
             tiers={courseTiers}
             balance={spendableBalance}
+            freeMode={credits?.freeMode}
             selectedKey={selectedTierKey}
             onSelect={setSelectedTierKey}
             onConfirm={handleConfirmTier}
@@ -729,8 +724,8 @@ function Composer({ onGenerate, credits, courseTiers, onRequestTopUp }: {
   );
 }
 
-function FormatPicker({ topic, tiers, balance, selectedKey, onSelect, onConfirm, onBack, onRequestTopUp }: {
-  topic: string; tiers: CourseTier[] | null; balance: number; selectedKey: string | null;
+function FormatPicker({ topic, tiers, balance, freeMode, selectedKey, onSelect, onConfirm, onBack, onRequestTopUp }: {
+  topic: string; tiers: CourseTier[] | null; balance: number; freeMode?: FreeModeStatus; selectedKey: string | null;
   onSelect: (k: string) => void; onConfirm: () => void; onBack: () => void; onRequestTopUp: () => void;
 }) {
   const selected = tiers?.find((t) => t.key === selectedKey) ?? null;
@@ -746,7 +741,10 @@ function FormatPicker({ topic, tiers, balance, selectedKey, onSelect, onConfirm,
           <p className="mt-2 truncate text-sm text-[#8A8FA3]">For “{cleanName(topic)}”</p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-full bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-[#E3E5EE] ring-1 ring-white/[0.08] sm:self-auto">
-          <Zap className="h-3.5 w-3.5 text-[#FFB547]" /> {balance} credit{balance !== 1 ? "s" : ""} available
+          <Zap className="h-3.5 w-3.5 text-[#FFB547]" />{" "}
+          {freeMode?.enabled
+            ? `${freeMode.remaining ?? freeMode.limit} free lesson${(freeMode.remaining ?? freeMode.limit) !== 1 ? "s" : ""} left today`
+            : `${balance} credit${balance !== 1 ? "s" : ""} available`}
         </span>
       </div>
 
@@ -754,7 +752,9 @@ function FormatPicker({ topic, tiers, balance, selectedKey, onSelect, onConfirm,
         {!tiers
           ? [0, 1, 2].map((i) => <Shimmer key={i} className="h-[260px] rounded-2xl" delay={i * 0.15} />)
           : tiers.map((t, i) => {
-              const affordable = balance >= t.creditCost;
+              const affordable = freeMode?.enabled
+                ? (freeMode.remaining ?? freeMode.limit) >= t.lessonCount
+                : balance >= t.creditCost;
               const isSel = selectedKey === t.key;
               const recommended = i === 1;
               const perLesson = t.lessonCount > 0 ? Math.round(t.creditCost / t.lessonCount) : t.creditCost;
@@ -805,12 +805,21 @@ function FormatPicker({ topic, tiers, balance, selectedKey, onSelect, onConfirm,
                   </div>
 
                   <div className="mt-auto flex items-baseline justify-between border-t border-white/[0.07] pt-4" style={{ marginTop: 20 }}>
-                    <p className="text-2xl font-bold tracking-tight text-white">
-                      {t.creditCost}<span className="ml-1 text-xs font-medium text-[#6E7389]">credits</span>
-                    </p>
-                    <p className="text-[10px] text-[#6E7389]">~{perLesson}/lesson</p>
+                    {freeMode?.enabled ? (
+                      <p className="text-2xl font-bold tracking-tight text-[#3DDC97]">Free</p>
+                    ) : (
+                      <>
+                        <p className="text-2xl font-bold tracking-tight text-white">
+                          {t.creditCost}<span className="ml-1 text-xs font-medium text-[#6E7389]">credits</span>
+                        </p>
+                        <p className="text-[10px] text-[#6E7389]">~{perLesson}/lesson</p>
+                      </>
+                    )}
                   </div>
-                  {!affordable && (
+                  {!affordable && freeMode?.enabled && (
+                    <p className="mt-3 text-xs text-[#8A8FA3]" style={{ opacity: 1 }}>Not enough free lessons left today</p>
+                  )}
+                  {!affordable && !freeMode?.enabled && (
                     <button
                       type="button"
                       onClick={(e) => { e.stopPropagation(); onRequestTopUp(); }}
@@ -834,7 +843,7 @@ function FormatPicker({ topic, tiers, balance, selectedKey, onSelect, onConfirm,
         <p className="flex-1 text-sm text-[#B9BCCB]">
           {selected && (
             <>
-              <span className="font-semibold text-white">{selected.name}</span> · {selected.lessonCount} lesson{selected.lessonCount !== 1 ? "s" : ""} + {selected.mcqCount}-question quiz · <span className="text-white">{selected.creditCost} credits</span>
+              <span className="font-semibold text-white">{selected.name}</span> · {selected.lessonCount} lesson{selected.lessonCount !== 1 ? "s" : ""} + {selected.mcqCount}-question quiz · <span className="text-white">{freeMode?.enabled ? "Free" : `${selected.creditCost} credits`}</span>
             </>
           )}
         </p>
@@ -1855,8 +1864,9 @@ type FollowUp = { id: string; topic: string; reason: string; kind: "repair" | "e
  *                 implies, so no second assessment chat is needed.
  */
 function ContinueLearning({
-  weakTopics, pct, courseId, tiers, balance, onGenerate, onRequestTopUp, starting, startError,
+  weakTopics, pct, courseId, tiers, balance, freeMode, onGenerate, onRequestTopUp, starting, startError,
 }: {
+  freeMode?: FreeModeStatus;
   weakTopics: { topic: string; pct: number }[];
   pct: number;
   courseId?: string | null;
@@ -1880,8 +1890,10 @@ function ContinueLearning({
   }, [tiers, tierKey]);
 
   const tier = tiers?.find((t) => t.key === tierKey) ?? null;
+  const free = !!freeMode?.enabled;
+  const freeLeft = freeMode?.remaining ?? freeMode?.limit ?? 0;
   const cost = tier?.creditCost ?? 0;
-  const affordable = !!tier && balance >= cost;
+  const affordable = !!tier && (free ? freeLeft >= tier.lessonCount : balance >= cost);
 
   const items: FollowUp[] = [
     ...weakTopics.slice(0, 2).map((w) => ({
@@ -1955,7 +1967,8 @@ function ContinueLearning({
           </p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-[#E3E5EE] ring-1 ring-white/[0.08]">
-          <Zap className="h-3.5 w-3.5 text-[#FFB547]" /> {balance} credit{balance !== 1 ? "s" : ""} left
+          <Zap className="h-3.5 w-3.5 text-[#FFB547]" />{" "}
+          {free ? `${freeLeft} free lesson${freeLeft !== 1 ? "s" : ""} left today` : `${balance} credit${balance !== 1 ? "s" : ""} left`}
         </span>
       </div>
 
@@ -1968,7 +1981,7 @@ function ContinueLearning({
           <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Depth of the next course">
             {tiers.map((t) => {
               const sel = t.key === tierKey;
-              const canAfford = balance >= t.creditCost;
+              const canAfford = free ? freeLeft >= t.lessonCount : balance >= t.creditCost;
               return (
                 <button
                   key={t.key}
@@ -1985,7 +1998,7 @@ function ContinueLearning({
                   <span className="flex items-baseline justify-between gap-2">
                     <span className="truncate text-[13px] font-semibold text-white">{t.name}</span>
                     <span className={cx("shrink-0 text-[11px] font-semibold tabular-nums", canAfford ? "text-[#FFB547]" : "text-[#6E7389]")}>
-                      {t.creditCost} cr
+                      {free ? "Free" : `${t.creditCost} cr`}
                     </span>
                   </span>
                   <span className="mt-0.5 block text-[11px] text-[#8A8FA3]">
@@ -2041,7 +2054,9 @@ function ContinueLearning({
                 </div>
 
                 <div className="flex shrink-0 flex-col items-stretch gap-1.5">
-                  {!affordable ? (
+                  {!affordable && free ? (
+                    <span className="max-w-[160px] text-right text-[11px] text-[#8A8FA3]">Not enough free lessons left today</span>
+                  ) : !affordable ? (
                     <button onClick={onRequestTopUp} className={cx(BTN_SOFT, "h-9 whitespace-nowrap")}>
                       <Zap className="h-3.5 w-3.5 text-[#FFB547]" /> Need {cost - balance} more
                     </button>
@@ -2052,7 +2067,7 @@ function ContinueLearning({
                         disabled={starting}
                         className={cx(BTN_PRIMARY, "h-9 whitespace-nowrap")}
                       >
-                        {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Spend {cost} credits
+                        {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} {free ? "Start for free" : `Spend ${cost} credits`}
                       </button>
                       <button onClick={() => setConfirming(null)} className="text-[11px] text-[#6E7389] transition-colors hover:text-white">
                         Cancel
@@ -2065,10 +2080,10 @@ function ContinueLearning({
                         className={cx(isRecommended ? BTN_PRIMARY : BTN_SOFT, "h-10 whitespace-nowrap")}
                       >
                         {isRecommended
-                          ? <>Start this course · {cost} credits <ArrowRight className="h-3.5 w-3.5" /></>
-                          : <><Sparkles className="h-3.5 w-3.5 text-[#B4A9FF]" /> Generate · {cost} credits</>}
+                          ? <>Start this course · {free ? "Free" : `${cost} credits`} <ArrowRight className="h-3.5 w-3.5" /></>
+                          : <><Sparkles className="h-3.5 w-3.5 text-[#B4A9FF]" /> Generate · {free ? "Free" : `${cost} credits`}</>}
                       </button>
-                      <span className="text-center text-[10px] text-[#4A4F63]">leaves you {balance - cost}</span>
+                      {!free && <span className="text-center text-[10px] text-[#4A4F63]">leaves you {balance - cost}</span>}
                     </>
                   )}
                 </div>
@@ -2076,8 +2091,8 @@ function ContinueLearning({
 
               {isConfirming && (
                 <p className="mt-3 border-t border-white/[0.07] pt-3 text-[11px] leading-relaxed text-[#B9BCCB]">
-                  This spends <span className="font-semibold text-white">{cost} credits</span> and starts a new{" "}
-                  {tier?.lessonCount}-lesson course on “{item.topic}”. Your balance goes from {balance} to {balance - cost}.
+                  {free ? "This starts" : <>This spends <span className="font-semibold text-white">{cost} credits</span> and starts</>} a new{" "}
+                  {tier?.lessonCount}-lesson course on “{item.topic}”.{!free && ` Your balance goes from ${balance} to ${balance - cost}.`}
                   It builds <span className="text-white">just below this page</span> — you can keep reading your results while it does.
                 </p>
               )}
@@ -2403,6 +2418,7 @@ function ResultsStage({
         courseId={courseId}
         tiers={courseTiers}
         balance={balance}
+        freeMode={credits?.freeMode}
         onGenerate={onGenerateFollowUp}
         onRequestTopUp={onRequestTopUp}
         starting={starting}
@@ -2776,6 +2792,7 @@ function LibraryRail({ history, activeId, onSelect, onNew, onDelete, collapsed, 
   const balance = Math.max(credits?.spendableBalance ?? credits?.courseCredits ?? 0, 0);
   const bonus = Math.max(credits?.signupBonusCredits ?? 0, 0);
   const outOfCredits = !!credits && !credits.canGenerate;
+  const freeMode = credits?.freeMode?.enabled ? credits.freeMode : null;
 
   // Desktop collapsed → slim icon rail.
   if (!isMobile && collapsed) {
@@ -2795,7 +2812,7 @@ function LibraryRail({ history, activeId, onSelect, onNew, onDelete, collapsed, 
         <Link to="/collab" className="flex h-10 w-10 items-center justify-center rounded-xl text-[#8A8FA3] transition-colors hover:bg-white/[0.06] hover:text-white" title="Study with a friend">
           <Users className="h-4 w-4" />
         </Link>
-        {credits && (
+        {credits && !freeMode && (
           <button onClick={onBuy} className="mt-2 flex flex-col items-center rounded-xl px-2 py-1.5 transition-colors hover:bg-white/[0.05]" title="Credits">
             <Zap className={cx("h-4 w-4", outOfCredits ? "text-[#FF5C6C]" : "text-[#FFB547]")} />
             <span className="mt-0.5 font-mono text-[10px] font-semibold text-white">{balance}</span>
@@ -2840,7 +2857,16 @@ function LibraryRail({ history, activeId, onSelect, onNew, onDelete, collapsed, 
         </Link>
       </div>
 
-      {credits && (
+      {freeMode && (
+        <div className="mx-3 mt-3 rounded-2xl bg-gradient-to-br from-white/[0.06] to-white/[0.015] p-3.5 ring-1 ring-white/[0.07]">
+          <span className={EYEBROW}>Free for now</span>
+          <p className="mt-1.5 text-2xl font-bold tracking-tight text-white">
+            {freeMode.remaining ?? freeMode.limit}<span className="ml-1.5 text-xs font-medium text-[#6E7389]">lessons left today</span>
+          </p>
+        </div>
+      )}
+
+      {credits && !freeMode && (
         <div className="mx-3 mt-3 rounded-2xl bg-gradient-to-br from-white/[0.06] to-white/[0.015] p-3.5 ring-1 ring-white/[0.07]">
           <div className="flex items-center justify-between">
             <span className={EYEBROW}>Credits</span>
@@ -3820,7 +3846,7 @@ export default function AILearningPage() {
     const lessonCount = tier?.lessonCount ?? 6;
     setFollowUpError(null);
     setStartingFollowUpLabel(
-      tier ? `“${topic}” · ${tier.creditCost} credits` : `“${topic}”`
+      tier && !credits?.freeMode?.enabled ? `“${topic}” · ${tier.creditCost} credits` : `“${topic}”`
     );
     setStartingFollowUp(true);
     analytics.courseStarted({ topic, source: "topic" });

@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { PageMeta } from "@/components/PageMeta";
-import { Loader2, Save, Plus, Trash2, Check, AlertTriangle, Layers, Coins } from "lucide-react";
+import { Loader2, Save, Plus, Trash2, Check, AlertTriangle, Layers, Coins, Gift } from "lucide-react";
 import {
   getAdminPricingConfig,
   updateAdminPricingConfig,
+  updateFreeMode,
 } from "../../api/CourseApi";
-import type { CourseTier, CreditPack } from "../../api/CourseApi";
+import type { AdminFreeMode, CourseTier, CreditPack } from "../../api/CourseApi";
 import { Page, PageHeader, Card, LoadingBlock } from "../components";
 import { BTN_PRIMARY, BTN_SOFT, EYEBROW, cx } from "../theme";
 
@@ -37,9 +38,107 @@ function Th({ children, className }: { children?: React.ReactNode; className?: s
   return <th className={cx(EYEBROW, "px-2 pb-2.5 text-left", className)}>{children}</th>;
 }
 
+function FreeModeCard({ freeMode, onChange }: { freeMode: AdminFreeMode; onChange: (f: AdminFreeMode) => void }) {
+  const [limit, setLimit] = useState(freeMode.dailyLessonLimit);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const limitChanged = limit !== freeMode.dailyLessonLimit;
+
+  const apply = async (patch: { enabled?: boolean; dailyLessonLimit?: number }, done: (extended: number) => string) => {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await updateFreeMode(patch);
+      onChange(result.freeMode);
+      setLimit(result.freeMode.dailyLessonLimit);
+      setMessage(done(result.bonusesExtended));
+      setConfirming(false);
+    } catch (err: any) {
+      console.error(err);
+      setError(err?.message || "Failed to update free mode.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="Free mode" icon={<Gift className="h-4 w-4" />}>
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 max-w-2xl">
+          <p className="flex items-center gap-2 text-sm font-semibold text-[#ECEDF2]">
+            <span className={cx("h-2 w-2 shrink-0 rounded-full", freeMode.enabled ? "bg-[#3DDC97]" : "bg-[#4A4F63]")} />
+            {freeMode.enabled
+              ? `Level Up is free for everyone${freeMode.startedAt ? ` since ${new Date(freeMode.startedAt).toLocaleString()}` : ""}`
+              : "Off: courses cost credits as usual"}
+          </p>
+          <p className="mt-2 text-[13px] leading-relaxed text-[#8A8FA3]">
+            While it's on, every course is free and credits and prices are hidden. Nobody's balance changes, so everyone has
+            the same credits when you switch it off, and signup bonus expiry dates are pushed back by the time it was on.
+            Generating courses still costs you real AI money the whole time.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <label htmlFor="free-limit" className="text-[13px] text-[#B9BCCB]">Lessons per user, per 24 hours</label>
+            <input
+              id="free-limit"
+              type="number"
+              min={1}
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+              className={cx(CELL_INPUT, "w-20 tabular-nums")}
+            />
+            {limitChanged && (
+              <button
+                onClick={() => apply({ dailyLessonLimit: limit }, () => "Limit saved.")}
+                disabled={busy || !Number.isInteger(limit) || limit < 1}
+                className={cx(BTN_SOFT, "h-8 px-3 text-xs")}
+              >
+                Save limit
+              </button>
+            )}
+          </div>
+          <p className="mt-1.5 text-[12px] text-[#6E7389]">Also limited to 2 courses building at once per user. A limit under 6 blocks Full Mastery.</p>
+          {message && <p className="mt-3 flex items-center gap-2 text-[13px] text-[#3DDC97]"><Check className="h-4 w-4 shrink-0" /> {message}</p>}
+          {error && <p className="mt-3 flex items-center gap-2 text-[13px] text-[#FF8A95]"><AlertTriangle className="h-4 w-4 shrink-0" /> {error}</p>}
+        </div>
+
+        <div className="flex shrink-0 flex-col items-stretch gap-2 lg:w-56">
+          {confirming ? (
+            <>
+              <button
+                onClick={() =>
+                  apply({ enabled: !freeMode.enabled }, (extended) =>
+                    freeMode.enabled
+                      ? `Credits are back on. Signup bonus expiry pushed back for ${extended} user${extended !== 1 ? "s" : ""}.`
+                      : "Level Up is now free for everyone."
+                  )
+                }
+                disabled={busy}
+                className={BTN_PRIMARY}
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                {freeMode.enabled ? "Yes, bring credits back" : "Yes, make it free"}
+              </button>
+              <button onClick={() => setConfirming(false)} disabled={busy} className={BTN_SOFT}>Cancel</button>
+            </>
+          ) : (
+            <button onClick={() => setConfirming(true)} className={freeMode.enabled ? BTN_SOFT : BTN_PRIMARY}>
+              {freeMode.enabled ? "Back to credits" : "Make Level Up free"}
+            </button>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function PricingConfigPage() {
   const [courseTiers, setCourseTiers] = useState<CourseTier[]>([]);
   const [creditPacks, setCreditPacks] = useState<CreditPack[]>([]);
+  const [freeMode, setFreeMode] = useState<AdminFreeMode | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +146,7 @@ export default function PricingConfigPage() {
 
   useEffect(() => {
     getAdminPricingConfig()
-      .then((cfg) => { setCourseTiers(cfg.courseTiers); setCreditPacks(cfg.creditPacks); })
+      .then((cfg) => { setCourseTiers(cfg.courseTiers); setCreditPacks(cfg.creditPacks); setFreeMode(cfg.freeMode); })
       .catch((err) => { console.error(err); setError(err.message || "Failed to load pricing config — are you an admin?"); })
       .finally(() => setLoading(false));
   }, []);
@@ -113,6 +212,8 @@ export default function PricingConfigPage() {
       )}
 
       <div className="space-y-5">
+        {freeMode && <FreeModeCard freeMode={freeMode} onChange={setFreeMode} />}
+
         <Card
           title="Course tiers"
           icon={<Layers className="h-4 w-4" />}
