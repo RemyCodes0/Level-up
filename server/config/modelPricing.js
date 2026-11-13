@@ -37,6 +37,13 @@ const MODEL_PRICING = {
   // here that reports real cost.
   "anthropic/claude-haiku-5.5": { inputPerM: 0.10, outputPerM: 0.50 },
 
+  // DeepSeek V4.1 Flash on Ionstream flex (deepseek41's pinned host), from
+  // OpenRouter's endpoints listing on 2026-11-13. Real calls report their own
+  // usage.cost; this only prices a thinking hand-off's cut stream when
+  // OpenRouter's generation stats for it can't be fetched (see
+  // claudeService.js's fetchGenerationUsage).
+  "deepseek/deepseek-v4.1-flash-1017": { inputPerM: 0.0775, outputPerM: 0.2325 },
+
   // Kokoro-82M TTS via OpenRouter — billed per INPUT TEXT TOKEN, $0 for
   // output audio. https://openrouter.ai/hexgrad/kokoro-82m
   "hexgrad/kokoro-82m": { inputPerM: 0.62, outputPerM: 0 },

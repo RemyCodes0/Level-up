@@ -224,9 +224,19 @@ async function generateCourseHandler(req, res) {
 }
 
 // ── Builds one lesson: scenes → audio → code → save to DB ───────────────────
-async function buildLesson(courseId, lesson, userId = null, language = "English") {
+// onNarrationReady(lessonNumber, narrationScript) (optional) fires once this
+// lesson's narration is final, i.e. as soon as its scene plan exists, or with
+// null if the lesson fails before that — see processCourse's parallel quiz.
+async function buildLesson(courseId, lesson, userId = null, language = "English", { onNarrationReady = null } = {}) {
   const MAX_ATTEMPTS = 2;
   const lessonStart = Date.now();
+  const reportNarration = (narrationScript) => {
+    try {
+      onNarrationReady?.(lesson.lessonNumber, narrationScript);
+    } catch (err) {
+      console.error(`[${courseId}] Lesson ${lesson.lessonNumber}: onNarrationReady failed (non-fatal):`, err.message);
+    }
+  };
 
   // Helper: writes a GenerationLog entry. Never throws — a logging failure
   // should never take down lesson generation itself.
@@ -310,6 +320,9 @@ async function buildLesson(courseId, lesson, userId = null, language = "English"
   try {
     console.log(`[${courseId}] Lesson ${lesson.lessonNumber}: scene plan...`);
     scenePlan = await generateScenePlan(lesson, 3, { userId, courseId, language });
+    // Same text that's saved as narrationScript once the lesson is ready
+    // (ttsService passes each scene's narration through unchanged).
+    reportNarration(scenePlan.map((s) => s.narration).filter(Boolean).join(" "));
 
     // Scene count/labels are known immediately — initialize a placeholder
     // progress entry per scene right away, before audio or code generation
@@ -360,6 +373,7 @@ async function buildLesson(courseId, lesson, userId = null, language = "English"
       }
     }, { userId, courseId, lessonNumber: lesson.lessonNumber, language }));
   } catch (err) {
+    reportNarration(null);
     const stage = "scenes";
     const elapsedMin = ((Date.now() - lessonStart) / 60000).toFixed(1);
     console.error(
@@ -551,8 +565,8 @@ async function buildLesson(courseId, lesson, userId = null, language = "English"
 // with no queuing. A lesson that fails doesn't block its siblings —
 // buildLesson handles its own errors internally and never rethrows for a
 // content failure, only Promise.allSettled below needs to know it settled.
-async function buildLessonsConcurrently(courseId, lessons, userId = null, language = "English") {
-  await Promise.allSettled(lessons.map((lesson) => buildLesson(courseId, lesson, userId, language)));
+async function buildLessonsConcurrently(courseId, lessons, userId = null, language = "English", options = {}) {
+  await Promise.allSettled(lessons.map((lesson) => buildLesson(courseId, lesson, userId, language, options)));
 }
 
 // ── Orchestrates the whole course ────────────────────────────────────────────
@@ -627,9 +641,31 @@ async function processCourse(
     // Build all of this course's lessons one at a time, regardless of trial
     // status — how many that is now depends on the selected tier (or the
     // free trial's fixed 6), not a hardcoded count.
-    await buildLessonsConcurrently(courseId, lessons, userId, language);
+    // The quiz runs IN PARALLEL with lesson code generation: it only reads each
+    // lesson's narration, which is final as soon as that lesson's scene plan
+    // exists, so it starts once every lesson has reported its narration
+    // instead of after every lesson's code (it used to add ~15-20s to the end
+    // of every course).
+    const plannedNarration = new Map();
+    let narrationComplete;
+    const allNarrationPlanned = new Promise((resolve) => { narrationComplete = resolve; });
+    const onNarrationReady = (lessonNumber, narrationScript) => {
+      plannedNarration.set(lessonNumber, narrationScript);
+      if (plannedNarration.size === lessons.length) narrationComplete();
+    };
+    const earlyQuiz = allNarrationPlanned.then(() => {
+      const quizLessons = lessons.map((l) => ({ title: l.title, narrationScript: plannedNarration.get(l.lessonNumber) || "" }));
+      if (!quizLessons.some((l) => l.narrationScript.trim())) return null;
+      console.log(`[${courseId}] Every lesson's narration is planned — generating the quiz alongside lesson code.`);
+      return generateCourseQuiz(topic, quizLessons, mcqCount, undefined, { userId, courseId, language });
+    });
+    earlyQuiz.catch(() => {}); // awaited, and its failure handled, below
 
-    // Quiz generation, now that every lesson has (attempted to) build and
+    await buildLessonsConcurrently(courseId, lessons, userId, language, { onNarrationReady });
+    // A lesson that never reported must not leave the quiz waiting forever.
+    narrationComplete();
+
+    // Quiz, now that every lesson has (attempted to) build and
     // narrationScript is populated for whichever ones succeeded. Wrapped so
     // a quiz-generation failure never fails the whole course — the lessons
     // are already built and watchable regardless; the frontend's QuizSection
@@ -665,8 +701,8 @@ async function processCourse(
       const narrationChars = builtCourse.lessons.reduce((n, l) => n + (l.narrationScript || "").length, 0);
       const withNarration = builtCourse.lessons.filter((l) => (l.narrationScript || "").trim()).length;
       console.log(
-        `[${courseId}] Generating quiz: ${mcqCount} questions from ${builtCourse.lessons.length} lesson(s), ` +
-          `${withNarration} with narration (${narrationChars} chars total).`
+        `[${courseId}] Quiz: ${mcqCount} questions from ${builtCourse.lessons.length} lesson(s), ` +
+          `${withNarration} ready with narration (${narrationChars} chars total).`
       );
 
       // With no narration there is nothing to write questions ABOUT, and the
@@ -677,9 +713,20 @@ async function processCourse(
         console.warn(`[${courseId}] Skipping quiz — no lesson produced any narration to build questions from.`);
       } else {
         const quizStart = Date.now();
-        const questions = await generateCourseQuiz(topic, builtCourse.lessons, mcqCount, undefined, { userId, courseId, language });
+        // The parallel quiz covered every lesson whose narration was planned. If
+        // one of those has since failed, it would test content the learner can't
+        // watch, so rebuild from the ready lessons only, as before.
+        const quizCoversFailedLesson = builtCourse.lessons.some(
+          (l, i) => l.status !== "ready" && (plannedNarration.get(lessons[i].lessonNumber) || "").trim()
+        );
+        if (quizCoversFailedLesson) {
+          console.log(`[${courseId}] A lesson failed after the parallel quiz started — regenerating the quiz from the ready lessons only.`);
+        }
+        const questions =
+          (!quizCoversFailedLesson && (await earlyQuiz)) ||
+          (await generateCourseQuiz(topic, builtCourse.lessons, mcqCount, undefined, { userId, courseId, language }));
         await Course.findByIdAndUpdate(courseId, { questions });
-        console.log(`[${courseId}] Quiz stage took ${((Date.now() - quizStart) / 1000).toFixed(1)}s.`);
+        console.log(`[${courseId}] Waited ${((Date.now() - quizStart) / 1000).toFixed(1)}s for the quiz after the lessons finished.`);
         if (questions.length < mcqCount) {
           console.warn(
             `[${courseId}] Quiz saved with ${questions.length}/${mcqCount} questions — the model could not produce ` +

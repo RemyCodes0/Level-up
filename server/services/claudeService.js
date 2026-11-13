@@ -851,10 +851,16 @@ const PLAN_PROVIDER = PLAN_PROVIDERS[PLAN_MODEL_KEY];
 // Names kept exactly as every existing call site already references them —
 // sceneService.js imports GEMINI_SCENE_PLAN_PROVIDER by this literal name —
 // so nothing downstream needed to change, only what these two now resolve
-// to. Both intentionally point at the SAME resolved object; they were never
-// independently configurable in the first place.
+// to. Same model for both; only the scene plan's reasoning differs (below).
 const GEMINI_COURSE_PLAN_PROVIDER = PLAN_PROVIDER;
-const GEMINI_SCENE_PLAN_PROVIDER = PLAN_PROVIDER;
+// Scene plan only: Haiku with reasoning fully off. Measured live 2026-11-13,
+// real generateScenePlan, 6 runs each: off ~18-23s and $0.0027/plan vs low
+// ~23-27s and $0.0035/plan, all 6 valid JSON (the Oct 15 malformed-JSON
+// failure above was the course plan, which stays on "low", as does the quiz).
+const GEMINI_SCENE_PLAN_PROVIDER =
+  PLAN_PROVIDER === CLAUDE_HAIKU_PLAN_PROVIDER
+    ? { ...CLAUDE_HAIKU_PLAN_PROVIDER, extraParams: { reasoning: { enabled: false } } }
+    : PLAN_PROVIDER;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONCURRENCY
@@ -3200,23 +3206,84 @@ function logUsage(label, usage) {
 // retry loop rerolls immediately instead of waiting out the ceiling.
 const STREAM_IDLE_TIMEOUT_MS = Number(process.env.CODEGEN_STREAM_IDLE_TIMEOUT_MS) || 90 * 1000;
 
+// ── Thinking hand-off ───────────────────────────────────────────────────────
+// A lesson is only as fast as its slowest scene, and with deepseek41 on
+// effort "minimal" a scene's thinking varies wildly: measured live
+// (2026-11-13, the 10 real chunk prompts of one lesson) 9k-21k reasoning
+// tokens before writing only ~2.5k tokens of code, and occasionally all 30k
+// with no code at all (a failed chunk, then a full retry). reasoning.max_tokens
+// is ignored by this model, so the budget is enforced here instead: once a
+// full-generation call has thought for REASONING_HANDOFF_TOKENS without
+// starting its code, the stream is cut and a reasoning-off call is handed the
+// model's own notes so far and writes the code immediately. Scenes that finish
+// thinking under the budget are untouched. Cutting a stream stops billing
+// (confirmed: OpenRouter reports the generation as cancelled=true, billed only
+// for tokens generated before the cut), so this is cheaper as well as faster.
+// 0 turns it off.
+const REASONING_HANDOFF_TOKENS = Number(process.env.REASONING_HANDOFF_TOKENS ?? 8000);
+// Reasoning text measured at ~3.2-3.9 chars/token on this model.
+const REASONING_CHARS_PER_TOKEN = 3.5;
+
+function buildReasoningHandoffSuffix(reasoningText) {
+  return `
+
+YOUR OWN PLANNING NOTES FOR THIS EXACT TASK (you were stopped mid-planning so the code can be written now — every decision in them is final; settle anything still open yourself without deliberating, and depart from the notes only where they would break a rule above):
+<<<NOTES
+${reasoningText}
+NOTES>>>
+
+Now output ONLY the final code, in exactly the format the rules above require.`;
+}
+
+// A cut stream never receives its usage chunk, so its real cost is read back
+// from OpenRouter's generation stats. Seen anywhere from ~15s to over a minute
+// after the cut, so this keeps trying in the background for ~8 min.
+async function fetchGenerationUsage(generationId) {
+  for (const waitMs of [15000, 30000, 60000, 120000, 240000]) {
+    await new Promise((r) => setTimeout(r, waitMs));
+    try {
+      const res = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(generationId)}`, {
+        headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` },
+      });
+      if (!res.ok) continue;
+      const { data } = await res.json();
+      if (data) {
+        return {
+          prompt_tokens: data.native_tokens_prompt ?? data.tokens_prompt ?? 0,
+          completion_tokens: data.native_tokens_completion ?? data.tokens_completion ?? 0,
+          cost: data.total_cost ?? null,
+        };
+      }
+    } catch (_) {
+      // Retried on the next wait; a lookup failure only affects cost logging.
+    }
+  }
+  return null;
+}
+
 // sessionId (optional): OpenRouter's provider-sticky-routing key — see
 // buildLessonSessionId below for what it's built from and why. Only
 // meaningful for the OpenRouter-routed path (streamOpenAiCompatible);
 // Anthropic-native calls (streamAnthropicNative) have no such concept and
 // silently ignore it.
-async function streamCodeCompletion({ limiter, provider, systemPrompt, userContent, maxOutputTokens, sessionId = null }) {
+// reasoningHandoff (optional, full code generation only): { onCancelledUsage }
+// turns on the thinking hand-off above for this call. onCancelledUsage(usage)
+// is called later with the cut stream's real usage so the caller can record it.
+async function streamCodeCompletion({ limiter, provider, systemPrompt, userContent, maxOutputTokens, sessionId = null, reasoningHandoff = null }) {
   return limiter(() =>
     provider.isAnthropicNative
       ? streamAnthropicNative({ provider, systemPrompt, userContent, maxOutputTokens })
-      : streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens, sessionId })
+      : streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens, sessionId, reasoningHandoff })
   );
 }
 
 // GLM, DeepSeek, and Fable — every OpenRouter-routed provider — all speak
 // the OpenAI chat-completions wire shape — this is that path.
-async function streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens, sessionId = null }) {
+async function streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens, sessionId = null, reasoningHandoff = null }) {
   const controller = new AbortController();
+  const handoffChars = reasoningHandoff && REASONING_HANDOFF_TOKENS > 0
+    ? REASONING_HANDOFF_TOKENS * REASONING_CHARS_PER_TOKEN
+    : Infinity;
   const stream = await provider.client.chat.completions.create(
     {
       model: provider.model,
@@ -3255,6 +3322,11 @@ async function streamOpenAiCompatible({ provider, systemPrompt, userContent, max
   );
 
   let streamedText = "";
+  let reasoningText = "";
+  let generationId = null;
+  let servedBy = null; // OpenRouter names the host on each chunk
+  let handedOff = false;
+  const streamStart = Date.now();
   let finishReason = null;
   let usage = null;
   let lastChunkAt = Date.now();
@@ -3265,8 +3337,20 @@ async function streamOpenAiCompatible({ provider, systemPrompt, userContent, max
   try {
     for await (const chunk of stream) {
       lastChunkAt = Date.now();
+      generationId = generationId || chunk.id;
+      servedBy = servedBy || chunk.provider;
       const delta = chunk.choices?.[0]?.delta;
-      if (delta?.content) streamedText += delta.content; // ignore reasoning_content
+      if (delta?.content) streamedText += delta.content;
+      // Reasoning never goes into the returned text — it's only kept for the
+      // thinking hand-off, and only until the code itself starts.
+      const reasoningPiece = delta?.reasoning || delta?.reasoning_content;
+      if (reasoningPiece && !streamedText) {
+        reasoningText += reasoningPiece;
+        if (reasoningText.length >= handoffChars) {
+          handedOff = true;
+          break;
+        }
+      }
       if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
       // The usage chunk arrives LAST with an empty `choices` array — never
       // gate it behind the finish_reason check above.
@@ -3281,6 +3365,32 @@ async function streamOpenAiCompatible({ provider, systemPrompt, userContent, max
     throw err;
   } finally {
     clearInterval(watchdog);
+  }
+
+  if (handedOff) {
+    controller.abort();
+    console.log(
+      `  [handoff] ${provider.model} via ${servedBy || "unknown host"}: thought ~${Math.round(reasoningText.length / REASONING_CHARS_PER_TOKEN)} tokens ` +
+      `in ${((Date.now() - streamStart) / 1000).toFixed(0)}s without starting code — cutting it there and writing the code from those notes with reasoning off.`
+    );
+    if (generationId && reasoningHandoff.onCancelledUsage) {
+      // Estimate if the stats never arrive: cost null makes recordAiUsage
+      // price these tokens from modelPricing.js instead.
+      fetchGenerationUsage(generationId)
+        .then((cutUsage) => reasoningHandoff.onCancelledUsage(cutUsage || {
+          prompt_tokens: Math.round((systemPrompt.length + userContent.length) / REASONING_CHARS_PER_TOKEN),
+          completion_tokens: Math.round(reasoningText.length / REASONING_CHARS_PER_TOKEN),
+          cost: null,
+        }))
+        .catch((err) => console.warn(`  [handoff] Failed to record the cut call's usage (non-fatal): ${err.message}`));
+    }
+    return streamOpenAiCompatible({
+      provider: withReasoningOff(provider),
+      systemPrompt,
+      userContent: userContent + buildReasoningHandoffSuffix(reasoningText),
+      maxOutputTokens,
+      sessionId,
+    });
   }
 
   return { text: streamedText, stopReason: finishReason, usage };
@@ -3569,6 +3679,18 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = HEADER_MAX_ATT
   }
 
   async function generateFullHeader(feedback) {
+    const recordUsage = (u) => recordAiUsage({
+      kind: "lesson-code",
+      provider: LESSON_CODE_PROVIDER.providerName,
+      model: LESSON_CODE_PROVIDER.model,
+      userId,
+      courseId,
+      lessonNumber: lesson.lessonNumber,
+      promptTokens: u.prompt_tokens,
+      completionTokens: u.completion_tokens,
+      cachedTokens: u.prompt_cache_hit_tokens || 0,
+      costUsd: u.cost ?? null,
+    });
     const { text, stopReason, usage } = await streamCodeCompletion({
       limiter: limitLessonCodeCall,
       // Full generation (first attempt AND the full-regeneration fallback
@@ -3586,22 +3708,10 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = HEADER_MAX_ATT
       userContent: buildHeaderUserContent(lesson, scenes, libraryCatalog) + feedbackSuffix(feedback),
       maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
       sessionId,
+      reasoningHandoff: { onCancelledUsage: recordUsage },
     });
     logUsage(label, usage);
-    if (usage) {
-      recordAiUsage({
-        kind: "lesson-code",
-        provider: LESSON_CODE_PROVIDER.providerName,
-        model: LESSON_CODE_PROVIDER.model,
-        userId,
-        courseId,
-        lessonNumber: lesson.lessonNumber,
-        promptTokens: usage.prompt_tokens,
-        completionTokens: usage.completion_tokens,
-        cachedTokens: usage.prompt_cache_hit_tokens || 0,
-        costUsd: usage.cost ?? null,
-      });
-    }
+    if (usage) recordUsage(usage);
 
     try {
       if (stopReason === "length") {
@@ -4481,6 +4591,18 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
   const otherScenesSpec = buildOtherScenesSpecTable(allScenes, chunkStartIndex, chunkScenes.length);
 
   async function generateFullChunk(feedback) {
+    const recordUsage = (u) => recordAiUsage({
+      kind: "lesson-code",
+      provider: LESSON_CODE_PROVIDER.providerName,
+      model: LESSON_CODE_PROVIDER.model,
+      userId,
+      courseId,
+      lessonNumber: lesson.lessonNumber,
+      promptTokens: u.prompt_tokens,
+      completionTokens: u.completion_tokens,
+      cachedTokens: u.prompt_cache_hit_tokens || 0,
+      costUsd: u.cost ?? null,
+    });
     const { text, stopReason, usage } = await streamCodeCompletion({
       limiter: limitLessonCodeCall,
       // Full generation (first attempt AND the full-regeneration fallback)
@@ -4495,22 +4617,10 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       userContent: buildChunkUserContent(lesson, componentName, chunkScenes, chunkStartIndex, totalScenes, compactHeader, allScenes) + feedbackSuffix(feedback),
       maxOutputTokens: CHUNK_MAX_OUTPUT_TOKENS,
       sessionId,
+      reasoningHandoff: { onCancelledUsage: recordUsage },
     });
     logUsage(label, usage);
-    if (usage) {
-      recordAiUsage({
-        kind: "lesson-code",
-        provider: LESSON_CODE_PROVIDER.providerName,
-        model: LESSON_CODE_PROVIDER.model,
-        userId,
-        courseId,
-        lessonNumber: lesson.lessonNumber,
-        promptTokens: usage.prompt_tokens,
-        completionTokens: usage.completion_tokens,
-        cachedTokens: usage.prompt_cache_hit_tokens || 0,
-        costUsd: usage.cost ?? null,
-      });
-    }
+    if (usage) recordUsage(usage);
 
     try {
       if (stopReason === "length") {
