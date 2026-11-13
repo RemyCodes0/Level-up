@@ -3219,8 +3219,11 @@ const STREAM_IDLE_TIMEOUT_MS = Number(process.env.CODEGEN_STREAM_IDLE_TIMEOUT_MS
 // thinking under the budget are untouched. Cutting a stream stops billing
 // (confirmed: OpenRouter reports the generation as cancelled=true, billed only
 // for tokens generated before the cut), so this is cheaper as well as faster.
-// 0 turns it off.
-const REASONING_HANDOFF_TOKENS = Number(process.env.REASONING_HANDOFF_TOKENS ?? 8000);
+// 0 turns it off. Raised from 8000 to 12000 (2026-11-13) for better scenes:
+// measured natural thinking on minimal was a median ~13k tokens, so about
+// 40% of scenes now finish thinking on their own and the rest keep ~50% more
+// of their plan, at roughly +15s per lesson.
+const REASONING_HANDOFF_TOKENS = Number(process.env.REASONING_HANDOFF_TOKENS ?? 12000);
 // Reasoning text measured at ~3.2-3.9 chars/token on this model.
 const REASONING_CHARS_PER_TOKEN = 3.5;
 
