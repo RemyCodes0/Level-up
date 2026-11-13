@@ -235,7 +235,14 @@ const CODE_PROVIDERS = {
   // that host is under sustained load.
   deepseek41: {
     client: openRouterClient,
-    model: "deepseek/deepseek-v4.1-flash-1017:floor",
+    // Was ":floor", which picked a different host per call and mostly landed
+    // on Particle AI's flex queue (36 tok/s measured) or Wafer (2x the price).
+    // Measured live 2026-11-13, same code prompt, effort "minimal", 8 at once:
+    // ionstream/flex held ~250 tok/s at $0.234/M out (Particle: $0.25/M),
+    // deepinfra/fp8/flex ~135 tok/s at $0.237/M. Those two only, and max_price
+    // guarantees a fallback can never cost more than this. Sail Research fp4
+    // was as fast at half the price but is a 4-bit quant, so left out.
+    model: "deepseek/deepseek-v4.1-flash-1017",
     providerName: "deepseek41",
     // Was {effort: "minimal"} — drifted out of sync with this entry's OWN
     // comment above, which documents the decision as genuine {enabled:
@@ -247,8 +254,13 @@ const CODE_PROVIDERS = {
     // monotonic here either: "low" measured WORSE than "minimal" (3374
     // reasoning tokens) — another reason not to reach for a tier name
     // assuming it's conservative.
-    extraParams: { reasoning: { effort:"minimal"},
-    
+    extraParams: {
+      reasoning: { effort: "minimal" },
+      provider: {
+        order: ["ionstream/flex", "deepinfra/fp8/flex"],
+        allow_fallbacks: false,
+        max_price: { prompt: 0.1, completion: 0.25 },
+      },
     },
     maxTokens: 50000,
     keyEnv: "OPENROUTER_API_KEY",
