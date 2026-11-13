@@ -522,11 +522,12 @@ export const DynamicPlayer: React.FC<DynamicPlayerProps> = ({
   // Captions — one global on/off preference (see CAPTIONS_STORAGE_KEY),
   // read lazily so a server-rendered/first-paint mismatch never happens
   // (this component only ever runs client-side anyway, inside the Player).
+  // On by default; only an explicit "off" from the user turns them off.
   const [captionsEnabled, setCaptionsEnabled] = useState(() => {
     try {
-      return localStorage.getItem(CAPTIONS_STORAGE_KEY) === "true";
+      return localStorage.getItem(CAPTIONS_STORAGE_KEY) !== "false";
     } catch {
-      return false;
+      return true;
     }
   });
   const toggleCaptions = useCallback(() => {

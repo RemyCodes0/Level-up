@@ -38,8 +38,14 @@ function Th({ children, className }: { children?: React.ReactNode; className?: s
   return <th className={cx(EYEBROW, "px-2 pb-2.5 text-left", className)}>{children}</th>;
 }
 
-function FreeModeCard({ freeMode, onChange }: { freeMode: AdminFreeMode; onChange: (f: AdminFreeMode) => void }) {
-  const [limit, setLimit] = useState(freeMode.dailyLessonLimit);
+const isValidLimit = (limit: number) => Number.isInteger(limit) && limit >= 1;
+
+function FreeModeCard({ freeMode, onChange, limit, setLimit }: {
+  freeMode: AdminFreeMode;
+  onChange: (f: AdminFreeMode) => void;
+  limit: number;
+  setLimit: (limit: number) => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -80,7 +86,13 @@ function FreeModeCard({ freeMode, onChange }: { freeMode: AdminFreeMode; onChang
             the same credits when you switch it off, and signup bonus expiry dates are pushed back by the time it was on.
             Generating courses still costs you real AI money the whole time.
           </p>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
+          <form
+            className="mt-4 flex flex-wrap items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (limitChanged && !busy && isValidLimit(limit)) apply({ dailyLessonLimit: limit }, () => "Limit saved.");
+            }}
+          >
             <label htmlFor="free-limit" className="text-[13px] text-[#B9BCCB]">Lessons per user, per 24 hours</label>
             <input
               id="free-limit"
@@ -92,14 +104,14 @@ function FreeModeCard({ freeMode, onChange }: { freeMode: AdminFreeMode; onChang
             />
             {limitChanged && (
               <button
-                onClick={() => apply({ dailyLessonLimit: limit }, () => "Limit saved.")}
-                disabled={busy || !Number.isInteger(limit) || limit < 1}
+                type="submit"
+                disabled={busy || !isValidLimit(limit)}
                 className={cx(BTN_SOFT, "h-8 px-3 text-xs")}
               >
                 Save limit
               </button>
             )}
-          </div>
+          </form>
           <p className="mt-1.5 text-[12px] text-[#6E7389]">Also limited to 2 courses building at once per user. A limit under 6 blocks Full Mastery.</p>
           {message && <p className="mt-3 flex items-center gap-2 text-[13px] text-[#3DDC97]"><Check className="h-4 w-4 shrink-0" /> {message}</p>}
           {error && <p className="mt-3 flex items-center gap-2 text-[13px] text-[#FF8A95]"><AlertTriangle className="h-4 w-4 shrink-0" /> {error}</p>}
@@ -139,6 +151,7 @@ export default function PricingConfigPage() {
   const [courseTiers, setCourseTiers] = useState<CourseTier[]>([]);
   const [creditPacks, setCreditPacks] = useState<CreditPack[]>([]);
   const [freeMode, setFreeMode] = useState<AdminFreeMode | null>(null);
+  const [freeLimit, setFreeLimit] = useState(6);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,7 +159,7 @@ export default function PricingConfigPage() {
 
   useEffect(() => {
     getAdminPricingConfig()
-      .then((cfg) => { setCourseTiers(cfg.courseTiers); setCreditPacks(cfg.creditPacks); setFreeMode(cfg.freeMode); })
+      .then((cfg) => { setCourseTiers(cfg.courseTiers); setCreditPacks(cfg.creditPacks); setFreeMode(cfg.freeMode); setFreeLimit(cfg.freeMode.dailyLessonLimit); })
       .catch((err) => { console.error(err); setError(err.message || "Failed to load pricing config — are you an admin?"); })
       .finally(() => setLoading(false));
   }, []);
@@ -169,13 +182,22 @@ export default function PricingConfigPage() {
   };
 
   const handleSave = async () => {
-    setSaving(true);
     setError(null);
     setSavedAt(null);
+    if (!isValidLimit(freeLimit)) {
+      setError("The free lesson limit must be a whole number of at least 1.");
+      return;
+    }
+    setSaving(true);
     try {
       const result = await updateAdminPricingConfig(courseTiers, creditPacks);
       setCourseTiers(result.courseTiers);
       setCreditPacks(result.creditPacks);
+      if (freeMode && freeLimit !== freeMode.dailyLessonLimit) {
+        const updated = await updateFreeMode({ dailyLessonLimit: freeLimit });
+        setFreeMode(updated.freeMode);
+        setFreeLimit(updated.freeMode.dailyLessonLimit);
+      }
       setSavedAt(Date.now());
     } catch (err: any) {
       console.error(err);
@@ -212,7 +234,7 @@ export default function PricingConfigPage() {
       )}
 
       <div className="space-y-5">
-        {freeMode && <FreeModeCard freeMode={freeMode} onChange={setFreeMode} />}
+        {freeMode && <FreeModeCard freeMode={freeMode} onChange={setFreeMode} limit={freeLimit} setLimit={setFreeLimit} />}
 
         <Card
           title="Course tiers"

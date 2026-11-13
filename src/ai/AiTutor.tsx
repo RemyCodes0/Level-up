@@ -171,6 +171,13 @@ function mergeLesson(l: Lesson, a: ApiLesson | undefined): Lesson {
     code: a.code ?? l.code,
     totalFrames: a.totalFrames ?? l.totalFrames,
     sceneProgress: a.sceneProgress ?? l.sceneProgress,
+    // FIX: missing here meant a lesson that finished generating during a
+    // LIVE poll (no page reload) never got its scene/narration data into
+    // local state — the player's captionsAvailable check always saw
+    // undefined, so the CC button silently never appeared until the next
+    // full reload re-fetched the course from scratch (which builds Lesson[]
+    // straight from the API response, scenes included).
+    scenes: a.scenes ?? l.scenes,
     error: a.error ?? null,
   };
 }
@@ -3932,7 +3939,7 @@ export default function AILearningPage() {
             prevLessons.map((l, i) => {
               const a = course.lessons[i];
               if (!a) return l;
-              return { ...l, videoUrl: a.videoUrl ?? l.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress };
+              return { ...l, videoUrl: a.videoUrl ?? l.videoUrl, code: a.code ?? l.code, totalFrames: a.totalFrames ?? l.totalFrames, sceneProgress: a.sceneProgress ?? l.sceneProgress, scenes: a.scenes ?? l.scenes };
             });
           setHistory((prev) => prev.map((e) => (e.id === entry.id ? { ...e, lessons: fillCode(e.lessons) } : e)));
           // Only touch the displayed course if the user is still on it.
