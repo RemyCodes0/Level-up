@@ -38,6 +38,12 @@ app.use(compression());
 // ──────────────────────────────────────────────────────────────────────────
 app.use('/api/payment', paymentRoutes);
 
+// Whop webhook — also needs the raw body for signature verification, so it
+// sits before express.json() too. This is the URL set in the Whop dashboard.
+const { webhookHandler: whopWebhookHandler, webhookStatus: whopWebhookStatus } = require('./controllers/whopController');
+app.get('/api/webhooks/whop', whopWebhookStatus);
+app.post('/api/webhooks/whop', express.raw({ type: '*/*' }), whopWebhookHandler);
+
 app.use(express.json());
 
 // ──────────────────────────────────────────────────────────────────────────

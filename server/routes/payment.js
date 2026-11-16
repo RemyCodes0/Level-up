@@ -15,6 +15,7 @@ const {
   createCheckoutSession: tapCheckoutHandler,
   webhookHandler: tapWebhookHandler,
 } = require("../controllers/tapController");
+const { createCheckoutSession: whopCheckoutHandler } = require("../controllers/whopController");
 const { getTransactions } = require("../controllers/creditsController");
 
 // POST /api/payment/checkout — authenticated, JSON body
@@ -76,5 +77,11 @@ router.post("/tap/checkout", express.json(), protect, tapCheckoutHandler);
 // this needs ordinary JSON parsing, not express.raw() like the webhooks
 // above.
 router.post("/tap/webhook", express.json(), tapWebhookHandler);
+
+// ── Whop — credit purchases (additive) ───────────────────────────────────
+// POST /api/payment/whop/checkout — authenticated. No body needed: the plan
+// is fixed server-side. The webhook itself lives at /api/webhooks/whop (see
+// app.js), the URL registered in the Whop dashboard.
+router.post("/whop/checkout", protect, whopCheckoutHandler);
 
 module.exports = router;

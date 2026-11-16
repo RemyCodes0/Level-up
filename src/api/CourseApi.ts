@@ -198,6 +198,19 @@ export async function createTapCheckout(packKey: string): Promise<{ checkoutUrl:
   return data;
 }
 
+// Starts a Whop checkout for the credit pack — returns a hosted Whop checkout
+// URL to send the browser to (see server/controllers/whopController.js).
+export async function createWhopCheckout(): Promise<{ checkoutUrl: string }> {
+  const res = await fetch(`${BASE_URL}/api/payment/whop/checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+  });
+  handleUnauthorized(res);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || "Failed to start checkout");
+  return data;
+}
+
 // ── Admin — course tiers + credit packs (requireAdmin-gated server-side) ─────
 export interface AdminFreeMode {
   enabled: boolean;

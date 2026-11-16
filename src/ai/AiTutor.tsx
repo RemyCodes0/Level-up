@@ -20,6 +20,7 @@ import {
   getPricingConfig,
   getCourseLineage,
   regenerateQuiz,
+  createWhopCheckout,
 } from "../api/CourseApi";
 import type { CourseFromAPI, NextCourseSuggestion, SceneProgressItem, SceneMetaItem, CourseTier, FreeModeStatus } from "../api/CourseApi";
 import { getProgress, markLessonWatched, logPosition } from "../api/ProgressApi";
@@ -415,6 +416,21 @@ function Aurora() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PaywallModal({ onClose }: { onClose: () => void; courseId?: string | null; courseName?: string }) {
+  const [buying, setBuying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const buy = async () => {
+    setBuying(true);
+    setError(null);
+    try {
+      const { checkoutUrl } = await createWhopCheckout();
+      window.location.href = checkoutUrl;
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : "Couldn't start checkout. Please try again.");
+      setBuying(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-md" onClick={onClose}>
       <div
@@ -426,21 +442,29 @@ function PaywallModal({ onClose }: { onClose: () => void; courseId?: string | nu
           <X className="h-4 w-4" />
         </button>
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#3DDC97]/10 ring-1 ring-[#3DDC97]/30">
-          <MessageSquare className="h-5 w-5 text-[#3DDC97]" />
+          <Zap className="h-5 w-5 text-[#3DDC97]" />
         </div>
         <h2 className="lu-serif mt-5 text-[32px] leading-tight">Running low on credits?</h2>
         <p className="mt-2 text-sm leading-relaxed text-[#8A8FA3]">
-          We're not selling credit packs directly just yet. Join the Level Up WhatsApp community, send us a message, and we'll top you up.
+          Get 60 more credits and keep building courses. Credits never expire, and they land in your account within seconds of paying.
         </p>
+        <button
+          onClick={buy}
+          disabled={buying}
+          className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#3DDC97] text-sm font-semibold text-[#06130D] transition-all hover:brightness-110 disabled:opacity-70"
+        >
+          {buying ? <><Loader2 className="h-4 w-4 animate-spin" /> Opening checkout…</> : <>Buy 60 credits <ArrowRight className="h-4 w-4" /></>}
+        </button>
+        {error && <p className="mt-3 text-center text-xs text-[#FF7A6B]">{error}</p>}
         <a
           href={WHATSAPP_COMMUNITY_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#3DDC97] text-sm font-semibold text-[#06130D] transition-all hover:brightness-110"
+          className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-2xl text-xs font-medium text-[#8A8FA3] transition-colors hover:bg-white/5 hover:text-white"
         >
-          Join the WhatsApp community <ArrowRight className="h-4 w-4" />
+          <MessageSquare className="h-3.5 w-3.5" /> Or ask us on WhatsApp
         </a>
-        <p className="mt-4 text-center text-xs text-[#6E7389]">Your 100 signup credits and referral earnings stay yours in the meantime.</p>
+        <p className="mt-2 text-center text-xs text-[#6E7389]">Your signup credits and referral earnings stay yours either way.</p>
       </div>
     </div>
   );
@@ -3499,8 +3523,12 @@ export default function AILearningPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("payment") === "success") {
+      // Whop's webhook can land a few seconds after the redirect — re-check
+      // the balance a few times instead of once.
       fetchCredits();
+      const timers = [3000, 8000, 15000].map((ms) => window.setTimeout(fetchCredits, ms));
       window.history.replaceState({}, "", window.location.pathname);
+      return () => timers.forEach(window.clearTimeout);
     }
   }, []);
 

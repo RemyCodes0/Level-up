@@ -49,6 +49,8 @@ const UserSchema = new mongoose.Schema({
   // Tap Payments webhook idempotency, same reasoning as processedStripeEvents
   // above — keyed by the Tap charge id (Tap has no separate event id).
   processedTapEvents: { type: [String], default: [] },
+  // Whop webhook idempotency — Whop payment ids already credited.
+  processedWhopPayments: { type: [String], default: [] },
 
   // ── Email preferences ──────────────────────────────────────────────────────
   // When true, this user is excluded from broadcast/marketing emails. Set via
