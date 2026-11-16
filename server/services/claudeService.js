@@ -239,9 +239,8 @@ const CODE_PROVIDERS = {
     // on Particle AI's flex queue (36 tok/s measured) or Wafer (2x the price).
     // Measured live 2026-11-13, same code prompt, effort "minimal", 8 at once:
     // ionstream/flex held ~250 tok/s at $0.234/M out (Particle: $0.25/M),
-    // deepinfra/fp8/flex ~135 tok/s at $0.237/M. Those two only, and max_price
-    // guarantees a fallback can never cost more than this. Sail Research fp4
-    // was as fast at half the price but is a 4-bit quant, so left out.
+    // deepinfra/fp8/flex ~135 tok/s at $0.237/M. Flex is the first choice, not
+    // the only one any more — see routeName/fallbackRoutes below.
     model: "deepseek/deepseek-v4.1-flash-1017",
     providerName: "deepseek41",
     // Was {effort: "minimal"} — drifted out of sync with this entry's OWN
@@ -256,12 +255,63 @@ const CODE_PROVIDERS = {
     // assuming it's conservative.
     extraParams: {
       reasoning: { effort: "minimal" },
+      // ionstream/flex ONLY — deepinfra/fp8/flex used to be listed second, but
+      // it's a trap as an OpenRouter-level fallback: measured 2026-11-16 it
+      // accepted a request and sent nothing for 150s. Slowness and errors are
+      // handled by fallbackRoutes below instead (see "Adaptive host routing").
       provider: {
-        order: ["ionstream/flex", "deepinfra/fp8/flex"],
+        order: ["ionstream/flex"],
         allow_fallbacks: false,
         max_price: { prompt: 0.1, completion: 0.25 },
       },
     },
+    // The hosts for this model, cheapest first (see "Adaptive host routing" for
+    // how calls are spread over them). All measured 2026-11-16 with real-sized
+    // thinking calls, prices per M tokens in/out:
+    //  - ionstream/flex  $0.0775/$0.2325. Best-effort and capacity-shared: 1
+    //    call ~260 tok/s, 6 calls ~140 each, 10 calls ~65 each (on 2026-11-13
+    //    it held ~270 each with 11). Starts at 4 calls and grows while it keeps up.
+    //  - river           $0.0864/$0.3456. 149-211 tok/s each with 10 at once,
+    //    179-209 each with 30 small probes at once, but only ~105 each with 30
+    //    real scene calls and ~155 with 16 — so it starts at 16.
+    //  - ionstream       $0.21/$0.62 (was $0.165/$0.495 three days earlier —
+    //    these prices move, so the max_price caps below are deliberately loose;
+    //    a tight one silently removed this host). 243-310 tok/s each with 12.
+    //  - last resort, never limited: streamlake/fp8 189-209 tok/s, alibaba
+    //    153-174 (2x price 00:00-14:00 UTC), deepseek 208.
+    // Left out: sail-research/fp4 and deepinfra/fp8/flex (both at 0% uptime,
+    // see above), deepinfra/fp8/priority (132-169 tok/s for $0.147/$0.441).
+    routeName: "ionstream/flex",
+    minTokensPerSec: Number(process.env.LESSON_CODE_MIN_TPS) || 150,
+    startConcurrency: 4,
+    maxConcurrency: 48,
+    // The header goes here first: measured 30-45s on river vs ~25s here, for
+    // about $0.003 more per lesson, and all 10 scenes wait on it.
+    priorityRoute: "ionstream",
+    fallbackRoutes: [
+      {
+        name: "river",
+        minTokensPerSec: 110,
+        startConcurrency: 16,
+        maxConcurrency: 48,
+        provider: { order: ["river"], allow_fallbacks: false, max_price: { prompt: 0.2, completion: 0.6 } },
+      },
+      {
+        name: "ionstream",
+        minTokensPerSec: 110,
+        startConcurrency: 24,
+        maxConcurrency: 64,
+        provider: { order: ["ionstream"], allow_fallbacks: false, max_price: { prompt: 0.4, completion: 1.0 } },
+      },
+      {
+        name: "streamlake/alibaba/deepseek",
+        provider: {
+          order: ["streamlake/fp8", "alibaba", "deepseek"],
+          allow_fallbacks: false,
+          max_price: { prompt: 0.5, completion: 1.5 },
+        },
+      },
+    ],
     maxTokens: 50000,
     keyEnv: "OPENROUTER_API_KEY",
   },
@@ -3264,89 +3314,332 @@ async function fetchGenerationUsage(generationId) {
   return null;
 }
 
+// Fire-and-forget. `estimate` is used if the stats never arrive: its cost is
+// null, which makes recordAiUsage price the tokens from modelPricing.js.
+function recordCutUsage(generationId, onCancelledUsage, estimate) {
+  if (!generationId || !onCancelledUsage) return;
+  fetchGenerationUsage(generationId)
+    .then((cutUsage) => onCancelledUsage(cutUsage || estimate))
+    .catch((err) => console.warn(`  [usage] Failed to record a cut call's usage (non-fatal): ${err.message}`));
+}
+
+// ── Adaptive host routing ───────────────────────────────────────────────────
+// A provider entry may list fallbackRoutes (see CODE_PROVIDERS.deepseek41): its
+// own extraParams.provider is the first-choice host, the rest are where calls
+// go when that host can't keep up. Exists because the cheapest hosts are
+// best-effort and share a limited capacity between this account's calls:
+// measured on ionstream/flex (2026-11-16) 1 call ran at ~260 tok/s, 6 at ~140
+// each, 10 at ~65 each — and one real 3-lesson course, 30+ calls at once, took
+// 14m44s where the same work normally takes ~2 min. Nothing here noticed.
+//
+// So each route with a fallback has a concurrency limit that tracks what the
+// host is actually delivering. A call takes a slot on the first route that has
+// one free; with none free it goes straight to the next route, no waiting.
+// Every ROUTE_SPEED_CHECK_MS each stream reports its speed: comfortably above
+// the route's minTokensPerSec with every slot in use raises the limit; below
+// it, the limit drops to what the host's measured throughput can serve at
+// speed, and the calls over that limit that are still young are cancelled
+// (billing stops at the cut) and restarted on the next route. A host that sends nothing for
+// ROUTE_FIRST_TOKEN_LIMIT_MS, goes silent mid-stream for ROUTE_STALL_LIMIT_MS,
+// or answers with a rate-limit/5xx/network error is skipped by everyone for
+// ROUTE_COOLDOWN_MS and then re-entered one call at a time. The last route is
+// never limited or abandoned; it keeps the plain idle watchdog.
+// ADAPTIVE_ROUTING=off pins every call to the first route again.
+const ADAPTIVE_ROUTING = process.env.ADAPTIVE_ROUTING !== "off";
+const ROUTE_FIRST_TOKEN_LIMIT_MS = Number(process.env.ROUTE_FIRST_TOKEN_LIMIT_MS) || 10 * 1000;
+const ROUTE_SPEED_CHECK_MS = 6 * 1000;
+const ROUTE_STALL_LIMIT_MS = 20 * 1000;
+// A stream on an over-full route only moves this early in its life. Later, the
+// work it would throw away outweighs finishing at the slower speed (measured:
+// break-even is ~60s into a 12k-token think at 105 vs 225 tok/s).
+const ROUTE_MOVE_WINDOW_MS = 40 * 1000;
+const ROUTE_COOLDOWN_MS = Number(process.env.ROUTE_COOLDOWN_MS) || 60 * 1000;
+// A route only takes on more calls while its streams run this far above its floor.
+const ROUTE_HEADROOM = 1.3;
+// Reasoning ~3.5 and code ~3.0 chars/token on deepseek41; only used to judge speed.
+const ROUTE_CHARS_PER_TOKEN = 3.3;
+
+const routeState = new Map(); // "<model>|<route name>" -> { limit, active, downUntil }
+
+function routeStateOf(model, route) {
+  const key = `${model}|${route.name}`;
+  let state = routeState.get(key);
+  if (!state) {
+    state = { limit: route.startConcurrency ?? 8, active: 0, downUntil: 0 };
+    routeState.set(key, state);
+  }
+  return state;
+}
+
+// priority: a call the rest of a lesson waits on (the header) tries the
+// provider's priorityRoute — its fastest host — before the usual cheapest-first
+// order.
+function providerRoutes(provider, priority = false) {
+  if (!ADAPTIVE_ROUTING || !provider.fallbackRoutes?.length) return null;
+  const routes = [
+    {
+      name: provider.routeName || "primary",
+      minTokensPerSec: provider.minTokensPerSec,
+      startConcurrency: provider.startConcurrency,
+      maxConcurrency: provider.maxConcurrency,
+      provider: provider.extraParams.provider,
+    },
+    ...provider.fallbackRoutes,
+  ];
+  // Never the last route: that one is the unwatched catch-all and stays last.
+  const fastest = priority ? routes.findIndex((r) => r.name === provider.priorityRoute) : -1;
+  if (fastest > 0 && fastest < routes.length - 1) routes.unshift(...routes.splice(fastest, 1));
+  return routes;
+}
+
+// Index of the first route at or after fromIndex with a free slot, taking that
+// slot. The last route always has room.
+function claimRoute(model, routes, fromIndex) {
+  const now = Date.now();
+  for (let i = fromIndex; i < routes.length - 1; i++) {
+    const state = routeStateOf(model, routes[i]);
+    if (now < state.downUntil || state.active >= state.limit) continue;
+    state.active++;
+    return i;
+  }
+  return routes.length - 1;
+}
+
+function takeRouteDown(model, route, reason) {
+  const state = routeStateOf(model, route);
+  if (Date.now() >= state.downUntil) {
+    console.warn(`  [route] ${route.name}: ${reason} — ${model} calls skip it for ${Math.round(ROUTE_COOLDOWN_MS / 1000)}s.`);
+  }
+  state.downUntil = Date.now() + ROUTE_COOLDOWN_MS;
+  state.limit = 1; // when the cooldown ends, one call goes first
+}
+
+// One stream's speed over the last ROUTE_SPEED_CHECK_MS. Adjusts the route's
+// limit and says what this stream should do: "stay", "leave" (the route has
+// more calls than it can serve at speed) or "down" (it can't serve even one).
+function judgeRouteSpeed(model, route, tokensPerSec) {
+  const floor = route.minTokensPerSec;
+  if (!floor) return "stay";
+  const state = routeStateOf(model, route);
+  if (tokensPerSec >= floor) {
+    if (tokensPerSec >= floor * ROUTE_HEADROOM && state.active >= state.limit) {
+      state.limit = Math.min(route.maxConcurrency ?? 48, state.limit + (tokensPerSec >= floor * 1.7 ? 2 : 1));
+    }
+    return "stay";
+  }
+  // The host is splitting roughly tokensPerSec x active between these calls.
+  const throughput = tokensPerSec * state.active;
+  if (throughput < floor) return "down";
+  const sustainable = Math.max(1, Math.floor(throughput / (floor * ROUTE_HEADROOM)));
+  if (sustainable < state.limit) {
+    state.limit = sustainable;
+    // A burst of calls reaches this verdict within the same few seconds; one line covers them.
+    if (Date.now() - (state.lastLimitLogAt || 0) > 15000) {
+      state.lastLimitLogAt = Date.now();
+      console.warn(
+        `  [route] ${route.name}: ${Math.round(tokensPerSec)} tokens/sec with ${state.active} ${model} calls on it — ` +
+        `cutting it back to about ${sustainable}, the rest go to the next host.`
+      );
+    }
+  }
+  return state.active > state.limit ? "leave" : "stay";
+}
+
+// Only failures that say something about the HOST move a call to the next
+// route: rate limits, server errors, "no endpoint", timeouts, network errors.
+// A bad request or a key/credit problem would fail identically everywhere.
+function isRouteFailure(err) {
+  const status = err?.status ?? err?.response?.status;
+  return status === undefined || status >= 500 || status === 404 || status === 408 || status === 429;
+}
+
 // sessionId (optional): OpenRouter's provider-sticky-routing key — see
 // buildLessonSessionId below for what it's built from and why. Only
 // meaningful for the OpenRouter-routed path (streamOpenAiCompatible);
 // Anthropic-native calls (streamAnthropicNative) have no such concept and
 // silently ignore it.
-// reasoningHandoff (optional, full code generation only): { onCancelledUsage }
-// turns on the thinking hand-off above for this call. onCancelledUsage(usage)
-// is called later with the cut stream's real usage so the caller can record it.
-async function streamCodeCompletion({ limiter, provider, systemPrompt, userContent, maxOutputTokens, sessionId = null, reasoningHandoff = null }) {
+// reasoningHandoff (optional, full code generation only) turns on the thinking
+// hand-off above for this call. onCancelledUsage(usage) (optional) is called
+// later with the real usage of any stream this call cut short — a hand-off, or
+// a move to another route — so the caller can record it. Callers that don't
+// pass it (the patch functions) leave a cut stream's few tokens unrecorded.
+// priority (optional): see providerRoutes.
+async function streamCodeCompletion({ limiter, provider, systemPrompt, userContent, maxOutputTokens, sessionId = null, reasoningHandoff = false, onCancelledUsage = null, priority = false }) {
   return limiter(() =>
     provider.isAnthropicNative
       ? streamAnthropicNative({ provider, systemPrompt, userContent, maxOutputTokens })
-      : streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens, sessionId, reasoningHandoff })
+      : streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens, sessionId, reasoningHandoff, onCancelledUsage, priority })
   );
 }
 
 // GLM, DeepSeek, and Fable — every OpenRouter-routed provider — all speak
-// the OpenAI chat-completions wire shape — this is that path.
-async function streamOpenAiCompatible({ provider, systemPrompt, userContent, maxOutputTokens, sessionId = null, reasoningHandoff = null }) {
+// the OpenAI chat-completions wire shape — this is that path. Walks the
+// provider's routes (see "Adaptive host routing" above); a provider without
+// fallbackRoutes gets a single unwatched attempt, exactly as before.
+async function streamOpenAiCompatible(request) {
+  const { provider } = request;
+  const routes = providerRoutes(provider, request.priority);
+  if (!routes) return (await streamOnRoute({ ...request, baseProvider: provider })).result;
+
+  let fromIndex = 0;
+  for (;;) {
+    const index = claimRoute(provider.model, routes, fromIndex);
+    const route = routes[index];
+    const outcome = await streamOnRoute({
+      ...request,
+      baseProvider: provider,
+      provider: { ...provider, extraParams: { ...provider.extraParams, provider: route.provider } },
+      route,
+      nextRoute: routes[index + 1] || null,
+      // Sticky routing is keyed to the first-choice host; don't let it pull a
+      // fallback call back there.
+      sessionId: index === 0 ? request.sessionId : null,
+    });
+    if (!outcome.abandoned) return outcome.result;
+    fromIndex = index + 1;
+  }
+}
+
+// One attempt on one route. Resolves { result }, or { abandoned: reason } when
+// the call left the route — only possible when there is a nextRoute, in which
+// case this attempt holds one of the route's slots (see claimRoute).
+async function streamOnRoute({
+  provider, baseProvider, route = null, nextRoute = null,
+  systemPrompt, userContent, maxOutputTokens, sessionId = null, reasoningHandoff = false, onCancelledUsage = null, priority = false,
+}) {
   const controller = new AbortController();
+  const watched = !!nextRoute;
   const handoffChars = reasoningHandoff && REASONING_HANDOFF_TOKENS > 0
     ? REASONING_HANDOFF_TOKENS * REASONING_CHARS_PER_TOKEN
     : Infinity;
-  const stream = await provider.client.chat.completions.create(
-    {
-      model: provider.model,
-      ...provider.extraParams,
-      max_tokens: maxOutputTokens ?? provider.maxTokens ?? 100000,
-      stream: true,
-      // OpenAI-spec field — without it, a streamed response never carries a
-      // `usage` chunk at all, so cache hit/miss and completion tokens would
-      // be invisible to this codebase entirely.
-      stream_options: { include_usage: true },
-      // OpenRouter-specific: makes the final usage chunk carry a `cost`
-      // field — the ACTUAL dollar amount OpenRouter billed for this exact
-      // call, reflecting whichever provider ended up serving it (relevant
-      // now that CODE_PROVIDERS.glm/SCENE_PLAN_PROVIDER route on sort:
-      // "price" rather than a single pinned provider) and any cache
-      // discount really applied — not the static config/modelPricing.js
-      // estimate, which can't know either of those. Every caller of this
-      // function routes through OpenRouter (see this function's own
-      // top-of-section comment), so this is safe unconditionally.
-      usage: { include: true },
-      // OpenRouter's provider-sticky-routing key (see buildLessonSessionId)
-      // — routes every call sharing this id to the same backend instance,
-      // which is what lets a cache written by an earlier call in this
-      // lesson (the header, an earlier chunk, a prior retry attempt) actually
-      // be reused instead of each call landing on a random replica with
-      // nothing to hit. A top-level request field per OpenRouter's own
-      // prompt-caching docs — harmless to omit for a provider that ignores
-      // it, so this is unconditional, not gated per-provider.
-      ...(sessionId ? { session_id: sessionId } : {}),
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-    },
-    { signal: controller.signal }
-  );
 
   let streamedText = "";
   let reasoningText = "";
+  let receivedChars = 0;
   let generationId = null;
   let servedBy = null; // OpenRouter names the host on each chunk
   let handedOff = false;
-  const streamStart = Date.now();
   let finishReason = null;
   let usage = null;
-  let lastChunkAt = Date.now();
+  let abandonReason = null;
+  let hostDown = false; // the abandon reason condemns the host, not just this call's share of it
+  let streamError = null;
+  let firstTokenAt = null;
+  let lastTokenAt = null;
+  let windowStart = null;
+  let windowChars = 0;
+  let slowWindows = 0;
+  let opened = false;
+  const streamStart = Date.now();
+  let lastChunkAt = streamStart;
+
+  let holdsSlot = watched;
+  const releaseSlot = () => {
+    if (!holdsSlot) return;
+    holdsSlot = false;
+    routeStateOf(provider.model, route).active--;
+  };
+  const stalledError = () => new Error(
+    `Stream stalled — no data received for ${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)}s, idle watchdog aborted the request (had ${streamedText.length} chars so far)`
+  );
+  const abandon = (reason, { down = false } = {}) => {
+    abandonReason = reason;
+    hostDown = down;
+    releaseSlot();
+    controller.abort();
+  };
   const watchdog = setInterval(() => {
-    if (Date.now() - lastChunkAt > STREAM_IDLE_TIMEOUT_MS) controller.abort();
-  }, 5000);
+    const now = Date.now();
+    if (opened && now - lastChunkAt > STREAM_IDLE_TIMEOUT_MS) return controller.abort();
+    if (!watched || abandonReason) return;
+    if (!firstTokenAt) {
+      if (now - streamStart > ROUTE_FIRST_TOKEN_LIMIT_MS) abandon(`no output after ${Math.round((now - streamStart) / 1000)}s`, { down: true });
+      return;
+    }
+    if (now - lastTokenAt > ROUTE_STALL_LIMIT_MS) {
+      return abandon(`went silent for ${Math.round((now - lastTokenAt) / 1000)}s mid-stream`, { down: true });
+    }
+    if (now - windowStart >= ROUTE_SPEED_CHECK_MS) {
+      const tokensPerSec = (receivedChars - windowChars) / ROUTE_CHARS_PER_TOKEN / ((now - windowStart) / 1000);
+      windowStart = now;
+      windowChars = receivedChars;
+      // A finished stream that's only waiting on its usage chunk isn't slow.
+      if (finishReason) return;
+      // One mildly slow window is often noise (a burst, a pause before the
+      // answer starts) and was seen cutting a healthy route from 24 calls to
+      // 2: wait for a second one. Under half the floor is acted on at once.
+      const slow = route.minTokensPerSec && tokensPerSec < route.minTokensPerSec;
+      slowWindows = slow ? slowWindows + 1 : 0;
+      if (slow && slowWindows < 2 && tokensPerSec >= route.minTokensPerSec / 2) return;
+      const verdict = judgeRouteSpeed(provider.model, route, tokensPerSec);
+      if (verdict === "down") {
+        abandon(`${Math.round(tokensPerSec)} tokens/sec, too slow for even one call`, { down: true });
+      } else if (verdict === "leave" && now - firstTokenAt < ROUTE_MOVE_WINDOW_MS) {
+        abandon(`${Math.round(tokensPerSec)} tokens/sec`);
+      }
+    }
+  }, 1000);
 
   try {
+    const stream = await provider.client.chat.completions.create(
+      {
+        model: provider.model,
+        ...provider.extraParams,
+        max_tokens: maxOutputTokens ?? provider.maxTokens ?? 100000,
+        stream: true,
+        // OpenAI-spec field — without it, a streamed response never carries a
+        // `usage` chunk at all, so cache hit/miss and completion tokens would
+        // be invisible to this codebase entirely.
+        stream_options: { include_usage: true },
+        // OpenRouter-specific: makes the final usage chunk carry a `cost`
+        // field — the ACTUAL dollar amount OpenRouter billed for this exact
+        // call, reflecting whichever provider ended up serving it (relevant
+        // now that CODE_PROVIDERS.glm/SCENE_PLAN_PROVIDER route on sort:
+        // "price" rather than a single pinned provider) and any cache
+        // discount really applied — not the static config/modelPricing.js
+        // estimate, which can't know either of those. Every caller of this
+        // function routes through OpenRouter (see this function's own
+        // top-of-section comment), so this is safe unconditionally.
+        usage: { include: true },
+        // OpenRouter's provider-sticky-routing key (see buildLessonSessionId)
+        // — routes every call sharing this id to the same backend instance,
+        // which is what lets a cache written by an earlier call in this
+        // lesson (the header, an earlier chunk, a prior retry attempt) actually
+        // be reused instead of each call landing on a random replica with
+        // nothing to hit. A top-level request field per OpenRouter's own
+        // prompt-caching docs — harmless to omit for a provider that ignores
+        // it, so this is unconditional, not gated per-provider.
+        ...(sessionId ? { session_id: sessionId } : {}),
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+      },
+      { signal: controller.signal }
+    );
+    opened = true;
+    lastChunkAt = Date.now();
+
     for await (const chunk of stream) {
       lastChunkAt = Date.now();
       generationId = generationId || chunk.id;
       servedBy = servedBy || chunk.provider;
+      // OpenRouter reports a host failing mid-stream as an error chunk, not an
+      // HTTP error.
+      if (watched && chunk.error) {
+        streamError = String(chunk.error.message || chunk.error.code || "unknown").slice(0, 120);
+        break;
+      }
       const delta = chunk.choices?.[0]?.delta;
+      const reasoningPiece = delta?.reasoning || delta?.reasoning_content;
+      if (delta?.content || reasoningPiece) {
+        receivedChars += (delta.content || "").length + (reasoningPiece || "").length;
+        lastTokenAt = lastChunkAt;
+        if (!firstTokenAt) firstTokenAt = windowStart = lastChunkAt;
+      }
       if (delta?.content) streamedText += delta.content;
       // Reasoning never goes into the returned text — it's only kept for the
       // thinking hand-off, and only until the code itself starts.
-      const reasoningPiece = delta?.reasoning || delta?.reasoning_content;
       if (reasoningPiece && !streamedText) {
         reasoningText += reasoningPiece;
         if (reasoningText.length >= handoffChars) {
@@ -3359,15 +3652,52 @@ async function streamOpenAiCompatible({ provider, systemPrompt, userContent, max
       // gate it behind the finish_reason check above.
       if (chunk.usage) usage = chunk.usage;
     }
+
+    // The SDK ends this loop QUIETLY when its request is aborted — it swallows
+    // the abort error — so a stream cancelled by the watchdog above has to be
+    // told apart from one that finished, or its partial text is returned as if
+    // it were the whole answer (which is how a stalled stream used to surface
+    // as "unbalanced braces — likely truncated" instead of as a stall). A
+    // finish_reason means the stream did complete, whatever the watchdog
+    // decided in the same instant.
+    const cancelled = controller.signal.aborted && !finishReason;
+    if (handedOff) abandonReason = null;
+    else if (cancelled) {
+      if (!abandonReason) throw stalledError();
+    } else if (!watched) abandonReason = null;
+    else if (streamError) abandonReason = `error mid-stream: ${streamError}`;
+    else if (!finishReason) abandonReason = `stream ended early after ${receivedChars} chars`;
+    // finish_reason "length" with no text is runaway thinking, the caller's to handle.
+    else if (!streamedText && finishReason !== "length") abandonReason = `empty reply (finish_reason ${finishReason})`;
+    else abandonReason = null;
   } catch (err) {
-    if (controller.signal.aborted) {
-      throw new Error(
-        `Stream stalled — no data received for ${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)}s, idle watchdog aborted the request (had ${streamedText.length} chars so far)`
-      );
+    if (abandonReason) {
+      // Cancelled on purpose by the watchdog above — handled below.
+    } else if (controller.signal.aborted) {
+      throw stalledError();
+    } else if (watched && isRouteFailure(err)) {
+      abandonReason = `error: ${describeError(err).slice(0, 160)}`;
+      hostDown = true;
+    } else {
+      throw err;
     }
-    throw err;
   } finally {
     clearInterval(watchdog);
+    releaseSlot();
+  }
+
+  const cutUsageEstimate = () => ({
+    prompt_tokens: Math.round((systemPrompt.length + userContent.length) / REASONING_CHARS_PER_TOKEN),
+    completion_tokens: Math.round(receivedChars / REASONING_CHARS_PER_TOKEN),
+    cost: null,
+  });
+
+  if (abandonReason) {
+    controller.abort();
+    recordCutUsage(generationId, onCancelledUsage, cutUsageEstimate());
+    if (hostDown) takeRouteDown(provider.model, route, abandonReason);
+    logVerbose(`  [route] ${provider.model} on ${route.name}: ${abandonReason} — this call moves on.`);
+    return { abandoned: abandonReason };
   }
 
   if (handedOff) {
@@ -3376,27 +3706,21 @@ async function streamOpenAiCompatible({ provider, systemPrompt, userContent, max
       `  [handoff] ${provider.model} via ${servedBy || "unknown host"}: thought ~${Math.round(reasoningText.length / REASONING_CHARS_PER_TOKEN)} tokens ` +
       `in ${((Date.now() - streamStart) / 1000).toFixed(0)}s without starting code — cutting it there and writing the code from those notes with reasoning off.`
     );
-    if (generationId && reasoningHandoff.onCancelledUsage) {
-      // Estimate if the stats never arrive: cost null makes recordAiUsage
-      // price these tokens from modelPricing.js instead.
-      fetchGenerationUsage(generationId)
-        .then((cutUsage) => reasoningHandoff.onCancelledUsage(cutUsage || {
-          prompt_tokens: Math.round((systemPrompt.length + userContent.length) / REASONING_CHARS_PER_TOKEN),
-          completion_tokens: Math.round(reasoningText.length / REASONING_CHARS_PER_TOKEN),
-          cost: null,
-        }))
-        .catch((err) => console.warn(`  [handoff] Failed to record the cut call's usage (non-fatal): ${err.message}`));
-    }
-    return streamOpenAiCompatible({
-      provider: withReasoningOff(provider),
-      systemPrompt,
-      userContent: userContent + buildReasoningHandoffSuffix(reasoningText),
-      maxOutputTokens,
-      sessionId,
-    });
+    recordCutUsage(generationId, onCancelledUsage, cutUsageEstimate());
+    return {
+      result: await streamOpenAiCompatible({
+        provider: withReasoningOff(baseProvider),
+        systemPrompt,
+        userContent: userContent + buildReasoningHandoffSuffix(reasoningText),
+        maxOutputTokens,
+        sessionId,
+        onCancelledUsage,
+        priority,
+      }),
+    };
   }
 
-  return { text: streamedText, stopReason: finishReason, usage };
+  return { result: { text: streamedText, stopReason: finishReason, usage } };
 }
 
 // Claude Sonnet 5 direct — Anthropic's own Messages API. Different wire
@@ -3711,7 +4035,10 @@ async function generateLessonHeader(lesson, scenes, maxAttempts = HEADER_MAX_ATT
       userContent: buildHeaderUserContent(lesson, scenes, libraryCatalog) + feedbackSuffix(feedback),
       maxOutputTokens: HEADER_MAX_OUTPUT_TOKENS,
       sessionId,
-      reasoningHandoff: { onCancelledUsage: recordUsage },
+      reasoningHandoff: true,
+      onCancelledUsage: recordUsage,
+      // Every scene of the lesson waits on this one call.
+      priority: true,
     });
     logUsage(label, usage);
     if (usage) recordUsage(usage);
@@ -3862,6 +4189,17 @@ function locateSceneAtLine(chunkCode, targetLine, expectedNames) {
     }
   }
   return null;
+}
+
+// The scene's span when a chunk holds exactly one scene, for errors that carry
+// no usable line number. Starts at the scene's own declaration, so a chunk's
+// leading top-level consts stay in place.
+function locateOnlyScene(chunkCode, expectedNames) {
+  if (expectedNames.length !== 1) return null;
+  const [name] = expectedNames;
+  const lines = chunkCode.split("\n");
+  const idx = lines.findIndex((l) => l.startsWith(`function ${name}(`) || l.startsWith(`const ${name}`));
+  return idx === -1 ? null : { name, startLine: idx + 1, endLine: lines.length };
 }
 
 // Replaces one scene's line-span with newly patched code — same line-based
@@ -4620,7 +4958,8 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       userContent: buildChunkUserContent(lesson, componentName, chunkScenes, chunkStartIndex, totalScenes, compactHeader, allScenes) + feedbackSuffix(feedback),
       maxOutputTokens: CHUNK_MAX_OUTPUT_TOKENS,
       sessionId,
-      reasoningHandoff: { onCancelledUsage: recordUsage },
+      reasoningHandoff: true,
+      onCancelledUsage: recordUsage,
     });
     logUsage(label, usage);
     if (usage) recordUsage(usage);
@@ -4672,6 +5011,7 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
   // regeneration; a successful full regen resets the counter, so patching
   // gets its full budget again against the fresh code if THAT also fails.
   let consecutivePatchFailures = 0;
+  let triedUnlocatedPatch = false;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -4687,10 +5027,19 @@ async function generateSceneChunk(lesson, chunkScenes, chunkStartIndex, totalSce
       const canTryPatch = attempt > 1 && lastError?.isContentError && lastRawCode && consecutivePatchFailures < CHUNK_PATCH_RETRY_LIMIT;
       if (canTryPatch) {
         const errLine = extractErrorLine(lastError.message);
-        const located = errLine ? locateSceneAtLine(lastRawCode, errLine, expectedNames) : null;
+        let located = errLine ? locateSceneAtLine(lastRawCode, errLine, expectedNames) : null;
+        // An error with no usable line (a stray export, unbalanced braces, a
+        // missing return) used to skip straight to a full regeneration — with
+        // thinking, another 60-90s for that scene, enough to hold a whole
+        // lesson back. In a single-scene chunk it can only be that scene, so
+        // patch it; once only, so a patch that can't fix it doesn't loop.
+        if (!located && !triedUnlocatedPatch) {
+          located = locateOnlyScene(lastRawCode, expectedNames);
+          if (located) triedUnlocatedPatch = true;
+        }
         if (located) {
           try {
-            logVerbose(`  [${label}] Attempt ${attempt}/${maxAttempts} — targeted patch for ${located.name} (localized to line ${errLine})...`);
+            logVerbose(`  [${label}] Attempt ${attempt}/${maxAttempts} — targeted patch for ${located.name} (${errLine ? `localized to line ${errLine}` : "error had no line"})...`);
             const targetIndex = expectedNames.indexOf(located.name);
             const patchedScene = await patchSceneInChunk(
               lesson, located.name, chunkScenes[targetIndex], lastRawCode, lastError.message,
