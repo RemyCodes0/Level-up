@@ -254,61 +254,61 @@ const CODE_PROVIDERS = {
     // reasoning tokens) — another reason not to reach for a tier name
     // assuming it's conservative.
     extraParams: {
-      reasoning: { effort: "minimal" },
-      // ionstream/flex ONLY — deepinfra/fp8/flex used to be listed second, but
-      // it's a trap as an OpenRouter-level fallback: measured 2026-11-16 it
-      // accepted a request and sent nothing for 150s. Slowness and errors are
-      // handled by fallbackRoutes below instead (see "Adaptive host routing").
+      // LESSON_CODE_REASONING=off turns thinking off entirely (genuine
+      // {enabled:false}); default stays "minimal", which still thinks ~8-10k
+      // tokens per scene on real prompts and is most of a lesson's cost.
+      reasoning: process.env.LESSON_CODE_REASONING === "off" ? { enabled: false } : { effort: "minimal" },
+      // First route's host list. See the comment below for why these two tags,
+      // and "Adaptive host routing" for how slow/failing hosts are skipped.
       provider: {
-        order: ["ionstream/flex"],
+        order: ["sail-research/fp4", "sail-research/fp4/us"],
         allow_fallbacks: false,
         max_price: { prompt: 0.1, completion: 0.25 },
       },
     },
     // The hosts for this model, cheapest first (see "Adaptive host routing" for
-    // how calls are spread over them). All measured 2026-11-16 with real-sized
-    // thinking calls, prices per M tokens in/out:
-    //  - ionstream/flex  $0.0775/$0.2325. Best-effort and capacity-shared: 1
-    //    call ~260 tok/s, 6 calls ~140 each, 10 calls ~65 each (on 2026-11-13
-    //    it held ~270 each with 11). Starts at 4 calls and grows while it keeps up.
-    //  - river           $0.0864/$0.3456. 149-211 tok/s each with 10 at once,
-    //    179-209 each with 30 small probes at once, but only ~105 each with 30
-    //    real scene calls and ~155 with 16 — so it starts at 16.
-    //  - ionstream       $0.21/$0.62 (was $0.165/$0.495 three days earlier —
-    //    these prices move, so the max_price caps below are deliberately loose;
-    //    a tight one silently removed this host). 243-310 tok/s each with 12.
-    //  - last resort, never limited: streamlake/fp8 189-209 tok/s, alibaba
-    //    153-174 (2x price 00:00-14:00 UTC), deepseek 208.
-    // Left out: sail-research/fp4 and deepinfra/fp8/flex (both at 0% uptime,
-    // see above), deepinfra/fp8/priority (132-169 tok/s for $0.147/$0.441).
-    routeName: "ionstream/flex",
+    // how calls are spread over them). Prices per M tokens in/out, re-measured
+    // 2026-11-21 with real-sized thinking calls (6 at once, effort "minimal"):
+    //  - sail-research/fp4  $0.04/$0.10. 255-295 tok/s each, ~$0.0008 per scene-
+    //    sized call. fp4 quantization is the one quality risk — see the A/B
+    //    stills in the commit that introduced it.
+    //  - pearl-research/fp8 $0.05/$0.30. 340-450 tok/s each, ~$0.0023 per call
+    //    — the fastest host, so it also takes headers first (priorityRoute).
+    //  - river              $0.12/$0.48 (was $0.0864/$0.3456 five days earlier).
+    //  - last resort, never limited: streamlake/fp8, baidu/fp8, deepinfra/fp8.
+    // Gone/unusable: ionstream/flex (no longer listed at all, which is what
+    // pushed every call onto $0.48-0.62/M hosts and doubled lesson cost),
+    // ambient/fp4 (60-80 tok/s), deepinfra/fp8/flex (accepted a request and sent
+    // nothing for 150s on 2026-11-16). Prices and hosts change week to week:
+    // when a lesson's cost creeps up, re-run the probe against
+    // https://openrouter.ai/api/v1/models/<slug>/endpoints before anything else.
+    routeName: "sail-research/fp4",
     minTokensPerSec: Number(process.env.LESSON_CODE_MIN_TPS) || 150,
-    startConcurrency: 4,
+    startConcurrency: 8,
     maxConcurrency: 48,
-    // The header goes here first: measured 30-45s on river vs ~25s here, for
-    // about $0.003 more per lesson, and all 10 scenes wait on it.
-    priorityRoute: "ionstream",
+    // The header goes here first: every scene waits on it.
+    priorityRoute: "pearl-research/fp8",
     fallbackRoutes: [
+      {
+        name: "pearl-research/fp8",
+        minTokensPerSec: 150,
+        startConcurrency: 16,
+        maxConcurrency: 48,
+        provider: { order: ["pearl-research/fp8"], allow_fallbacks: false, max_price: { prompt: 0.15, completion: 0.5 } },
+      },
       {
         name: "river",
         minTokensPerSec: 110,
         startConcurrency: 16,
         maxConcurrency: 48,
-        provider: { order: ["river"], allow_fallbacks: false, max_price: { prompt: 0.2, completion: 0.6 } },
+        provider: { order: ["river"], allow_fallbacks: false, max_price: { prompt: 0.25, completion: 0.7 } },
       },
       {
-        name: "ionstream",
-        minTokensPerSec: 110,
-        startConcurrency: 24,
-        maxConcurrency: 64,
-        provider: { order: ["ionstream"], allow_fallbacks: false, max_price: { prompt: 0.4, completion: 1.0 } },
-      },
-      {
-        name: "streamlake/alibaba/deepseek",
+        name: "streamlake/baidu/deepinfra",
         provider: {
-          order: ["streamlake/fp8", "alibaba", "deepseek"],
+          order: ["streamlake/fp8", "baidu/fp8", "deepinfra/fp8"],
           allow_fallbacks: false,
-          max_price: { prompt: 0.5, completion: 1.5 },
+          max_price: { prompt: 0.2, completion: 0.8 },
         },
       },
     ],
@@ -3269,11 +3269,22 @@ const STREAM_IDLE_TIMEOUT_MS = Number(process.env.CODEGEN_STREAM_IDLE_TIMEOUT_MS
 // thinking under the budget are untouched. Cutting a stream stops billing
 // (confirmed: OpenRouter reports the generation as cancelled=true, billed only
 // for tokens generated before the cut), so this is cheaper as well as faster.
-// 0 turns it off. Raised from 8000 to 12000 (2026-11-13) for better scenes:
-// measured natural thinking on minimal was a median ~13k tokens, so about
-// 40% of scenes now finish thinking on their own and the rest keep ~50% more
-// of their plan, at roughly +15s per lesson.
-const REASONING_HANDOFF_TOKENS = Number(process.env.REASONING_HANDOFF_TOKENS ?? 12000);
+// 0 turns it off. History: 8000, then 12000 (2026-11-13, for better scenes:
+// natural thinking on minimal is a median ~13k tokens), now 5000 (2026-11-21).
+// Per-stream decode speed is ~200-300 tok/s on the cheap hosts, so a lesson's
+// length is its header (~25s) plus its slowest scene's thinking plus a ~10s
+// rewrite, and the cap is the only lever on the middle term. Measured on one
+// real 10-scene lesson, solo, full thinking vs cap: 12000 ~110s/$0.022, 8000
+// ~82s/$0.0215, 6000 ~78s/$0.018, 5000 ~60-65s/$0.0167. Stills of two 5000 runs
+// and two 6000 runs rendered 10/10 scenes and looked the same tier as the
+// uncapped baseline (titles, labels, gauges, step lists); that is a small
+// sample, so if scenes start looking thinner, raise this first.
+// NOTE: do not "hide the header wait" by starting scene thinking before the
+// header exists (tried 2026-11-21, cut at the cap, then code written once the
+// header lands): ~50s, but the notes never plan for the header's shared
+// Label/Panel/Backdrop/geometry helpers, so scenes came out with missing
+// titles and unlabelled shapes, and one threw a NaN in interpolate.
+const REASONING_HANDOFF_TOKENS = Number(process.env.REASONING_HANDOFF_TOKENS ?? 5000);
 // Reasoning text measured at ~3.2-3.9 chars/token on this model.
 const REASONING_CHARS_PER_TOKEN = 3.5;
 
@@ -3684,6 +3695,17 @@ async function streamOnRoute({
   } finally {
     clearInterval(watchdog);
     releaseSlot();
+  }
+
+  if (process.env.STREAM_TRACE) {
+    const end = Date.now();
+    const gen = firstTokenAt ? (end - firstTokenAt) / 1000 : 0;
+    console.log(
+      `[trace] t0=${streamStart} route=${route?.name ?? "-"} host=${servedBy ?? "-"} ` +
+      `ttft=${firstTokenAt ? ((firstTokenAt - streamStart) / 1000).toFixed(1) : "none"}s total=${((end - streamStart) / 1000).toFixed(1)}s ` +
+      `tokens~${Math.round(receivedChars / ROUTE_CHARS_PER_TOKEN)} tps~${gen ? Math.round(receivedChars / ROUTE_CHARS_PER_TOKEN / gen) : "-"} ` +
+      `${handedOff ? "HANDOFF " : ""}${abandonReason ? "ABANDONED(" + abandonReason + ")" : ""}`
+    );
   }
 
   const cutUsageEstimate = () => ({
